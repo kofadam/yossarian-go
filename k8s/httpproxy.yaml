@@ -1,0 +1,24 @@
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: yossarian-go-httpproxy
+  namespace: yossarian-go
+spec:
+  virtualhost:
+    fqdn: yossarian-go.mydomain.local
+    tls:
+      secretName: yossarian-go-tls
+  routes:
+    - conditions:
+        - prefix: /
+      services:
+        - name: yossarian-go-service
+          port: 80
+      loadBalancerPolicy:
+        strategy: Cookie
+      cookieRewritePolicies:
+        - name: "X-Contour-Session-Affinity"
+          pathRewrite:
+            value: "/"
+          sameSite: Lax
+          secure: true
