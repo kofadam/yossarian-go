@@ -655,6 +655,7 @@
                         class="file-input" 
                         multiple 
                         accept=".log,.txt,.zip,.tar,.gz,.tar.gz,.json,.xml,.csv"
+                        aria-label="Upload files for sanitization"
                     >
                 </div>
 
@@ -738,9 +739,9 @@
                         <div class="download-icon">🔒</div>
                         <div class="download-title">Sanitized Files</div>
                         <div class="download-description">Download your cleaned log files as a zip archive</div>
-                        <a href="/download/sanitized" class="btn btn-success" id="downloadSanitized" style="pointer-events: none; opacity: 0.5;">
-                            📦 Download Sanitized
-                        </a>
+                        <div id="downloadButtons">
+                            <!-- Dynamic download buttons will be populated here -->
+                        </div>  
                     </div>
                     <div class="download-card">
                         <div class="download-icon">📋</div>
@@ -773,8 +774,8 @@
         window.onload = function() {
             loadWords();
             initializeFileUpload();
+            createDownloadButtons(); // Initialize empty download section
         };
-
         // File Upload Handling
         function initializeFileUpload() {
             const uploadZone = document.getElementById('uploadZone');
@@ -787,7 +788,7 @@
                     fileInput.click();
                 }
             };
-            
+
             // Drag and drop handlers
             uploadZone.addEventListener('dragover', (e) => {
                 e.preventDefault();
@@ -828,7 +829,7 @@
                     return;
                 }
 
-                // Basic binary detection (more sophisticated detection will be server-side)
+                // Basic binary detection
                 const isBinary = file.type.startsWith('image/') || 
                                 file.type.startsWith('video/') || 
                                 file.type.startsWith('audio/') ||
@@ -856,6 +857,38 @@
             return archiveTypes.some(ext => file.name.toLowerCase().endsWith(ext));
         }
 
+        function createDownloadButtons() {
+            const downloadDiv = document.getElementById('downloadButtons');
+            let buttonsHTML = '';
+            
+            // Add combined download button
+            if (selectedFiles.some(f => f.status === 'complete')) {
+                buttonsHTML += `
+                    <a href="/download/sanitized" class="btn btn-success download-btn" style="margin-bottom: 10px;">
+                        📦 Download All Files
+                    </a>
+                `;
+            }
+            
+            // Add individual file download buttons
+            selectedFiles.forEach(fileObj => {
+                if (fileObj.status === 'complete') {
+                    buttonsHTML += `
+                        <a href="/download/sanitized/${encodeURIComponent(fileObj.file.name)}" 
+                        class="btn btn-secondary download-btn" style="margin: 5px;">
+                            📄 ${fileObj.file.name}
+                        </a>
+                    `;
+                }
+            });
+            
+            if (buttonsHTML === '') {
+                buttonsHTML = '<p style="color: #666;">No files processed yet</p>';
+            }
+            
+            downloadDiv.innerHTML = buttonsHTML;
+        }
+        
         function displayFileList() {
             const fileList = document.getElementById('fileList');
             const processBtn = document.getElementById('processBtn');
@@ -1057,6 +1090,7 @@
             document.getElementById('totalTime').textContent = `${totalProcessingTime}ms`;
 
             displayFileResults();
+            createDownloadButtons();
         }
 
         function displayFileResults() {
@@ -1132,9 +1166,16 @@
         }
 
         function enableDownloads() {
-            const downloadSanitized = document.getElementById('downloadSanitized');
-            downloadSanitized.style.pointerEvents = 'auto';
-            downloadSanitized.style.opacity = '1';
+            // Enable download buttons after successful processing
+            const downloadButtons = document.querySelectorAll('.download-btn');
+            downloadButtons.forEach(btn => {
+                btn.style.pointerEvents = 'auto';
+                btn.style.opacity = '1';
+                btn.classList.remove('disabled');
+            });
+            
+            // Create download buttons for individual files
+            createDownloadButtons();
         }
 
         // Sensitive Words Management

@@ -9,4 +9,5 @@ services:
       - PORT=8080
       - ADMIN_PASSWORD=admin123
       - OIDC_ENABLED=false
+      - SENSITIVE_TERMS=ProjectApollo,ClientMegaCorp,confidential,classified,restricted,internal-only
     restart: unless-stopped

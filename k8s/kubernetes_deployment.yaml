@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    kubernetes.io/metadata.name: yossarian-go
+    pod-security.kubernetes.io/enforce: privileged
+  name: yossarian-go
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yossarian-config
+  namespace: yossarian-go
+data:
+  PORT: "8080"
+  OIDC_ENABLED: "true"
+  OIDC_ISSUER_URL: "https://keycloak.company.com/auth/realms/yossarian"
+  OIDC_CLIENT_ID: "yossarian-go"
+  OIDC_REDIRECT_URL: "https://yossarian.company.com/auth/oidc/callback"
+  OIDC_LOGOUT_URL: "https://keycloak.company.com/auth/realms/yossarian/protocol/openid-connect/logout"
+  SENSITIVE_TERMS: "ProjectApollo,ClientMegaCorp,confidential,classified,restricted,internal-only"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: yossarian-secrets
+  namespace: yossarian-go
+type: Opaque
+data:
+  # Base64 encoded values
+  ADMIN_PASSWORD: eW91ci1zZWN1cmUtYWRtaW4tcGFzc3dvcmQ=  # your-secure-admin-password
+  OIDC_CLIENT_SECRET: eW91ci1vaWRjLWNsaWVudC1zZWNyZXQ=    # your-oidc-client-secret
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yossarian-go
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: yossarian-go
+  template:
+    metadata:
+      labels:
+        app: yossarian-go
+    spec:
+      containers:
+      - name: yossarian-go
+        image: yossarian-go:latest
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: yossarian-config
+        - secretRef:
+            name: yossarian-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yossarian-service
+  namespace: yossarian-go
+spec:
+  selector:
+    app: yossarian-go
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: yossarian-ingress
+  namespace: yossarian-go
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - yossarian.company.com
+    secretName: yossarian-tls
+  rules:
+  - host: yossarian.company.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: yossarian-service
+            port:
+              number: 80
