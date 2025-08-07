@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yossarian Go - Log Sanitization</title>
+    <style>
+        /* Material Design CSS - Air-gap ready */
+        :root {
+            --md-primary: #1976d2;
+            --md-primary-dark: #1565c0;
+            --md-primary-light: #42a5f5;
+            --md-secondary: #dc004e;
+            --md-surface: #ffffff;
+            --md-surface-variant: #f5f5f5;
+            --md-on-surface: #1c1b1f;
+            --md-on-surface-variant: #49454f;
+            --md-outline: #79747e;
+            --md-success: #2e7d32;
+            --md-warning: #f57c00;
+            --md-error: #d32f2f;
+            --md-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            --md-shadow-elevated: 0 4px 8px rgba(0,0,0,0.15);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--md-surface-variant);
+            color: var(--md-on-surface);
+            line-height: 1.5;
+        }
+
+        /* App Bar */
+        .app-bar {
+            background: var(--md-primary);
+            color: white;
+            padding: 16px 24px;
+            box-shadow: var(--md-shadow-elevated);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .app-bar h1 {
+            font-size: 20px;
+            font-weight: 500;
+            margin: 0;
+        }
+
+        .app-bar .subtitle {
+            font-size: 14px;
+            opacity: 0.87;
+            margin-top: 4px;
+        }
+
+        /* Navigation */
+        .nav-links {
+            display: flex;
+            gap: 16px;
+            margin-top: 12px;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.1);
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .nav-links a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        /* Container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* Material Cards */
+        .card {
+            background: var(--md-surface);
+            border-radius: 12px;
+            box-shadow: var(--md-shadow);
+            margin-bottom: 24px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 20px 24px 16px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 500;
+            margin: 0;
+            color: var(--md-on-surface);
+        }
+
+        .card-subtitle {
+            font-size: 14px;
+            color: var(--md-on-surface-variant);
+            margin-top: 4px;
+        }
+
+        .card-content {
+            padding: 24px;
+        }
+
+        /* User Info Banner */
+        .user-banner {
+            background: linear-gradient(135deg, var(--md-primary-light), var(--md-primary));
+            color: white;
+            padding: 16px 24px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+        }
+
+        .user-banner .welcome {
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .user-banner .auth-info {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 4px;
+        }
+
+        /* Sensitive Words Section */
+        .words-section {
+            display: grid;
+            gap: 16px;
+        }
+
+        .textarea-field {
+            position: relative;
+        }
+
+        .textarea-field label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--md-primary);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .textarea-field textarea {
+            width: 100%;
+            min-height: 100px;
+            padding: 16px;
+            border: 2px solid var(--md-outline);
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            resize: vertical;
+            transition: border-color 0.2s;
+        }
+
+        .textarea-field textarea:focus {
+            outline: none;
+            border-color: var(--md-primary);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: var(--md-primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--md-primary-dark);
+            box-shadow: var(--md-shadow-elevated);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--md-primary);
+            border: 2px solid var(--md-primary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--md-primary);
+            color: white;
+        }
+
+        .btn-success {
+            background: var(--md-success);
+            color: white;
+        }
+
+        .btn-warning {
+            background: var(--md-warning);
+            color: white;
+        }
+
+        /* File Upload Zone */
+        .upload-zone {
+            border: 2px dashed var(--md-outline);
+            border-radius: 12px;
+            padding: 40px 24px;
+            text-align: center;
+            transition: all 0.3s;
+            background: var(--md-surface-variant);
+            cursor: pointer;
+            position: relative;
+        }
+
+        .upload-zone:hover,
+        .upload-zone.dragover {
+            border-color: var(--md-primary);
+            background: rgba(25, 118, 210, 0.05);
+        }
+
+        .upload-zone.processing {
+            pointer-events: none;
+            opacity: 0.7;
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            color: var(--md-primary);
+            margin-bottom: 16px;
+        }
+
+        .upload-text {
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .upload-subtext {
+            font-size: 14px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .file-input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        /* File List */
+        .file-list {
+            margin-top: 16px;
+            display: none;
+        }
+
+        .file-list.visible {
+            display: block;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            background: white;
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-grow: 1;
+        }
+
+        .file-icon {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--md-primary);
+            color: white;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .file-details {
+            flex-grow: 1;
+        }
+
+        .file-name {
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .file-size {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .file-status {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+
+        .file-status.ready {
+            background: #e8f5e8;
+            color: var(--md-success);
+        }
+
+        .file-status.processing {
+            background: #fff3e0;
+            color: var(--md-warning);
+        }
+
+        .file-status.error {
+            background: #ffebee;
+            color: var(--md-error);
+        }
+
+        .file-status.complete {
+            background: #e8f5e8;
+            color: var(--md-success);
+        }
+
+        /* Progress Bars */
+        .progress-container {
+            margin-top: 24px;
+            display: none;
+        }
+
+        .progress-container.visible {
+            display: block;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .progress-title {
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .progress-stats {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--md-primary);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-text {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+            text-align: center;
+        }
+
+        /* Results Section */
+        .results-section {
+            margin-top: 24px;
+            display: none;
+        }
+
+        .results-section.visible {
+            display: block;
+        }
+
+        .results-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .metric-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid var(--md-primary);
+            box-shadow: var(--md-shadow);
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--md-primary);
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 4px;
+        }
+
+        /* File Results */
+        .file-results {
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            overflow: hidden;
+            box-shadow: var(--md-shadow);
+        }
+
+        .file-result-header {
+            background: var(--md-surface-variant);
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .file-result-name {
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .file-result-time {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .file-result-content {
+            padding: 20px;
+        }
+
+        .categories-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+        }
+
+        .category-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: var(--md-surface-variant);
+            border-radius: 6px;
+        }
+
+        .category-name {
+            font-size: 13px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .category-count {
+            font-weight: 500;
+            color: var(--md-primary);
+        }
+
+        /* Download Section */
+        .download-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+        }
+
+        .download-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: var(--md-shadow);
+            text-align: center;
+        }
+
+        .download-icon {
+            font-size: 32px;
+            color: var(--md-primary);
+            margin-bottom: 12px;
+        }
+
+        .download-title {
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .download-description {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+            margin-bottom: 16px;
+        }
+
+        /* Status Message */
+        .status-message {
+            padding: 16px;
+            border-radius: 8px;
+            margin: 16px 0;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status-message.visible {
+            display: block;
+        }
+
+        .status-message.success {
+            background: #e8f5e8;
+            color: var(--md-success);
+            border-left: 4px solid var(--md-success);
+        }
+
+        .status-message.error {
+            background: #ffebee;
+            color: var(--md-error);
+            border-left: 4px solid var(--md-error);
+        }
+
+        .status-message.info {
+            background: #e3f2fd;
+            color: var(--md-primary);
+            border-left: 4px solid var(--md-primary);
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .container {
+                padding: 16px;
+            }
+
+            .button-group {
+                flex-direction: column;
+            }
+
+            .btn {
+                justify-content: center;
+            }
+
+            .nav-links {
+                flex-wrap: wrap;
+            }
+
+            .results-summary {
+                grid-template-columns: 1fr;
+            }
+
+            .download-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- App Bar -->
+    <header class="app-bar">
+        <h1>🛡️ Yossarian Go</h1>
+        <div class="subtitle">Enterprise Log Sanitization System</div>
+        <nav class="nav-links">
+            <a href="/health">📊 Health Check</a>
+            <a href="/admin">⚙️ Admin Panel</a>
+        </nav>
+    </header>
+
+    <div class="container">
+        <!-- User Info Banner (Dynamic) -->
+        <div class="user-banner" id="userBanner" style="display: none;">
+            <div class="welcome">👤 Welcome back, <span id="userName">User</span>!</div>
+            <div class="auth-info">🔐 Authenticated via Enterprise SSO</div>
+        </div>
+
+        <!-- Personal Sensitive Words -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">🔒 Personal Sensitive Words</h2>
+                <div class="card-subtitle">Add your own sensitive terms (stored securely in browser)</div>
+            </div>
+            <div class="card-content">
+                <div class="words-section">
+                    <div class="textarea-field">
+                        <label for="sensitiveWords">Sensitive Terms</label>
+                        <textarea 
+                            id="sensitiveWords" 
+                            placeholder="Enter words separated by commas, e.g.: MyCompany, SecretProject, internal-server, DatabasePassword123"
+                        ></textarea>
+                    </div>
+                    <div class="button-group">
+                        <button type="button" class="btn btn-primary" onclick="saveWords()">
+                            💾 Save Words
+                        </button>
+                        <button type="button" class="btn btn-secondary" onclick="clearWords()">
+                            🗑️ Clear All
+                        </button>
+                    </div>
+                    <div class="status-message" id="wordsStatus"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Upload & Processing -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">📁 Upload & Sanitize Files</h2>
+                <div class="card-subtitle">Support for multiple log files, archives (zip, tar.gz) • Max 50MB per file • Up to 10 files</div>
+            </div>
+            <div class="card-content">
+                <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                    <div class="upload-icon">📤</div>
+                    <div class="upload-text">Drop files here or click to browse</div>
+                    <div class="upload-subtext">Supports .log, .txt, .zip, .tar.gz and other text formats</div>
+                    <input 
+                        type="file" 
+                        id="fileInput" 
+                        class="file-input" 
+                        multiple 
+                        accept=".log,.txt,.zip,.tar,.gz,.tar.gz,.json,.xml,.csv"
+                    >
+                </div>
+
+                <!-- File List -->
+                <div class="file-list" id="fileList"></div>
+
+                <!-- Progress Section -->
+                <div class="progress-container" id="progressContainer">
+                    <div class="progress-header">
+                        <span class="progress-title">Processing Files...</span>
+                        <span class="progress-stats" id="progressStats">0 / 0 files</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">Preparing files...</div>
+                </div>
+
+                <div class="button-group" style="margin-top: 16px;">
+                    <button type="button" class="btn btn-primary" id="processBtn" onclick="processFiles()" disabled>
+                        🔍 Sanitize Files
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="clearFiles()">
+                        🗑️ Clear Files
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div class="results-section" id="resultsSection">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📊 Sanitization Results</h2>
+                    <div class="card-subtitle">Processing summary and detailed breakdown</div>
+                </div>
+                <div class="card-content">
+                    <!-- Overall Summary -->
+                    <div class="results-summary" id="resultsSummary">
+                        <div class="metric-card">
+                            <div class="metric-value" id="totalIPs">0</div>
+                            <div class="metric-label">IP Addresses</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="totalAD">0</div>
+                            <div class="metric-label">AD Accounts</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="totalJWT">0</div>
+                            <div class="metric-label">JWT Tokens</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="totalKeys">0</div>
+                            <div class="metric-label">Private Keys</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="totalSensitive">0</div>
+                            <div class="metric-label">Sensitive Terms</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="totalTime">0ms</div>
+                            <div class="metric-label">Processing Time</div>
+                        </div>
+                    </div>
+
+                    <!-- Per-File Results -->
+                    <div id="fileResults"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Downloads -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">⬇️ Downloads</h2>
+                <div class="card-subtitle">Download sanitized files and audit reports</div>
+            </div>
+            <div class="card-content">
+                <div class="download-grid">
+                    <div class="download-card">
+                        <div class="download-icon">🔒</div>
+                        <div class="download-title">Sanitized Files</div>
+                        <div class="download-description">Download your cleaned log files as a zip archive</div>
+                        <a href="/download/sanitized" class="btn btn-success" id="downloadSanitized" style="pointer-events: none; opacity: 0.5;">
+                            📦 Download Sanitized
+                        </a>
+                    </div>
+                    <div class="download-card">
+                        <div class="download-icon">📋</div>
+                        <div class="download-title">IP Mappings</div>
+                        <div class="download-description">CSV report of all IP address mappings for audit trail</div>
+                        <a href="/mappings/csv" class="btn btn-primary">
+                            📊 Download Mappings
+                        </a>
+                    </div>
+                    <div class="download-card">
+                        <div class="download-icon">📈</div>
+                        <div class="download-title">Processing Report</div>
+                        <div class="download-description">Detailed report of all sanitization activities</div>
+                        <a href="#" class="btn btn-primary" id="downloadReport" onclick="generateReport()">
+                            📄 Generate Report
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let selectedFiles = [];
+        let processingResults = [];
+        let totalProcessingTime = 0;
+
+        // Initialize on page load
+        window.onload = function() {
+            loadWords();
+            initializeFileUpload();
+        };
+
+        // File Upload Handling
+        function initializeFileUpload() {
+            const uploadZone = document.getElementById('uploadZone');
+            const fileInput = document.getElementById('fileInput');
+
+            uploadZone.onclick = function(e) {
+                if (e.target === this || e.target.classList.contains('upload-icon') || 
+                    e.target.classList.contains('upload-text') || e.target.classList.contains('upload-subtext')) {
+                    e.stopPropagation();
+                    fileInput.click();
+                }
+            };
+            
+            // Drag and drop handlers
+            uploadZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadZone.classList.add('dragover');
+            });
+
+            uploadZone.addEventListener('dragleave', () => {
+                uploadZone.classList.remove('dragover');
+            });
+
+            uploadZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadZone.classList.remove('dragover');
+                handleFiles(e.dataTransfer.files);
+            });
+
+            // File input change
+            fileInput.addEventListener('change', (e) => {
+                handleFiles(e.target.files);
+            });
+        }
+
+        function handleFiles(files) {
+            const fileArray = Array.from(files);
+            
+            // Validate file count
+            if (fileArray.length > 10) {
+                showStatus('error', 'Maximum 10 files allowed. Please select fewer files.');
+                return;
+            }
+
+            selectedFiles = [];
+            
+            fileArray.forEach(file => {
+                // Validate file size (50MB)
+                if (file.size > 50 * 1024 * 1024) {
+                    showStatus('error', `File "${file.name}" exceeds 50MB limit and will be skipped.`);
+                    return;
+                }
+
+                // Basic binary detection (more sophisticated detection will be server-side)
+                const isBinary = file.type.startsWith('image/') || 
+                                file.type.startsWith('video/') || 
+                                file.type.startsWith('audio/') ||
+                                file.type === 'application/octet-stream';
+
+                if (isBinary && !isArchive(file)) {
+                    showStatus('error', `File "${file.name}" appears to be binary and will be skipped.`);
+                    return;
+                }
+
+                selectedFiles.push({
+                    file: file,
+                    id: Date.now() + Math.random(),
+                    status: 'ready',
+                    results: null
+                });
+            });
+
+            displayFileList();
+            updateProcessButton();
+        }
+
+        function isArchive(file) {
+            const archiveTypes = ['.zip', '.tar', '.gz', '.tar.gz', '.rar', '.7z'];
+            return archiveTypes.some(ext => file.name.toLowerCase().endsWith(ext));
+        }
+
+        function displayFileList() {
+            const fileList = document.getElementById('fileList');
+            const processBtn = document.getElementById('processBtn');
+
+            if (selectedFiles.length === 0) {
+                fileList.classList.remove('visible');
+                return;
+            }
+
+            fileList.classList.add('visible');
+            fileList.innerHTML = selectedFiles.map(fileObj => {
+                const file = fileObj.file;
+                const sizeStr = formatFileSize(file.size);
+                const typeIcon = getFileIcon(file.name);
+
+                return `
+                    <div class="file-item" data-file-id="${fileObj.id}">
+                        <div class="file-info">
+                            <div class="file-icon">${typeIcon}</div>
+                            <div class="file-details">
+                                <div class="file-name">${file.name}</div>
+                                <div class="file-size">${sizeStr}</div>
+                            </div>
+                        </div>
+                        <div class="file-status ${fileObj.status}">${getStatusText(fileObj.status)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getFileIcon(filename) {
+            const ext = filename.toLowerCase().split('.').pop();
+            const iconMap = {
+                'log': 'LOG',
+                'txt': 'TXT',
+                'zip': 'ZIP',
+                'tar': 'TAR',
+                'gz': 'GZ',
+                'json': 'JSON',
+                'xml': 'XML',
+                'csv': 'CSV'
+            };
+            return iconMap[ext] || 'FILE';
+        }
+
+        function getStatusText(status) {
+            const statusMap = {
+                'ready': 'Ready',
+                'processing': 'Processing...',
+                'complete': 'Complete',
+                'error': 'Error'
+            };
+            return statusMap[status] || status;
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function updateProcessButton() {
+            const processBtn = document.getElementById('processBtn');
+            processBtn.disabled = selectedFiles.length === 0;
+        }
+
+        function clearFiles() {
+            selectedFiles = [];
+            document.getElementById('fileInput').value = '';
+            document.getElementById('fileList').classList.remove('visible');
+            document.getElementById('progressContainer').classList.remove('visible');
+            document.getElementById('resultsSection').classList.remove('visible');
+            updateProcessButton();
+        }
+
+        // File Processing
+        async function processFiles() {
+            if (selectedFiles.length === 0) return;
+
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const progressStats = document.getElementById('progressStats');
+
+            progressContainer.classList.add('visible');
+            processingResults = [];
+            totalProcessingTime = 0;
+
+            const startTime = Date.now();
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const fileObj = selectedFiles[i];
+                const progress = ((i) / selectedFiles.length) * 100;
+
+                progressFill.style.width = `${progress}%`;
+                progressText.textContent = `Processing ${fileObj.file.name}...`;
+                progressStats.textContent = `${i} / ${selectedFiles.length} files`;
+
+                fileObj.status = 'processing';
+                updateFileStatus(fileObj.id, 'processing');
+
+                try {
+                    const result = await processFile(fileObj.file);
+                    
+                    // Handle both old single-file and new multi-file response formats
+                    if (result.files && Array.isArray(result.files)) {
+                        // New multi-file format
+                        result.files.forEach(fileResult => {
+                            fileObj.results = fileResult;
+                            processingResults.push(fileResult);
+                        });
+                    } else {
+                        // Old single-file format (fallback)
+                        fileObj.results = result;
+                        processingResults.push(result);
+                    }
+                    
+                    fileObj.status = 'complete';
+                    updateFileStatus(fileObj.id, 'complete');
+                } catch (error) {
+                    console.error('Processing error:', error);
+                    fileObj.status = 'error';
+                    updateFileStatus(fileObj.id, 'error');
+                    showStatus('error', `Failed to process ${fileObj.file.name}: ${error.message}`);
+                }
+            }
+
+            const endTime = Date.now();
+            totalProcessingTime = endTime - startTime;
+            
+            progressFill.style.width = '100%';
+            progressText.textContent = `Completed in ${totalProcessingTime}ms`;
+            progressStats.textContent = `${selectedFiles.length} / ${selectedFiles.length} files`;
+
+            displayResults();
+            enableDownloads();
+        }
+
+        async function processFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            return await response.json();
+        }
+
+        function updateFileStatus(fileId, status) {
+            const fileItem = document.querySelector(`[data-file-id="${fileId}"]`);
+            if (fileItem) {
+                const statusElement = fileItem.querySelector('.file-status');
+                statusElement.className = `file-status ${status}`;
+                statusElement.textContent = getStatusText(status);
+            }
+        }
+
+        // Results Display
+        function displayResults() {
+            const resultsSection = document.getElementById('resultsSection');
+            resultsSection.classList.add('visible');
+
+            const aggregated = {
+                totalIPs: 0,
+                totalAD: 0,
+                totalJWT: 0,
+                totalKeys: 0,
+                totalSensitive: 0,
+                totalUserWords: 0,
+                totalFiles: processingResults.length,
+                totalSize: 0,
+                totalSanitizedSize: 0
+            };
+
+            processingResults.forEach(result => {
+                aggregated.totalIPs += result.total_ips || result.ip_addresses || 0;
+                aggregated.totalAD += result.ad_accounts || result.ad_account_count || 0;
+                aggregated.totalJWT += result.jwt_tokens || result.jwt_token_count || 0;
+                aggregated.totalKeys += result.private_keys || result.private_key_count || 0;
+                aggregated.totalSensitive += result.sensitive_terms || result.sensitive_term_count || 0;
+                aggregated.totalUserWords += result.user_words || result.user_word_count || 0;
+                aggregated.totalSize += result.original_size || 0;
+                aggregated.totalSanitizedSize += result.sanitized_size || 0;
+            });
+
+            document.getElementById('totalIPs').textContent = aggregated.totalIPs;
+            document.getElementById('totalAD').textContent = aggregated.totalAD;
+            document.getElementById('totalJWT').textContent = aggregated.totalJWT;
+            document.getElementById('totalKeys').textContent = aggregated.totalKeys;
+            document.getElementById('totalSensitive').textContent = aggregated.totalSensitive;
+            document.getElementById('totalTime').textContent = `${totalProcessingTime}ms`;
+
+            displayFileResults();
+        }
+
+        function displayFileResults() {
+            const fileResults = document.getElementById('fileResults');
+            
+            const resultsHTML = selectedFiles.map(fileObj => {
+                if (!fileObj.results) return '';
+
+                const result = fileObj.results;
+                const processingTime = result.processing_time || 'N/A';
+
+                return `
+                    <div class="file-results">
+                        <div class="file-result-header">
+                            <span class="file-result-name">📄 ${fileObj.file.name}</span>
+                            <span class="file-result-time">⏱️ ${processingTime}</span>
+                        </div>
+                        <div class="file-result-content">
+                            <div class="categories-grid">
+                                <div class="category-item">
+                                    <span class="category-name">IP Addresses</span>
+                                    <span class="category-count">${result.total_ips || 0}</span>
+                                </div>
+                                <div class="category-item">
+                                    <span class="category-name">AD Accounts</span>
+                                    <span class="category-count">${result.ad_accounts || 0}</span>
+                                </div>
+                                <div class="category-item">
+                                    <span class="category-name">JWT Tokens</span>
+                                    <span class="category-count">${result.jwt_tokens || 0}</span>
+                                </div>
+                                <div class="category-item">
+                                    <span class="category-name">Private Keys</span>
+                                    <span class="category-count">${result.private_keys || 0}</span>
+                                </div>
+                                <div class="category-item">
+                                    <span class="category-name">Sensitive Terms</span>
+                                    <span class="category-count">${result.sensitive_terms || 0}</span>
+                                </div>
+                                <div class="category-item">
+                                    <span class="category-name">User Words</span>
+                                    <span class="category-count">${result.user_words || 0}</span>
+                                </div>
+                                <div class="category-item">
+                                    <span class="category-name">Original Size</span>
+                                    <span class="category-count">${formatFileSize(result.original_size || 0)}</span>
+                                </div>
+                                <div class="category-item">
+                                    <span class="category-name">Sanitized Size</span>
+                                    <span class="category-count">${formatFileSize(result.sanitized_size || 0)}</span>
+                                </div>
+                            </div>
+                            ${result.sample ? `
+                                <div style="margin-top: 16px;">
+                                    <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-bottom: 8px;">SAMPLE OUTPUT:</div>
+                                    <div style="background: #f5f5f5; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 12px; max-height: 100px; overflow-y: auto;">
+                                        ${escapeHtml(result.sample)}
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            fileResults.innerHTML = resultsHTML;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function enableDownloads() {
+            const downloadSanitized = document.getElementById('downloadSanitized');
+            downloadSanitized.style.pointerEvents = 'auto';
+            downloadSanitized.style.opacity = '1';
+        }
+
+        // Sensitive Words Management
+        function loadWords() {
+            const words = getCookie('sensitive_words');
+            if (words) {
+                document.getElementById('sensitiveWords').value = words.replace(/,/g, ', ');
+            }
+        }
+
+        function saveWords() {
+            const words = document.getElementById('sensitiveWords').value;
+            const cleanWords = words.split(',').map(w => w.trim()).filter(w => w).join(',');
+            setCookie('sensitive_words', cleanWords, 30);
+            showStatus('success', 'Sensitive words saved successfully!', 'wordsStatus');
+        }
+
+        function clearWords() {
+            document.getElementById('sensitiveWords').value = '';
+            setCookie('sensitive_words', '', -1);
+            showStatus('success', 'Sensitive words cleared!', 'wordsStatus');
+        }
+
+        // Utility Functions
+        function setCookie(name, value, days) {
+            const expires = new Date();
+            expires.setTime(expires.getTime() + (days * 24 * 60 * 60 * 1000));
+            document.cookie = name + '=' + value + ';expires=' + expires.toUTCString() + ';path=/';
+        }
+
+        function getCookie(name) {
+            const nameEQ = name + "=";
+            const cookies = document.cookie.split(';');
+            for(let i = 0; i < cookies.length; i++) {
+                let cookie = cookies[i].trim();
+                if (cookie.indexOf(nameEQ) === 0) {
+                    return cookie.substring(nameEQ.length);
+                }
+            }
+            return null;
+        }
+
+        function showStatus(type, message, elementId = null) {
+            const statusElement = document.getElementById(elementId || 'mainStatus');
+            if (!statusElement) {
+                // Create a temporary status element if none specified
+                const tempStatus = document.createElement('div');
+                tempStatus.className = `status-message visible ${type}`;
+                tempStatus.textContent = message;
+                document.querySelector('.container').appendChild(tempStatus);
+                setTimeout(() => tempStatus.remove(), 5000);
+                return;
+            }
+
+            statusElement.className = `status-message visible ${type}`;
+            statusElement.textContent = message;
+            
+            setTimeout(() => {
+                statusElement.classList.remove('visible');
+            }, 5000);
+        }
+
+        // Report Generation
+        function generateReport() {
+            if (processingResults.length === 0) {
+                showStatus('error', 'No processing results available. Please process files first.');
+                return;
+            }
+
+            const report = {
+                timestamp: new Date().toISOString(),
+                summary: {
+                    totalFiles: selectedFiles.length,
+                    processingTime: totalProcessingTime,
+                    totalFindings: processingResults.reduce((sum, r) => sum + (r.total_ips || 0) + (r.ad_accounts || 0) + (r.jwt_tokens || 0) + (r.private_keys || 0) + (r.sensitive_terms || 0), 0)
+                },
+                files: selectedFiles.map(fileObj => ({
+                    filename: fileObj.file.name,
+                    size: fileObj.file.size,
+                    status: fileObj.status,
+                    results: fileObj.results
+                }))
+            };
+
+            const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `yossarian-report-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            showStatus('success', 'Processing report downloaded successfully!');
+        }
+
+        // Initialize user info (if authenticated)
+        function initializeUserInfo() {
+            // This would be populated by server-side template or API call
+            // For now, it's hidden by default
+            const userBanner = document.getElementById('userBanner');
+            // userBanner.style.display = 'block';
+            // document.getElementById('userName').textContent = 'John Doe';
+        }
+    </script>
+</body>
+</html>
