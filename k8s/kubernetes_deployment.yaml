@@ -51,6 +51,11 @@ spec:
       labels:
         app: yossarian-go
     spec:
+      volumes:
+      - name: custom-ca
+        configMap:
+          name: custom-ca-bundle
+          optional: true
       containers:
       - name: yossarian-go
         image: yossarian-go:latest
@@ -61,6 +66,14 @@ spec:
             name: yossarian-config
         - secretRef:
             name: yossarian-secrets
+        env:
+        - name: CA_CERT_PATH
+          value: "/etc/ssl/certs/custom-ca.crt"
+        volumeMounts:
+        - name: custom-ca
+          mountPath: /etc/ssl/certs/custom-ca.crt
+          subPath: ca-bundle.crt
+          readOnly: true
         resources:
           requests:
             memory: "256Mi"
@@ -97,28 +110,30 @@ spec:
   type: ClusterIP
 
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
 metadata:
-  name: yossarian-ingress
+  name: yossarian-go-httpproxy
   namespace: yossarian-go
-  annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
-  tls:
-  - hosts:
-    - yossarian.company.com
-    secretName: yossarian-tls
-  rules:
-  - host: yossarian.company.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: yossarian-service
-            port:
-              number: 80
+  virtualhost:
+    fqdn: yossarian-go.mydomain.local
+    tls:
+      secretName: yossarian-go-tls
+  routes:
+    - conditions:
+        - prefix: /
+      services:
+        - name: yossarian-go-service
+          port: 80
+      timeoutPolicy:
+        response: "60s"
+        idle: "60s"
+      loadBalancerPolicy:
+        strategy: Cookie
+      cookieRewritePolicies:
+        - name: "X-Contour-Session-Affinity"
+          pathRewrite:
+            value: "/"
+          sameSite: Lax
+          secure: true

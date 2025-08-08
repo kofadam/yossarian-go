@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-ca-bundle
+  namespace: yossarian-go
+data:
+  ca-bundle.crt: |
+    # Your Keycloak or internal CA certificate goes here
+    # Users should replace this with their actual CA certificate
+    # To get it: echo | openssl s_client -connect keycloak.yourdomain.com:443 -showcerts

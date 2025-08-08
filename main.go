@@ -3,16 +3,23 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
+
 	// "compress/gzip"
 	"crypto/rand"
 	"encoding/hex"
-	"net/url"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,14 +36,21 @@ type UserInfo struct {
 	IsAdmin bool
 }
 
+// Version information - set during build
+var (
+	Version   = "v0.7.0"
+	BuildTime = "unknown"
+	GitCommit = "unknown"
+)
+
 // Global storage for download and admin
 var (
-    lastSanitizedContent  string
-    lastSanitizedFilename string
-    lastSanitizedFiles    map[string]string
-	adminSessions        = make(map[string]time.Time)
-	sessionMutex         sync.Mutex
-	templates            *template.Template
+	lastSanitizedContent  string
+	lastSanitizedFilename string
+	lastSanitizedFiles    map[string]string
+	adminSessions         = make(map[string]time.Time)
+	sessionMutex          sync.Mutex
+	templates             *template.Template
 )
 
 // Global mapping storage
@@ -44,20 +58,31 @@ var (
 	ipMappings = make(map[string]string)
 	ipCounter  = 1
 	mapMutex   sync.Mutex
-	
+
 	// Admin configuration
 	adminPassword     string
 	sensitiveTermsOrg []string
-	
+
+	// OIDC configuration
+	oidcEnabled   bool
+	oidcIssuerURL string
+	// These will be used when we implement the full OIDC flow
+	// oidcClientID     string
+	// oidcClientSecret string
+	// oidcRedirectURL  string
+	// oidcProvider     *oidc.Provider
+	// oauth2Config     *oauth2.Config
+	customHTTPClient *http.Client
+
 	// Mock AD accounts
 	adAccounts = map[string]string{
-		"CORP\\john.doe":     "USN123456789",
-		"CORP\\jane.smith":   "USN987654321", 
-		"CORP\\admin":        "USN555666777",
-		"svc_backup":         "USN111222333",
-		"svc_monitoring":     "USN222333444",
-		"SERVER-WEB$":        "USN444555666",
-		"COMP01$":           "USN333444555",
+		"CORP\\john.doe":   "USN123456789",
+		"CORP\\jane.smith": "USN987654321",
+		"CORP\\admin":      "USN555666777",
+		"svc_backup":       "USN111222333",
+		"svc_monitoring":   "USN222333444",
+		"SERVER-WEB$":      "USN444555666",
+		"COMP01$":          "USN333444555",
 	}
 )
 
@@ -69,28 +94,84 @@ var (
 	privateKeyRegex = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
 	passwordRegex   = regexp.MustCompile(`(?i)(:([^:@\s]{3,50})@|password["':=\s]+["']?([^"',\s]{3,50})["']?)`)
 	// commentRegex    = regexp.MustCompile(`(?m)^#.*$`)
-	sensitiveRegex  *regexp.Regexp
+	sensitiveRegex *regexp.Regexp
 )
 
 func init() {
 	adminPassword = os.Getenv("ADMIN_PASSWORD")
-	
+
+	// OIDC configuration
+	oidcEnabled = os.Getenv("OIDC_ENABLED") == "true"
+	oidcIssuerURL = os.Getenv("OIDC_ISSUER_URL")
+	// oidcClientID = os.Getenv("OIDC_CLIENT_ID")
+	// oidcClientSecret = os.Getenv("OIDC_CLIENT_SECRET")
+	// oidcRedirectURL = os.Getenv("OIDC_REDIRECT_URL")
+
+	// Setup custom HTTP client with CA support
+	customHTTPClient = getHTTPClient()
+
+	// Initialize OIDC if enabled
+	if oidcEnabled && oidcIssuerURL != "" {
+		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, customHTTPClient)
+
+		_, err := oidc.NewProvider(ctx, oidcIssuerURL)
+		// provider will be used when we implement the full OIDC flow
+		if err != nil {
+			log.Printf("WARNING: Failed to initialize OIDC provider: %v", err)
+			oidcEnabled = false
+		} else {
+			// oidcProvider = provider
+			// oauth2Config = &oauth2.Config{
+			/*
+					ClientID:     oidcClientID,
+					ClientSecret: oidcClientSecret,
+					RedirectURL:  oidcRedirectURL,
+					Endpoint:     provider.Endpoint(),
+					Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+				}
+			*/
+			log.Printf("OIDC enabled with issuer: %s", oidcIssuerURL)
+		}
+	}
+
 	// Load sensitive terms from environment variable (ConfigMap)
 	sensitiveTermsEnv := os.Getenv("SENSITIVE_TERMS")
 	if sensitiveTermsEnv != "" {
 		sensitiveTermsOrg = strings.Split(sensitiveTermsEnv, ",")
-		// Trim whitespace from each term
 		for i, term := range sensitiveTermsOrg {
 			sensitiveTermsOrg[i] = strings.TrimSpace(term)
 		}
 		sensitiveRegex = regexp.MustCompile(`(?i)\b(` + strings.Join(sensitiveTermsOrg, "|") + `)\b`)
 	} else {
-		// No sensitive terms configured
 		sensitiveTermsOrg = []string{}
 		sensitiveRegex = nil
 	}
 }
 
+func getHTTPClient() *http.Client {
+	certPath := os.Getenv("CA_CERT_PATH")
+	if certPath == "" {
+		return http.DefaultClient
+	}
+
+	if _, err := os.Stat(certPath); err == nil {
+		caCert, err := os.ReadFile(certPath)
+		if err == nil {
+			caCertPool := x509.NewCertPool()
+			if caCertPool.AppendCertsFromPEM(caCert) {
+				return &http.Client{
+					Transport: &http.Transport{
+						TLSClientConfig: &tls.Config{
+							RootCAs: caCertPool,
+						},
+					},
+				}
+			}
+		}
+	}
+
+	return http.DefaultClient
+}
 func initTemplates() {
 	templates = template.Must(template.ParseGlob("templates/*.html"))
 }
@@ -106,16 +187,16 @@ func isValidAdminSession(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	
+
 	sessionMutex.Lock()
 	defer sessionMutex.Unlock()
-	
+
 	expiry, exists := adminSessions[cookie.Value]
 	if !exists || time.Now().After(expiry) {
 		delete(adminSessions, cookie.Value)
 		return false
 	}
-	
+
 	adminSessions[cookie.Value] = time.Now().Add(30 * time.Minute)
 	return true
 }
@@ -126,10 +207,10 @@ func getCurrentUserSafe(r *http.Request) (*UserInfo, bool) {
 	if err != nil {
 		return nil, false
 	}
-	
+
 	sessionMutex.Lock()
 	defer sessionMutex.Unlock()
-	
+
 	if expiry, exists := adminSessions[cookie.Value]; exists {
 		if time.Now().After(expiry) {
 			delete(adminSessions, cookie.Value)
@@ -141,7 +222,7 @@ func getCurrentUserSafe(r *http.Request) (*UserInfo, bool) {
 			IsAdmin: true,
 		}, true
 	}
-	
+
 	return nil, false
 }
 
@@ -155,36 +236,35 @@ func adminRequired(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-
 func sanitizeText(text string, userWords []string) string {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
-	
+
 	result := text
 	// 0. Remove comment blocks (they may contain sensitive metadata)
 	// result = commentRegex.ReplaceAllString(result, "[COMMENT-REDACTED]")
 
 	// 1. Replace private keys
 	result = privateKeyRegex.ReplaceAllString(result, "[PRIVATE-KEY-REDACTED]")
-	
+
 	// 2. Replace JWT tokens
 	result = jwtRegex.ReplaceAllString(result, "[JWT-REDACTED]")
-	
+
 	// 3. Replace passwords in connection strings and config files
 	result = passwordRegex.ReplaceAllString(result, "[PASSWORD-REDACTED]")
-	
+
 	// 4. Replace sensitive terms (case-insensitive)
 	if sensitiveRegex != nil {
 		result = sensitiveRegex.ReplaceAllString(result, "[SENSITIVE]")
 	}
-	
+
 	// 5. Replace user words
 	for _, word := range userWords {
 		if word != "" && len(word) > 2 {
 			result = strings.ReplaceAll(result, word, "[USER-SENSITIVE]")
 		}
 	}
-	
+
 	// 6. Replace AD accounts
 	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
 		if usn, exists := adAccounts[account]; exists {
@@ -192,7 +272,7 @@ func sanitizeText(text string, userWords []string) string {
 		}
 		return "[AD-UNKNOWN]"
 	})
-	
+
 	// 7. Replace IPs
 	result = ipRegex.ReplaceAllStringFunc(result, func(ip string) string {
 		if placeholder, exists := ipMappings[ip]; exists {
@@ -203,10 +283,9 @@ func sanitizeText(text string, userWords []string) string {
 		ipCounter++
 		return placeholder
 	})
-	
+
 	return result
 }
-
 
 func isBinaryContent(content []byte) bool {
 	// Simple binary detection - check for null bytes in first 512 bytes
@@ -214,7 +293,7 @@ func isBinaryContent(content []byte) bool {
 	if len(content) < checkLen {
 		checkLen = len(content)
 	}
-	
+
 	for i := 0; i < checkLen; i++ {
 		if content[i] == 0 {
 			return true
@@ -240,15 +319,15 @@ func countMatches(text, pattern string) int {
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"status": "ok", "service": "yossarian-go"}`)
+	fmt.Fprintf(w, `{"status": "ok", "service": "yossarian-go", "version": "%s", "build_time": "%s", "commit": "%s"}`, Version, BuildTime, GitCommit)
 }
 
 func debugHandler(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "text/plain")
-    fmt.Fprintf(w, "Templates loaded: %v\n", templates != nil)
-    if templates != nil {
-        fmt.Fprintf(w, "Template names: %v\n", templates.DefinedTemplates())
-    }
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w, "Templates loaded: %v\n", templates != nil)
+	if templates != nil {
+		fmt.Fprintf(w, "Template names: %v\n", templates.DefinedTemplates())
+	}
 }
 
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
@@ -320,14 +399,14 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 				log.Printf("No files extracted from ZIP: %s", fileHeader.Filename)
 				continue
 			}
-			
+
 			// Sanitize all extracted files
 			var sanitizedFiles []ExtractedFile
 			totalZipOriginalSize := 0
 			totalZipSanitizedSize := 0
-			
+
 			for idx, extracted := range extractedFiles {
-				if idx % 10 == 0 {
+				if idx%10 == 0 {
 					log.Printf("Processing file %d/%d in ZIP: %s", idx+1, len(extractedFiles), extracted.Name)
 				}
 				sanitized := sanitizeText(extracted.Content, userWords)
@@ -340,31 +419,31 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 				totalZipOriginalSize += len(extracted.Content)
 				totalZipSanitizedSize += len(sanitized)
 			}
-			
+
 			// Recreate ZIP archive with sanitized content
 			sanitizedZipData, err := createZipArchive(sanitizedFiles)
 			if err != nil {
 				log.Printf("Failed to recreate ZIP archive %s: %v", fileHeader.Filename, err)
 				continue
 			}
-			
+
 			// Store results for the entire ZIP file
 			result := map[string]interface{}{
-				"filename":       fileHeader.Filename,
-				"original_size":  len(content),
-				"sanitized_size": len(sanitizedZipData),
-				"processing_time": "N/A", // TODO: Add timing
-				"total_ips":      0, // Will be calculated below
-				"ad_accounts":    0,
-				"jwt_tokens":     0,
-				"private_keys":   0,
-				"sensitive_terms": 0,
-				"user_words":     0,
+				"filename":          fileHeader.Filename,
+				"original_size":     len(content),
+				"sanitized_size":    len(sanitizedZipData),
+				"processing_time":   "N/A", // TODO: Add timing
+				"total_ips":         0,     // Will be calculated below
+				"ad_accounts":       0,
+				"jwt_tokens":        0,
+				"private_keys":      0,
+				"sensitive_terms":   0,
+				"user_words":        0,
 				"sanitized_content": string(sanitizedZipData),
-				"status":         "sanitized",
-				"files_processed": len(extractedFiles),
+				"status":            "sanitized",
+				"files_processed":   len(extractedFiles),
 			}
-			
+
 			// Calculate total findings across all files
 			for _, sanitizedFile := range sanitizedFiles {
 				result["total_ips"] = result["total_ips"].(int) + countMatches(sanitizedFile.Content, "[IP-")
@@ -374,13 +453,13 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 				result["sensitive_terms"] = result["sensitive_terms"].(int) + countMatches(sanitizedFile.Content, "[SENSITIVE]")
 				result["user_words"] = result["user_words"].(int) + countMatches(sanitizedFile.Content, "[USER-SENSITIVE]")
 			}
-			
+
 			result["sample"] = fmt.Sprintf("ZIP archive with %d files processed", len(extractedFiles))
-			
+
 			results = append(results, result)
 			totalOriginalSize += len(content)
 			totalSanitizedSize += len(sanitizedZipData)
-			
+
 			log.Printf("Processed ZIP file: %s (%d files, %d->%d bytes)", fileHeader.Filename, len(extractedFiles), len(content), len(sanitizedZipData))
 			continue
 		}
@@ -395,18 +474,18 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 				// Store results for each extracted file
 				result := map[string]interface{}{
-					"filename":       fmt.Sprintf("%s:%s", fileHeader.Filename, extracted.Name),
-					"original_size":  len(extracted.Content),
-					"sanitized_size": len(sanitized),
-					"processing_time": fmt.Sprintf("%.2fms", float64(processingTime.Nanoseconds())/1000000.0),
-					"total_ips":      countMatches(sanitized, "[IP-"),
-					"ad_accounts":    countMatches(sanitized, "USN"),
-					"jwt_tokens":     countMatches(sanitized, "[JWT-REDACTED]"),
-					"private_keys":   countMatches(sanitized, "[PRIVATE-KEY-REDACTED]"),
-					"sensitive_terms": countMatches(sanitized, "[SENSITIVE]"),
-					"user_words":     countMatches(sanitized, "[USER-SENSITIVE]"),
+					"filename":          fmt.Sprintf("%s:%s", fileHeader.Filename, extracted.Name),
+					"original_size":     len(extracted.Content),
+					"sanitized_size":    len(sanitized),
+					"processing_time":   fmt.Sprintf("%.2fms", float64(processingTime.Nanoseconds())/1000000.0),
+					"total_ips":         countMatches(sanitized, "[IP-"),
+					"ad_accounts":       countMatches(sanitized, "USN"),
+					"jwt_tokens":        countMatches(sanitized, "[JWT-REDACTED]"),
+					"private_keys":      countMatches(sanitized, "[PRIVATE-KEY-REDACTED]"),
+					"sensitive_terms":   countMatches(sanitized, "[SENSITIVE]"),
+					"user_words":        countMatches(sanitized, "[USER-SENSITIVE]"),
 					"sanitized_content": sanitized,
-					"status":         "sanitized",
+					"status":            "sanitized",
 				}
 
 				if len(sanitized) > 200 {
@@ -428,18 +507,18 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Store results
 		result := map[string]interface{}{
-			"filename":       fileHeader.Filename,
-			"original_size":  len(content),
-			"sanitized_size": len(sanitized),
-			"processing_time": fmt.Sprintf("%.2fms", float64(processingTime.Nanoseconds())/1000000.0),
-			"total_ips":      countMatches(sanitized, "[IP-"),
-			"ad_accounts":    countMatches(sanitized, "USN"),
-			"jwt_tokens":     countMatches(sanitized, "[JWT-REDACTED]"),
-			"private_keys":   countMatches(sanitized, "[PRIVATE-KEY-REDACTED]"),
-			"sensitive_terms": countMatches(sanitized, "[SENSITIVE]"),
-			"user_words":     countMatches(sanitized, "[USER-SENSITIVE]"),
+			"filename":          fileHeader.Filename,
+			"original_size":     len(content),
+			"sanitized_size":    len(sanitized),
+			"processing_time":   fmt.Sprintf("%.2fms", float64(processingTime.Nanoseconds())/1000000.0),
+			"total_ips":         countMatches(sanitized, "[IP-"),
+			"ad_accounts":       countMatches(sanitized, "USN"),
+			"jwt_tokens":        countMatches(sanitized, "[JWT-REDACTED]"),
+			"private_keys":      countMatches(sanitized, "[PRIVATE-KEY-REDACTED]"),
+			"sensitive_terms":   countMatches(sanitized, "[SENSITIVE]"),
+			"user_words":        countMatches(sanitized, "[USER-SENSITIVE]"),
 			"sanitized_content": sanitized,
-			"status":         "sanitized",
+			"status":            "sanitized",
 		}
 
 		if len(sanitized) > 200 {
@@ -468,12 +547,12 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	// Return JSON response
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]interface{}{
-		"files":              results,
-		"total_files":        len(results),
-		"total_original":     totalOriginalSize,
-		"total_sanitized":    totalSanitizedSize,
-		"total_ip_mappings":  len(ipMappings),
-		"status":             "completed",
+		"files":             results,
+		"total_files":       len(results),
+		"total_original":    totalOriginalSize,
+		"total_sanitized":   totalSanitizedSize,
+		"total_ip_mappings": len(ipMappings),
+		"status":            "completed",
 	}
 
 	jsonBytes, _ := json.Marshal(response)
@@ -481,133 +560,133 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func extractZipContent(zipData []byte) []ExtractedFile {
-    var extractedFiles []ExtractedFile
-    
-    reader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
-    if err != nil {
-        log.Printf("Failed to read ZIP archive: %v", err)
-        return extractedFiles
-    }
-    
-    for _, file := range reader.File {
-        // Skip directories
-        if file.FileInfo().IsDir() {
-            continue
-        }
-        
-        // Skip very large files (>10MB extracted)
-        if file.UncompressedSize64 > 10*1024*1024 {
-            log.Printf("Skipping large file in ZIP: %s (%d bytes)", file.Name, file.UncompressedSize64)
-            continue
-        }
-        
-        // Open file within ZIP
-        rc, err := file.Open()
-        if err != nil {
-            log.Printf("Failed to open file %s in ZIP: %v", file.Name, err)
-            continue
-        }
-        
-        // Read file content
-        content, err := io.ReadAll(rc)
-        rc.Close()
-        if err != nil {
-            log.Printf("Failed to read file %s in ZIP: %v", file.Name, err)
-            continue
-        }
-        
-        // Skip binary files
-        if isBinaryContent(content) {
-            log.Printf("Skipping binary file in ZIP: %s", file.Name)
-            continue
-        }
-        
-        extractedFiles = append(extractedFiles, ExtractedFile{
-            Name:    file.Name,
-            Content: string(content),
-        })
-        
-        log.Printf("Extracted file from ZIP: %s (%d bytes)", file.Name, len(content))
-    }
-    
-    return extractedFiles
+	var extractedFiles []ExtractedFile
+
+	reader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		log.Printf("Failed to read ZIP archive: %v", err)
+		return extractedFiles
+	}
+
+	for _, file := range reader.File {
+		// Skip directories
+		if file.FileInfo().IsDir() {
+			continue
+		}
+
+		// Skip very large files (>10MB extracted)
+		if file.UncompressedSize64 > 10*1024*1024 {
+			log.Printf("Skipping large file in ZIP: %s (%d bytes)", file.Name, file.UncompressedSize64)
+			continue
+		}
+
+		// Open file within ZIP
+		rc, err := file.Open()
+		if err != nil {
+			log.Printf("Failed to open file %s in ZIP: %v", file.Name, err)
+			continue
+		}
+
+		// Read file content
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			log.Printf("Failed to read file %s in ZIP: %v", file.Name, err)
+			continue
+		}
+
+		// Skip binary files
+		if isBinaryContent(content) {
+			log.Printf("Skipping binary file in ZIP: %s", file.Name)
+			continue
+		}
+
+		extractedFiles = append(extractedFiles, ExtractedFile{
+			Name:    file.Name,
+			Content: string(content),
+		})
+
+		log.Printf("Extracted file from ZIP: %s (%d bytes)", file.Name, len(content))
+	}
+
+	return extractedFiles
 }
 
 func createZipArchive(files []ExtractedFile) ([]byte, error) {
-    var buf bytes.Buffer
-    zipWriter := zip.NewWriter(&buf)
-    
-    for _, file := range files {
-        header := &zip.FileHeader{
-            Name:   file.Name,
-            Method: zip.Deflate,
-        }
-        header.SetMode(file.Mode)
-        header.SetModTime(file.ModTime)
-        
-        writer, err := zipWriter.CreateHeader(header)
-        if err != nil {
-            return nil, fmt.Errorf("failed to create file header for %s: %v", file.Name, err)
-        }
-        
-        _, err = writer.Write([]byte(file.Content))
-        if err != nil {
-            return nil, fmt.Errorf("failed to write file %s: %v", file.Name, err)
-        }
-    }
-    
-    err := zipWriter.Close()
-    if err != nil {
-        return nil, fmt.Errorf("failed to close zip writer: %v", err)
-    }
-    
-    return buf.Bytes(), nil
+	var buf bytes.Buffer
+	zipWriter := zip.NewWriter(&buf)
+
+	for _, file := range files {
+		header := &zip.FileHeader{
+			Name:   file.Name,
+			Method: zip.Deflate,
+		}
+		header.SetMode(file.Mode)
+		header.SetModTime(file.ModTime)
+
+		writer, err := zipWriter.CreateHeader(header)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create file header for %s: %v", file.Name, err)
+		}
+
+		_, err = writer.Write([]byte(file.Content))
+		if err != nil {
+			return nil, fmt.Errorf("failed to write file %s: %v", file.Name, err)
+		}
+	}
+
+	err := zipWriter.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to close zip writer: %v", err)
+	}
+
+	return buf.Bytes(), nil
 }
 
 type ExtractedFile struct {
-    Name    string
-    Content string
-    Mode    os.FileMode
-    ModTime time.Time
+	Name    string
+	Content string
+	Mode    os.FileMode
+	ModTime time.Time
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
-    if lastSanitizedContent == "" {
-        http.Error(w, "No sanitized content available", http.StatusNotFound)
-        return
-    }
-    
-    w.Header().Set("Content-Type", "application/octet-stream")
-    w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized_%s\"", lastSanitizedFilename))
-    w.Write([]byte(lastSanitizedContent))
+	if lastSanitizedContent == "" {
+		http.Error(w, "No sanitized content available", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized_%s\"", lastSanitizedFilename))
+	w.Write([]byte(lastSanitizedContent))
 }
 
 func individualFileHandler(w http.ResponseWriter, r *http.Request) {
-    filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
-    filename, _ = url.QueryUnescape(filename)
-    
-    if content, exists := lastSanitizedFiles[filename]; exists {
-        // Determine content type based on file extension
-        contentType := "text/plain"
-        if strings.HasSuffix(strings.ToLower(filename), ".zip") {
-            contentType = "application/zip"
-        }
-        
-        w.Header().Set("Content-Type", contentType)
-        w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-        w.Write([]byte(content))
-    } else {
-        http.Error(w, "File not found", http.StatusNotFound)
-    }
+	filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
+	filename, _ = url.QueryUnescape(filename)
+
+	if content, exists := lastSanitizedFiles[filename]; exists {
+		// Determine content type based on file extension
+		contentType := "text/plain"
+		if strings.HasSuffix(strings.ToLower(filename), ".zip") {
+			contentType = "application/zip"
+		}
+
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		w.Write([]byte(content))
+	} else {
+		http.Error(w, "File not found", http.StatusNotFound)
+	}
 }
 
 func mappingsHandler(w http.ResponseWriter, r *http.Request) {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
-	
+
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"ip_mappings.csv\"")
-	
+
 	fmt.Fprintf(w, "original_ip,placeholder,type,timestamp\n")
 	for original, placeholder := range ipMappings {
 		fmt.Fprintf(w, "%s,%s,ip,%s\n", original, placeholder, time.Now().Format(time.RFC3339))
@@ -629,23 +708,23 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 		`)
 		return
 	}
-	
+
 	if r.Method == "POST" {
 		r.ParseForm()
 		password := r.FormValue("password")
-		
+
 		if adminPassword == "" {
 			http.Error(w, "Admin password not configured", http.StatusInternalServerError)
 			return
 		}
-		
+
 		if password == adminPassword {
 			sessionID := generateSessionID()
-			
+
 			sessionMutex.Lock()
 			adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
 			sessionMutex.Unlock()
-			
+
 			cookie := &http.Cookie{
 				Name:     "admin_session",
 				Value:    sessionID,
@@ -655,7 +734,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 				MaxAge:   1800,
 			}
 			http.SetCookie(w, cookie)
-			
+
 			http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		} else {
 			w.Header().Set("Content-Type", "text/html")
@@ -676,15 +755,15 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 	user, _ := getCurrentUserSafe(r)
-	
+
 	data := struct {
-		UserName         string
-		UserEmail        string
-		IPMappings       int
-		ADAccounts       int
-		SensitiveTerms   int
-		AuthMode         string
-		OIDCEnabled      bool
+		UserName       string
+		UserEmail      string
+		IPMappings     int
+		ADAccounts     int
+		SensitiveTerms int
+		AuthMode       string
+		OIDCEnabled    bool
 	}{
 		UserName:       "Administrator",
 		UserEmail:      "admin@company.com",
@@ -694,12 +773,12 @@ func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 		AuthMode:       "Password Only",
 		OIDCEnabled:    false, // Will be true when OIDC is implemented
 	}
-	
+
 	if user != nil {
 		data.UserName = user.Name
 		data.UserEmail = user.Email
 	}
-	
+
 	w.Header().Set("Content-Type", "text/html")
 	templates.ExecuteTemplate(w, "admin.html", data)
 }
@@ -711,14 +790,14 @@ func adminLogoutHandler(w http.ResponseWriter, r *http.Request) {
 		delete(adminSessions, cookie.Value)
 		sessionMutex.Unlock()
 	}
-	
+
 	http.SetCookie(w, &http.Cookie{
 		Name:   "admin_session",
 		Value:  "",
 		Path:   "/admin",
 		MaxAge: -1,
 	})
-	
+
 	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 }
 
@@ -727,21 +806,21 @@ func adminADHandler(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		account := strings.TrimSpace(r.FormValue("account"))
 		usn := strings.TrimSpace(r.FormValue("usn"))
-		
+
 		if account != "" && usn != "" {
 			adAccounts[account] = usn
 			http.Redirect(w, r, "/admin/ad-accounts", http.StatusSeeOther)
 			return
 		}
 	}
-	
+
 	w.Header().Set("Content-Type", "text/html")
-	
+
 	accountsList := ""
 	for account, usn := range adAccounts {
 		accountsList += fmt.Sprintf("<tr><td>%s</td><td>%s</td></tr>", account, usn)
 	}
-	
+
 	fmt.Fprintf(w, `
 	<h1>AD Account Management</h1>
 	
@@ -771,16 +850,16 @@ func adminADHandler(w http.ResponseWriter, r *http.Request) {
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	data := struct {
 		UserAuthenticated bool
-		UserName         string
-		UserEmail        string
-		IsAdmin          bool
+		UserName          string
+		UserEmail         string
+		IsAdmin           bool
 	}{
 		UserAuthenticated: false,
-		UserName:         "",
-		UserEmail:        "",
-		IsAdmin:          false,
+		UserName:          "",
+		UserEmail:         "",
+		IsAdmin:           false,
 	}
-	
+
 	// Check if user is authenticated (for future OIDC)
 	if user, authenticated := getCurrentUserSafe(r); authenticated {
 		data.UserAuthenticated = true
@@ -788,20 +867,20 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		data.UserEmail = user.Email
 		data.IsAdmin = user.IsAdmin
 	}
-	
+
 	w.Header().Set("Content-Type", "text/html")
 	err := templates.ExecuteTemplate(w, "index.html", data)
-    if err != nil {
-        log.Printf("Template error: %v", err)
-        http.Error(w, "Template error", http.StatusInternalServerError)
-        return
-    }
+	if err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // func individualFileHandler(w http.ResponseWriter, r *http.Request) {
 //     filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
 //     filename, _ = url.QueryUnescape(filename)
-    
+
 //     if content, exists := lastSanitizedFiles[filename]; exists {
 //         w.Header().Set("Content-Type", "text/plain")
 //         w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
@@ -816,7 +895,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	
+
 	if adminPassword == "" {
 		adminPassword = "admin123"
 		log.Println("WARNING: Using default admin password 'admin123'. Set ADMIN_PASSWORD environment variable.")
@@ -831,7 +910,7 @@ func main() {
 	http.HandleFunc("/mappings/csv", mappingsHandler)
 	http.HandleFunc("/download/sanitized", downloadHandler)
 	http.HandleFunc("/download/sanitized/", individualFileHandler)
-	
+
 	// Admin routes
 	http.HandleFunc("/admin/login", adminLoginHandler)
 	http.HandleFunc("/admin/logout", adminLogoutHandler)

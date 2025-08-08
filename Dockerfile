@@ -13,9 +13,15 @@ RUN go mod download
 COPY *.go ./
 COPY templates/ ./templates/
 
-# Build the application
+# Build the application with version information
+ARG VERSION=dev
+ARG BUILD_TIME
+ARG GIT_COMMIT=unknown
+
 RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o yossarian-go .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+    -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+    -o yossarian-go .
 
 # Final stage - minimal runtime image
 FROM alpine:latest

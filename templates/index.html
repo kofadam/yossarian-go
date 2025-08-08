@@ -596,7 +596,7 @@
     <!-- App Bar -->
     <header class="app-bar">
         <h1>🛡️ Yossarian Go</h1>
-        <div class="subtitle">Enterprise Log Sanitization System</div>
+        <div class="subtitle">Enterprise Log Sanitization System <span id="version" style="opacity: 0.7; font-size: 12px;"></span></div>
         <nav class="nav-links">
             <a href="/health">📊 Health Check</a>
             <a href="/admin">⚙️ Admin Panel</a>
@@ -1281,6 +1281,15 @@
             // userBanner.style.display = 'block';
             // document.getElementById('userName').textContent = 'John Doe';
         }
+        // Load version info
+        fetch('/health')
+            .then(r => r.json())
+            .then(data => {
+                if (data.version) {
+                    document.getElementById('version').textContent = `(${data.version})`;
+                }
+            })
+            .catch(() => {});
     </script>
 </body>
 </html>
