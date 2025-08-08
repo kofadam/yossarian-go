@@ -1,0 +1,35 @@
+FROM golang:1.21 AS builder
+
+# Install ca-certificates for HTTPS
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy go module files first (for better layer caching)
+COPY go.mod go.sum* ./
+
+# Download dependencies (air-gap: this layer is cached unless go.mod changes)
+RUN go mod download
+
+COPY db-service.go ./
+RUN CGO_ENABLED=1 GOOS=linux go build -a \
+    -o db-service db-service.go
+
+# Final stage - minimal runtime image  
+FROM debian:12-slim
+
+# Install ca-certificates and wget for health checks
+RUN apt-get update && apt-get install -y ca-certificates wget && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy binary from builder stage
+COPY --from=builder /app/db-service .
+
+# Expose port
+EXPOSE 8081
+
+# Run the application
+CMD ["./db-service"]

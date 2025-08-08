@@ -21,7 +21,7 @@ ARG GIT_COMMIT=unknown
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
     -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-    -o yossarian-go .
+    -o yossarian-go main.go 
 
 # Final stage - minimal runtime image
 FROM alpine:latest

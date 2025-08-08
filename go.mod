@@ -4,6 +4,7 @@ go 1.21
 
 require (
 	github.com/coreos/go-oidc/v3 v3.9.0
+	github.com/mattn/go-sqlite3 v1.14.18
 	golang.org/x/oauth2 v0.16.0
 )
 

@@ -74,16 +74,8 @@ var (
 	oauth2Config     *oauth2.Config
 	customHTTPClient *http.Client
 
-	// Mock AD accounts
-	adAccounts = map[string]string{
-		"CORP\\john.doe":   "USN123456789",
-		"CORP\\jane.smith": "USN987654321",
-		"CORP\\admin":      "USN555666777",
-		"svc_backup":       "USN111222333",
-		"svc_monitoring":   "USN222333444",
-		"SERVER-WEB$":      "USN444555666",
-		"COMP01$":          "USN333444555",
-	}
+	// AD service configuration
+	adServiceURL string
 )
 
 // Simple patterns
@@ -99,6 +91,12 @@ var (
 
 func init() {
 	adminPassword = os.Getenv("ADMIN_PASSWORD")
+
+	// AD service endpoint
+	adServiceURL = os.Getenv("AD_SERVICE_URL")
+	if adServiceURL == "" {
+		adServiceURL = "http://yossarian-db-service:8081"
+	}
 
 	// OIDC configuration
 	oidcEnabled = os.Getenv("OIDC_ENABLED") == "true"
@@ -330,6 +328,34 @@ func adminRequired(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// lookupADAccount queries the AD service for account USN
+func lookupADAccount(account string) string {
+	if adServiceURL == "" {
+		return ""
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/lookup/%s", adServiceURL, url.QueryEscape(account)))
+	if err != nil {
+		log.Printf("AD lookup failed for %s: %v", account, err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return ""
+	}
+
+	var result struct {
+		USN string `json:"usn"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ""
+	}
+
+	return result.USN
+}
+
 func sanitizeText(text string, userWords []string) string {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
@@ -361,7 +387,7 @@ func sanitizeText(text string, userWords []string) string {
 
 	// 6. Replace AD accounts
 	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
-		if usn, exists := adAccounts[account]; exists {
+		if usn := lookupADAccount(account); usn != "" {
 			return usn
 		}
 		return "[AD-UNKNOWN]"
@@ -897,7 +923,7 @@ func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 		UserName:       "Administrator",
 		UserEmail:      "admin@company.com",
 		IPMappings:     len(ipMappings),
-		ADAccounts:     len(adAccounts),
+		ADAccounts:     0, // Now handled by database service
 		SensitiveTerms: len(sensitiveTermsOrg),
 		AuthMode:       "Password Only",
 		OIDCEnabled:    false, // Will be true when OIDC is implemented
@@ -937,7 +963,7 @@ func adminADHandler(w http.ResponseWriter, r *http.Request) {
 		usn := strings.TrimSpace(r.FormValue("usn"))
 
 		if account != "" && usn != "" {
-			adAccounts[account] = usn
+			// TODO: Add database service management endpoint
 			http.Redirect(w, r, "/admin/ad-accounts", http.StatusSeeOther)
 			return
 		}
@@ -946,9 +972,8 @@ func adminADHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	accountsList := ""
-	for account, usn := range adAccounts {
-		accountsList += fmt.Sprintf("<tr><td>%s</td><td>%s</td></tr>", account, usn)
-	}
+	// TODO: Query database service for AD accounts list
+	accountsList = "<tr><td colspan='2'>Database service integration pending</td></tr>"
 
 	fmt.Fprintf(w, `
 	<h1>AD Account Management</h1>

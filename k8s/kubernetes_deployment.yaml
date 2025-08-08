@@ -20,7 +20,9 @@ data:
   OIDC_REDIRECT_URL: "https://yossarian.company.com/auth/oidc/callback"
   OIDC_LOGOUT_URL: "https://keycloak.company.com/auth/realms/yossarian/protocol/openid-connect/logout"
   SENSITIVE_TERMS: "ProjectApollo,ClientMegaCorp,confidential,classified,restricted,internal-only"
-
+  DB_PATH: "/data/yossarian.db"
+  AD_SERVICE_URL: "http://yossarian-db-service:8081"
+  
 ---
 apiVersion: v1
 kind: Secret
