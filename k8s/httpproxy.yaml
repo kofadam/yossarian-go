@@ -14,6 +14,9 @@ spec:
       services:
         - name: yossarian-go-service
           port: 80
+      timeoutPolicy:
+        response: "60s"
+        idle: "60s"
       loadBalancerPolicy:
         strategy: Cookie
       cookieRewritePolicies:

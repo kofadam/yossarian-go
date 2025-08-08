@@ -326,7 +326,10 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			totalZipOriginalSize := 0
 			totalZipSanitizedSize := 0
 			
-			for _, extracted := range extractedFiles {
+			for idx, extracted := range extractedFiles {
+				if idx % 10 == 0 {
+					log.Printf("Processing file %d/%d in ZIP: %s", idx+1, len(extractedFiles), extracted.Name)
+				}
 				sanitized := sanitizeText(extracted.Content, userWords)
 				sanitizedFiles = append(sanitizedFiles, ExtractedFile{
 					Name:    extracted.Name,
