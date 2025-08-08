@@ -598,8 +598,10 @@
         <h1>🛡️ Yossarian Go</h1>
         <div class="subtitle">Enterprise Log Sanitization System <span id="version" style="opacity: 0.7; font-size: 12px;"></span></div>
         <nav class="nav-links">
+            <span id="username" style="color: white; margin-right: 15px;"></span>
             <a href="/health">📊 Health Check</a>
             <a href="/admin">⚙️ Admin Panel</a>
+            <a href="/admin/logout" id="logoutLink" style="display: none;">🚪 Logout</a>
         </nav>
     </header>
 
@@ -1287,6 +1289,16 @@
             .then(data => {
                 if (data.version) {
                     document.getElementById('version').textContent = `(${data.version})`;
+                }
+            })
+            .catch(() => {});
+        // Load user info
+        fetch('/api/userinfo')
+            .then(r => r.json())
+            .then(data => {
+                if (data.authenticated) {
+                    document.getElementById('username').textContent = '👤 ' + data.username;
+                    document.getElementById('logoutLink').style.display = 'inline';
                 }
             })
             .catch(() => {});

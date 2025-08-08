@@ -45,12 +45,13 @@ var (
 
 // Global storage for download and admin
 var (
-	lastSanitizedContent  string
-	lastSanitizedFilename string
-	lastSanitizedFiles    map[string]string
-	adminSessions         = make(map[string]time.Time)
-	sessionMutex          sync.Mutex
-	templates             *template.Template
+    lastSanitizedContent  string
+    lastSanitizedFilename string
+    lastSanitizedFiles    map[string]string
+	adminSessions        = make(map[string]time.Time)
+	sessionUsers         = make(map[string]string) // sessionID -> username
+	sessionMutex         sync.Mutex
+	templates            *template.Template
 )
 
 // Global mapping storage
@@ -66,12 +67,11 @@ var (
 	// OIDC configuration
 	oidcEnabled   bool
 	oidcIssuerURL string
-	// These will be used when we implement the full OIDC flow
-	// oidcClientID     string
-	// oidcClientSecret string
-	// oidcRedirectURL  string
-	// oidcProvider     *oidc.Provider
-	// oauth2Config     *oauth2.Config
+	oidcClientID     string
+	oidcClientSecret string
+	oidcRedirectURL  string
+	oidcProvider     *oidc.Provider
+	oauth2Config     *oauth2.Config
 	customHTTPClient *http.Client
 
 	// Mock AD accounts
@@ -103,9 +103,9 @@ func init() {
 	// OIDC configuration
 	oidcEnabled = os.Getenv("OIDC_ENABLED") == "true"
 	oidcIssuerURL = os.Getenv("OIDC_ISSUER_URL")
-	// oidcClientID = os.Getenv("OIDC_CLIENT_ID")
-	// oidcClientSecret = os.Getenv("OIDC_CLIENT_SECRET")
-	// oidcRedirectURL = os.Getenv("OIDC_REDIRECT_URL")
+	oidcClientID = os.Getenv("OIDC_CLIENT_ID")
+	oidcClientSecret = os.Getenv("OIDC_CLIENT_SECRET")
+	oidcRedirectURL = os.Getenv("OIDC_REDIRECT_URL")
 
 	// Setup custom HTTP client with CA support
 	customHTTPClient = getHTTPClient()
@@ -114,22 +114,20 @@ func init() {
 	if oidcEnabled && oidcIssuerURL != "" {
 		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, customHTTPClient)
 
-		_, err := oidc.NewProvider(ctx, oidcIssuerURL)
-		// provider will be used when we implement the full OIDC flow
+		provider, err := oidc.NewProvider(ctx, oidcIssuerURL)
+
 		if err != nil {
 			log.Printf("WARNING: Failed to initialize OIDC provider: %v", err)
 			oidcEnabled = false
 		} else {
-			// oidcProvider = provider
-			// oauth2Config = &oauth2.Config{
-			/*
+			oidcProvider = provider
+			oauth2Config = &oauth2.Config{
 					ClientID:     oidcClientID,
 					ClientSecret: oidcClientSecret,
 					RedirectURL:  oidcRedirectURL,
 					Endpoint:     provider.Endpoint(),
 					Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 				}
-			*/
 			log.Printf("OIDC enabled with issuer: %s", oidcIssuerURL)
 		}
 	}
@@ -172,6 +170,102 @@ func getHTTPClient() *http.Client {
 
 	return http.DefaultClient
 }
+
+func oidcLoginHandler(w http.ResponseWriter, r *http.Request) {
+	if !oidcEnabled {
+		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+		return
+	}
+	
+	state := generateSessionID() // Reuse your existing function
+	
+	// Store state in session for CSRF protection
+	sessionMutex.Lock()
+	adminSessions[state] = time.Now().Add(10 * time.Minute)
+	sessionMutex.Unlock()
+	
+	http.Redirect(w, r, oauth2Config.AuthCodeURL(state), http.StatusSeeOther)
+}
+
+func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
+	if !oidcEnabled {
+		http.Error(w, "OIDC not enabled", http.StatusInternalServerError)
+		return
+	}
+	
+	// Verify state
+	state := r.URL.Query().Get("state")
+	sessionMutex.Lock()
+	_, validState := adminSessions[state]
+	delete(adminSessions, state)
+	sessionMutex.Unlock()
+	
+	if !validState {
+		http.Error(w, "Invalid state", http.StatusBadRequest)
+		return
+	}
+	
+	// Exchange code for token
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, customHTTPClient)
+	token, err := oauth2Config.Exchange(ctx, r.URL.Query().Get("code"))
+	if err != nil {
+		http.Error(w, "Failed to exchange token", http.StatusInternalServerError)
+		return
+	}
+	
+	// Get user info
+	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok {
+		http.Error(w, "No id_token", http.StatusInternalServerError)
+		return
+	}
+	
+	verifier := oidcProvider.Verifier(&oidc.Config{ClientID: oidcClientID})
+	idToken, err := verifier.Verify(ctx, rawIDToken)
+	if err != nil {
+		http.Error(w, "Failed to verify token", http.StatusInternalServerError)
+		return
+	}
+	
+	// Extract claims
+	var claims struct {
+		Email             string `json:"email"`
+		Name              string `json:"name"`
+		PreferredUsername string `json:"preferred_username"`
+	}
+	idToken.Claims(&claims)
+	
+	// Use preferred_username or email as display name
+	username := claims.PreferredUsername
+	if username == "" {
+		username = claims.Email
+	}
+	if username == "" {
+		username = "SSO User"
+	}
+	
+	// Create session
+	sessionID := generateSessionID()
+	sessionMutex.Lock()
+	adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
+	sessionUsers[sessionID] = username
+	sessionMutex.Unlock()
+	
+	log.Printf("OIDC: User %s logged in successfully", username)
+	
+	cookie := &http.Cookie{
+		Name:     "admin_session",
+		Value:    sessionID,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		MaxAge:   1800,
+	}
+	http.SetCookie(w, cookie)
+	
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 func initTemplates() {
 	templates = template.Must(template.ParseGlob("templates/*.html"))
 }
@@ -320,6 +414,28 @@ func countMatches(text, pattern string) int {
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status": "ok", "service": "yossarian-go", "version": "%s", "build_time": "%s", "commit": "%s"}`, Version, BuildTime, GitCommit)
+}
+
+func userInfoHandler(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"authenticated": false}`)
+		return
+	}
+	
+	sessionMutex.Lock()
+	username, exists := sessionUsers[cookie.Value]
+	sessionMutex.Unlock()
+	
+	if !exists {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"authenticated": false}`)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"authenticated": true, "username": "%s"}`, username)
 }
 
 func debugHandler(w http.ResponseWriter, r *http.Request) {
@@ -696,46 +812,59 @@ func mappingsHandler(w http.ResponseWriter, r *http.Request) {
 func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		w.Header().Set("Content-Type", "text/html")
+		
+		// Show SSO button if OIDC enabled
+		ssoButton := ""
+		if oidcEnabled {
+			ssoButton = `<p style="text-align: center; margin: 20px 0;">
+				<a href="/auth/oidc/login" style="display: inline-block; padding: 10px 20px; background: #1976d2; color: white; text-decoration: none; border-radius: 4px;">
+					🔐 Login with SSO
+				</a>
+			</p>
+			<p style="text-align: center;">OR</p>`
+		}
+		
 		fmt.Fprintf(w, `
 		<h1>Yossarian Admin Login</h1>
+		%s
 		<form method="post">
 			<p>
 				<label>Admin Password:</label><br>
 				<input type="password" name="password" required style="padding: 5px; width: 200px;">
 			</p>
-			<button type="submit">Login</button>
+			<button type="submit">Login with Password</button>
 		</form>
-		`)
+		`, ssoButton)
 		return
 	}
-
+	
 	if r.Method == "POST" {
 		r.ParseForm()
 		password := r.FormValue("password")
-
+		
 		if adminPassword == "" {
 			http.Error(w, "Admin password not configured", http.StatusInternalServerError)
 			return
 		}
-
+		
 		if password == adminPassword {
 			sessionID := generateSessionID()
-
+			
 			sessionMutex.Lock()
 			adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
 			sessionMutex.Unlock()
-
+			
 			cookie := &http.Cookie{
 				Name:     "admin_session",
 				Value:    sessionID,
-				Path:     "/admin",
+				Path:     "/",
 				HttpOnly: true,
-				Secure:   false,
+				Secure:   true,
 				MaxAge:   1800,
 			}
 			http.SetCookie(w, cookie)
-
-			http.Redirect(w, r, "/admin", http.StatusSeeOther)
+			
+			http.Redirect(w, r, "/", http.StatusSeeOther)
 		} else {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprintf(w, `
@@ -906,6 +1035,7 @@ func main() {
 
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/api/userinfo", userInfoHandler)
 	http.HandleFunc("/upload", uploadHandler)
 	http.HandleFunc("/mappings/csv", mappingsHandler)
 	http.HandleFunc("/download/sanitized", downloadHandler)
@@ -914,6 +1044,11 @@ func main() {
 	// Admin routes
 	http.HandleFunc("/admin/login", adminLoginHandler)
 	http.HandleFunc("/admin/logout", adminLogoutHandler)
+	
+	// OIDC routes
+	http.HandleFunc("/auth/oidc/login", oidcLoginHandler)
+	http.HandleFunc("/auth/oidc/callback", oidcCallbackHandler)
+	
 	http.HandleFunc("/admin", adminRequired(adminDashboardHandler))
 	http.HandleFunc("/admin/ad-accounts", adminRequired(adminADHandler))
 
