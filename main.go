@@ -67,6 +67,7 @@ var (
 	adRegex         = regexp.MustCompile(`CORP\\[a-zA-Z0-9._-]+|svc_[a-zA-Z0-9_]+|[A-Z0-9-]+\$`)
 	jwtRegex        = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
 	privateKeyRegex = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
+	passwordRegex   = regexp.MustCompile(`(?i)(:([^:@\s]{3,50})@|password["':=\s]+["']?([^"',\s]{3,50})["']?)`)
 	// commentRegex    = regexp.MustCompile(`(?m)^#.*$`)
 	sensitiveRegex  *regexp.Regexp
 )
@@ -82,7 +83,7 @@ func init() {
 		for i, term := range sensitiveTermsOrg {
 			sensitiveTermsOrg[i] = strings.TrimSpace(term)
 		}
-		sensitiveRegex = regexp.MustCompile(`\b(` + strings.Join(sensitiveTermsOrg, "|") + `)\b`)
+		sensitiveRegex = regexp.MustCompile(`(?i)\b(` + strings.Join(sensitiveTermsOrg, "|") + `)\b`)
 	} else {
 		// No sensitive terms configured
 		sensitiveTermsOrg = []string{}
@@ -169,20 +170,22 @@ func sanitizeText(text string, userWords []string) string {
 	// 2. Replace JWT tokens
 	result = jwtRegex.ReplaceAllString(result, "[JWT-REDACTED]")
 	
-	// 3. Replace sensitive terms (case-insensitive)
+	// 3. Replace passwords in connection strings and config files
+	result = passwordRegex.ReplaceAllString(result, "[PASSWORD-REDACTED]")
+	
+	// 4. Replace sensitive terms (case-insensitive)
 	if sensitiveRegex != nil {
-		sensitiveRegexCaseInsensitive := regexp.MustCompile(`(?i)\b(` + strings.Join(sensitiveTermsOrg, "|") + `)\b`)
-		result = sensitiveRegexCaseInsensitive.ReplaceAllString(result, "[SENSITIVE]")
+		result = sensitiveRegex.ReplaceAllString(result, "[SENSITIVE]")
 	}
 	
-	// 4. Replace user words
+	// 5. Replace user words
 	for _, word := range userWords {
 		if word != "" && len(word) > 2 {
 			result = strings.ReplaceAll(result, word, "[USER-SENSITIVE]")
 		}
 	}
 	
-	// 5. Replace AD accounts
+	// 6. Replace AD accounts
 	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
 		if usn, exists := adAccounts[account]; exists {
 			return usn
@@ -190,7 +193,7 @@ func sanitizeText(text string, userWords []string) string {
 		return "[AD-UNKNOWN]"
 	})
 	
-	// 6. Replace IPs
+	// 7. Replace IPs
 	result = ipRegex.ReplaceAllStringFunc(result, func(ip string) string {
 		if placeholder, exists := ipMappings[ip]; exists {
 			return placeholder
