@@ -564,6 +564,7 @@
             border-left: 4px solid var(--md-primary);
         }
 
+        
         /* Responsive Design */
         @media (max-width: 768px) {
             .container {
@@ -660,6 +661,9 @@
                         aria-label="Upload files for sanitization"
                     >
                 </div>
+
+                <!-- Upload Status Messages -->
+                <div class="status-message" id="uploadStatus"></div>
 
                 <!-- File List -->
                 <div class="file-list" id="fileList"></div>
@@ -818,11 +822,16 @@
             
             // Validate file count
             if (fileArray.length > 10) {
-                showStatus('error', 'Maximum 10 files allowed. Please select fewer files.');
+                showStatus('error', 'Maximum 10 files allowed. Please select fewer files.', 'uploadStatus');
                 return;
             }
 
+            // Reset previous processing data
             selectedFiles = [];
+            processingResults = [];
+            document.getElementById('resultsSection').classList.remove('visible');
+            document.getElementById('progressContainer').classList.remove('visible');
+            createDownloadButtons(); // Reset download section
             
             fileArray.forEach(file => {
                 // Validate file size (50MB)
@@ -1254,12 +1263,19 @@
                     processingTime: totalProcessingTime,
                     totalFindings: processingResults.reduce((sum, r) => sum + (r.total_ips || 0) + (r.ad_accounts || 0) + (r.jwt_tokens || 0) + (r.private_keys || 0) + (r.sensitive_terms || 0), 0)
                 },
-                files: selectedFiles.map(fileObj => ({
+                files: selectedFiles.map(fileObj => {
+                // Clean results for report (exclude binary content)
+                const cleanResults = fileObj.results ? {...fileObj.results} : null;
+                if (cleanResults && cleanResults.sanitized_content) {
+                    delete cleanResults.sanitized_content;
+                }
+                return {
                     filename: fileObj.file.name,
                     size: fileObj.file.size,
                     status: fileObj.status,
-                    results: fileObj.results
-                }))
+                    results: cleanResults
+                };
+            })
             };
 
             const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });

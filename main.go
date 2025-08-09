@@ -511,6 +511,11 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	totalOriginalSize := 0
 	totalSanitizedSize := 0
 
+	// Clear previous files only at start of new batch
+	if lastSanitizedFiles == nil {
+		lastSanitizedFiles = make(map[string]string)
+	}
+
 	for _, fileHeader := range files {
 		// Check file size (50MB per file)
 		if fileHeader.Size > 50*1024*1024 {
@@ -534,8 +539,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Handle ZIP files
-		// Handle ZIP files
 		if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
+			fileStartTime := time.Now()
 			extractedFiles := extractZipContent(content)
 			if len(extractedFiles) == 0 {
 				log.Printf("No files extracted from ZIP: %s", fileHeader.Filename)
@@ -569,21 +574,24 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			// Calculate processing time for ZIP (use file start time)
+			zipProcessingTime := time.Since(fileStartTime)
+			
 			// Store results for the entire ZIP file
 			result := map[string]interface{}{
 				"filename":          fileHeader.Filename,
 				"original_size":     len(content),
 				"sanitized_size":    len(sanitizedZipData),
-				"processing_time":   "N/A", // TODO: Add timing
+				"processing_time":   fmt.Sprintf("%.2fs", zipProcessingTime.Seconds()),
 				"total_ips":         0,     // Will be calculated below
 				"ad_accounts":       0,
 				"jwt_tokens":        0,
 				"private_keys":      0,
 				"sensitive_terms":   0,
 				"user_words":        0,
-				"sanitized_content": string(sanitizedZipData),
 				"status":            "sanitized",
 				"files_processed":   len(extractedFiles),
+				"sanitized_content": string(sanitizedZipData), // Keep for download, exclude from reports
 			}
 
 			// Calculate total findings across all files
@@ -619,7 +627,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 					"filename":          fmt.Sprintf("%s:%s", fileHeader.Filename, extracted.Name),
 					"original_size":     len(extracted.Content),
 					"sanitized_size":    len(sanitized),
-					"processing_time":   fmt.Sprintf("%.2fms", float64(processingTime.Nanoseconds())/1000000.0),
+					"processing_time":   fmt.Sprintf("%.2fs", processingTime.Seconds()),
 					"total_ips":         countMatches(sanitized, "[IP-"),
 					"ad_accounts":       countMatches(sanitized, "USN"),
 					"jwt_tokens":        countMatches(sanitized, "[JWT-REDACTED]"),
@@ -652,7 +660,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			"filename":          fileHeader.Filename,
 			"original_size":     len(content),
 			"sanitized_size":    len(sanitized),
-			"processing_time":   fmt.Sprintf("%.2fms", float64(processingTime.Nanoseconds())/1000000.0),
+			"processing_time":   fmt.Sprintf("%.2fs", processingTime.Seconds()),
 			"total_ips":         countMatches(sanitized, "[IP-"),
 			"ad_accounts":       countMatches(sanitized, "USN"),
 			"jwt_tokens":        countMatches(sanitized, "[JWT-REDACTED]"),
@@ -677,12 +685,22 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	// Store for download (combine all sanitized content)
 	combinedSanitized := ""
 	for _, result := range results {
-		combinedSanitized += result["sanitized_content"].(string) + "\n\n"
+		if content, exists := result["sanitized_content"]; exists && content != nil {
+			combinedSanitized += content.(string) + "\n\n"
+		}
 	}
-	lastSanitizedFiles = make(map[string]string)
+	// Debug: Log what we're storing
+	log.Printf("Storing %d files for download", len(results))
+	// Don't recreate map - append to existing files
 	for _, result := range results {
-		lastSanitizedFiles[result["filename"].(string)] = result["sanitized_content"].(string)
+		if content, exists := result["sanitized_content"]; exists && content != nil {
+			filename := result["filename"].(string)
+			lastSanitizedFiles[filename] = content.(string)
+			log.Printf("Stored file for download: %s (%d bytes)", filename, len(content.(string)))
+		}
 	}
+	log.Printf("Total files available for download: %d", len(lastSanitizedFiles))
+	
 	lastSanitizedContent = combinedSanitized
 	lastSanitizedFilename = "sanitized-files.txt"
 
@@ -802,6 +820,47 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized_%s\"", lastSanitizedFilename))
 	w.Write([]byte(lastSanitizedContent))
 }
+
+func downloadAllZipHandler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Download All ZIP requested - have %d files", len(lastSanitizedFiles))
+	for filename := range lastSanitizedFiles {
+		log.Printf("Available file: %s", filename)
+	}
+	
+	if len(lastSanitizedFiles) == 0 {
+		http.Error(w, "No sanitized files available", http.StatusNotFound)
+		return
+	}
+
+	// Create ZIP archive with all sanitized files
+	var buf bytes.Buffer
+	zipWriter := zip.NewWriter(&buf)
+
+	for filename, content := range lastSanitizedFiles {
+		writer, err := zipWriter.Create(filename)
+		if err != nil {
+			http.Error(w, "Failed to create ZIP", http.StatusInternalServerError)
+			return
+		}
+		_, err = writer.Write([]byte(content))
+		if err != nil {
+			http.Error(w, "Failed to write file to ZIP", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	err := zipWriter.Close()
+	if err != nil {
+		http.Error(w, "Failed to finalize ZIP", http.StatusInternalServerError)
+		return
+	}
+
+	// Send ZIP file
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"sanitized-files.zip\"")
+	w.Write(buf.Bytes())
+}
+
 
 func individualFileHandler(w http.ResponseWriter, r *http.Request) {
 	filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
@@ -926,7 +985,21 @@ func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 		ADAccounts:     0, // Now handled by database service
 		SensitiveTerms: len(sensitiveTermsOrg),
 		AuthMode:       "Password Only",
-		OIDCEnabled:    false, // Will be true when OIDC is implemented
+		OIDCEnabled:    oidcEnabled,
+	}
+
+	// Get actual logged-in user from session
+	cookie, err := r.Cookie("admin_session")
+	if err == nil {
+		sessionMutex.Lock()
+		if username, exists := sessionUsers[cookie.Value]; exists {
+			data.UserName = username
+			data.UserEmail = username
+			if oidcEnabled {
+				data.AuthMode = "Enterprise SSO"
+			}
+		}
+		sessionMutex.Unlock()
 	}
 
 	if user != nil {
@@ -1063,7 +1136,8 @@ func main() {
 	http.HandleFunc("/api/userinfo", userInfoHandler)
 	http.HandleFunc("/upload", uploadHandler)
 	http.HandleFunc("/mappings/csv", mappingsHandler)
-	http.HandleFunc("/download/sanitized", downloadHandler)
+	http.HandleFunc("/download/sanitized", downloadAllZipHandler)
+	http.HandleFunc("/download/sanitized/single", downloadHandler)
 	http.HandleFunc("/download/sanitized/", individualFileHandler)
 
 	// Admin routes
