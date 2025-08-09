@@ -50,6 +50,7 @@ var (
     lastSanitizedFiles    map[string]string
 	adminSessions        = make(map[string]time.Time)
 	sessionUsers         = make(map[string]string) // sessionID -> username
+	sessionRoles         = make(map[string][]string) // sessionID -> roles
 	sessionMutex         sync.Mutex
 	templates            *template.Template
 )
@@ -76,6 +77,9 @@ var (
 
 	// AD service configuration
 	adServiceURL string
+	
+	// Auto SSO configuration
+	autoSSOEnabled bool
 )
 
 // Simple patterns
@@ -130,6 +134,9 @@ func init() {
 		}
 	}
 
+	// Auto SSO configuration
+	autoSSOEnabled = os.Getenv("AUTO_SSO_ENABLED") == "true"
+	
 	// Load sensitive terms from environment variable (ConfigMap)
 	sensitiveTermsEnv := os.Getenv("SENSITIVE_TERMS")
 	if sensitiveTermsEnv != "" {
@@ -225,11 +232,19 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// Extract claims
+	// Extract claims including roles
 	var claims struct {
-		Email             string `json:"email"`
-		Name              string `json:"name"`
-		PreferredUsername string `json:"preferred_username"`
+		Email             string   `json:"email"`
+		Name              string   `json:"name"`
+		PreferredUsername string   `json:"preferred_username"`
+		ResourceAccess    struct {
+			YossarianGo struct {
+				Roles []string `json:"roles"`
+			} `json:"yossarian-go"`
+		} `json:"resource_access"`
+		RealmAccess struct {
+			Roles []string `json:"roles"`
+		} `json:"realm_access"`
 	}
 	idToken.Claims(&claims)
 	
@@ -242,11 +257,28 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		username = "SSO User"
 	}
 	
+	// Extract roles (try client roles first, then realm roles)
+	var userRoles []string
+	if len(claims.ResourceAccess.YossarianGo.Roles) > 0 {
+		userRoles = claims.ResourceAccess.YossarianGo.Roles
+	} else {
+		userRoles = claims.RealmAccess.Roles
+	}
+	
+	log.Printf("OIDC: User %s has roles: %v", username, userRoles)
+	if username == "" {
+		username = claims.Email
+	}
+	if username == "" {
+		username = "SSO User"
+	}
+	
 	// Create session
 	sessionID := generateSessionID()
 	sessionMutex.Lock()
 	adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
 	sessionUsers[sessionID] = username
+	sessionRoles[sessionID] = userRoles
 	sessionMutex.Unlock()
 	
 	log.Printf("OIDC: User %s logged in successfully", username)
@@ -318,10 +350,64 @@ func getCurrentUserSafe(r *http.Request) (*UserInfo, bool) {
 	return nil, false
 }
 
+func hasRole(r *http.Request, requiredRole string) bool {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		return false
+	}
+
+	sessionMutex.Lock()
+	defer sessionMutex.Unlock()
+
+	if roles, exists := sessionRoles[cookie.Value]; exists {
+		for _, role := range roles {
+			if role == requiredRole {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func showAccessDenied(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusForbidden)
+	fmt.Fprintf(w, `
+	<!DOCTYPE html>
+	<html>
+	<head>
+		<title>Access Denied - Yossarian Go</title>
+		<style>
+			body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }
+			.container { max-width: 500px; margin: 0 auto; }
+			.error-icon { font-size: 64px; color: #d32f2f; margin-bottom: 20px; }
+			h1 { color: #d32f2f; margin-bottom: 20px; }
+			p { color: #666; margin-bottom: 30px; line-height: 1.5; }
+			.btn { background: #1976d2; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; }
+		</style>
+	</head>
+	<body>
+		<div class="container">
+			<div class="error-icon">🚫</div>
+			<h1>Access Denied</h1>
+			<p>You don't have the required permissions to access Yossarian Go.</p>
+			<p>Please contact your administrator to request <strong>admin</strong> or <strong>user</strong> role access.</p>
+			<a href="/auth/logout" class="btn">Logout & Try Different Account</a>
+		</div>
+	</body>
+	</html>
+	`)
+}
+
 func adminRequired(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isValidAdminSession(r) {
 			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+			return
+		}
+		// Check if user has admin role
+		if !hasRole(r, "admin") {
+			http.Error(w, "Access denied: Admin role required", http.StatusForbidden)
 			return
 		}
 		handler(w, r)
@@ -1075,6 +1161,22 @@ func adminADHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
+	// Auto SSO: Check if enabled and user not authenticated
+	if autoSSOEnabled && !isValidAdminSession(r) {
+		log.Printf("Auto SSO: Redirecting unauthenticated user to OIDC login")
+		http.Redirect(w, r, "/auth/oidc/login", http.StatusSeeOther)
+		return
+	}
+	
+	// Auto SSO: Validate user has required roles
+	if autoSSOEnabled && isValidAdminSession(r) {
+		if !hasRole(r, "admin") && !hasRole(r, "user") {
+			log.Printf("Auto SSO: Access denied - user lacks required roles")
+			showAccessDenied(w, r)
+			return
+		}
+	}
+
 	data := struct {
 		UserAuthenticated bool
 		UserName          string
@@ -1087,7 +1189,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		IsAdmin:           false,
 	}
 
-	// Check if user is authenticated (for future OIDC)
+	// Check if user is authenticated
 	if user, authenticated := getCurrentUserSafe(r); authenticated {
 		data.UserAuthenticated = true
 		data.UserName = user.Name

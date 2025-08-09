@@ -22,6 +22,7 @@ data:
   SENSITIVE_TERMS: "ProjectApollo,ClientMegaCorp,confidential,classified,restricted,internal-only"
   DB_PATH: "/data/yossarian.db"
   AD_SERVICE_URL: "http://yossarian-db-service:8081"
+  AUTO_SSO_ENABLED: "true"
   
 ---
 apiVersion: v1
