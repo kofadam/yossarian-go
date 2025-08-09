@@ -23,6 +23,10 @@ data:
   DB_PATH: "/data/yossarian.db"
   AD_SERVICE_URL: "http://yossarian-db-service:8081"
   AUTO_SSO_ENABLED: "true"
+  LDAP_SERVER: "ldaps://dc.yourdomain.com:636"
+  LDAP_BIND_DN: "CN=ldap-reader,OU=Service Accounts,DC=yourdomain,DC=com"
+  LDAP_SEARCH_BASE: "DC=yourdomain,DC=com"
+  LDAP_SYNC_INTERVAL: "3600"
   
 ---
 apiVersion: v1

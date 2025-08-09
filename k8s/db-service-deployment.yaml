@@ -39,9 +39,21 @@ spec:
         image: yossarian-go-db-service:latest
         ports:
         - containerPort: 8081
+        envFrom:
+        - configMapRef:
+            name: yossarian-config
+        - secretRef:
+            name: yossarian-secrets
+        env:
+        - name: DC_CA_CERT_PATH
+          value: "/etc/ssl/certs/dc-ca.crt"
         volumeMounts:
         - name: yossarian-data
           mountPath: /data
+        - name: custom-ca
+          mountPath: /etc/ssl/certs/dc-ca.crt
+          subPath: dc-ca-bundle.crt
+          readOnly: true
         resources:
           requests:
             memory: "128Mi"
