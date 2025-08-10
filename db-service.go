@@ -98,6 +98,17 @@ func syncLDAPAccounts() error {
 		return nil
 	}
 
+	// Clear existing accounts before full sync
+	log.Printf("Clearing existing AD accounts before sync...")
+	result, err := db.Exec("DELETE FROM ad_accounts")
+	if err != nil {
+		return fmt.Errorf("failed to clear existing accounts: %v", err)
+	}
+	
+	if rowsAffected, err := result.RowsAffected(); err == nil {
+		log.Printf("Cleared %d existing accounts", rowsAffected)
+	}
+
 	conn, err := connectLDAP()
 	if err != nil {
 		return fmt.Errorf("LDAP connection failed: %v", err)
@@ -111,7 +122,7 @@ func syncLDAPAccounts() error {
 		ldapSearchBase,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
 		"(&(objectClass=user)(!(objectClass=computer))(sAMAccountName=*))",
-		[]string{"sAMAccountName", "distinguishedName"},
+		[]string{"sAMAccountName", "uSNCreated"},
 		nil,
 	)
 
@@ -131,9 +142,9 @@ func syncLDAPAccounts() error {
 		log.Printf("User search page %d: got %d entries, total so far: %d",
 			pageCount, len(userSearchResult.Entries),
 			len(allUserEntries)+len(userSearchResult.Entries))
-
+		
 		allUserEntries = append(allUserEntries, userSearchResult.Entries...)
-
+		
 		pagingResult := ldap.FindControl(userSearchResult.Controls, ldap.ControlTypePaging)
 		if pagingResult == nil {
 			break
@@ -159,7 +170,7 @@ func syncLDAPAccounts() error {
 		ldapSearchBase,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
 		"(&(objectClass=computer)(sAMAccountName=*))",
-		[]string{"sAMAccountName", "distinguishedName"},
+		[]string{"sAMAccountName", "uSNCreated"},
 		nil,
 	)
 
@@ -202,29 +213,35 @@ func syncLDAPAccounts() error {
 	// PROCESS & STORE RESULTS
 	// -----------------------
 	accountCount := 0
-	usn := 100000000 // Starting USN number
-
+	
 	// Users
 	for _, entry := range allUserEntries {
 		samAccountName := entry.GetAttributeValue("sAMAccountName")
-		if samAccountName != "" {
+		usnCreated := entry.GetAttributeValue("uSNCreated")
+		
+		if samAccountName != "" && usnCreated != "" {
 			domainNetBios := os.Getenv("DOMAIN_NETBIOS")
 			domainFqdn := os.Getenv("DOMAIN_FQDN")
 			domainAccount := fmt.Sprintf("%s\\%s", domainNetBios, samAccountName)
 			upnAccount := fmt.Sprintf("%s@%s", samAccountName, domainFqdn)
-
-			usnString := fmt.Sprintf("USN%d", usn)
+			bareUsername := samAccountName
+			
+			// Use real AD uSNCreated value
+			usnString := fmt.Sprintf("USN%s", usnCreated)
+			
 			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", domainAccount, usnString)
 			if err == nil {
 				accountCount++
-				usn++
 			}
-
-			usnString2 := fmt.Sprintf("USN%d", usn)
-			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", upnAccount, usnString2)
+			
+			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", upnAccount, usnString)
 			if err == nil {
 				accountCount++
-				usn++
+			}
+			
+			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", bareUsername, usnString)
+			if err == nil {
+				accountCount++
 			}
 		}
 	}
@@ -232,14 +249,23 @@ func syncLDAPAccounts() error {
 	// Computers
 	for _, entry := range allComputerEntries {
 		samAccountName := entry.GetAttributeValue("sAMAccountName")
-		if samAccountName != "" {
-			account := samAccountName
-			usnString := fmt.Sprintf("USN%d", usn)
-
-			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", account, usnString)
+		usnCreated := entry.GetAttributeValue("uSNCreated")
+		
+		if samAccountName != "" && usnCreated != "" {
+			computerWithDollar := samAccountName
+			computerWithoutDollar := strings.TrimSuffix(samAccountName, "$")
+			
+			// Use real AD uSNCreated value
+			usnString := fmt.Sprintf("USN%s", usnCreated)
+			
+			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", computerWithDollar, usnString)
 			if err == nil {
 				accountCount++
-				usn++
+			}
+			
+			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", computerWithoutDollar, usnString)
+			if err == nil {
+				accountCount++
 			}
 		}
 	}
@@ -316,11 +342,18 @@ func ldapStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get detailed counts
+	var userCount, computerCount int
+	db.QueryRow("SELECT COUNT(*) FROM ad_accounts WHERE account LIKE '%@%'").Scan(&userCount)
+	db.QueryRow("SELECT COUNT(*) FROM ad_accounts WHERE account LIKE '%$'").Scan(&computerCount)
+
 	status := map[string]interface{}{
 		"ldap_configured": ldapServer != "" && ldapBindDN != "" && ldapBindPassword != "",
 		"ldap_server":     ldapServer,
 		"sync_interval":   ldapSyncInterval,
 		"account_count":   accountCount,
+		"user_count":      userCount,
+		"computer_count":  computerCount,
 		"last_sync":       "Available in future version",
 	}
 
