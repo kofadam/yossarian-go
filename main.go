@@ -1231,18 +1231,20 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// func individualFileHandler(w http.ResponseWriter, r *http.Request) {
-//     filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
-//     filename, _ = url.QueryUnescape(filename)
-
-//     if content, exists := lastSanitizedFiles[filename]; exists {
-//         w.Header().Set("Content-Type", "text/plain")
-//         w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-//         fmt.Fprintf(w, "%s", content)
-//     } else {
-//         http.Error(w, "File not found", http.StatusNotFound)
-//     }
-// }
+func clearDownloadCacheHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Clear the global download cache
+	lastSanitizedFiles = make(map[string]string)
+	lastSanitizedContent = ""
+	lastSanitizedFilename = ""
+	
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"status": "cleared"}`)
+}
 
 func main() {
 	port := os.Getenv("PORT")
@@ -1266,7 +1268,9 @@ func main() {
 	http.HandleFunc("/download/sanitized", downloadAllZipHandler)
 	http.HandleFunc("/download/sanitized/single", downloadHandler)
 	http.HandleFunc("/download/sanitized/", individualFileHandler)
+	http.HandleFunc("/clear-download-cache", clearDownloadCacheHandler)
 
+	
 	// Admin routes
 	http.HandleFunc("/admin/login", adminLoginHandler)
 	http.HandleFunc("/admin/logout", adminLogoutHandler)

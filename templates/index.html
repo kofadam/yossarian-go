@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Yossarian Go - Log Sanitization</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
     <style>
         /* Material Design CSS - Air-gap ready */
         :root {
@@ -831,6 +832,11 @@
             processingResults = [];
             document.getElementById('resultsSection').classList.remove('visible');
             document.getElementById('progressContainer').classList.remove('visible');
+            
+            // Clear server-side download cache when starting new upload
+            fetch('/clear-download-cache', { method: 'POST' })
+                .catch(err => console.log('Cache clear failed:', err));
+            
             createDownloadButtons(); // Reset download section
             
             fileArray.forEach(file => {
@@ -975,6 +981,13 @@
             document.getElementById('progressContainer').classList.remove('visible');
             document.getElementById('resultsSection').classList.remove('visible');
             updateProcessButton();
+            
+            // Clear download files from server
+            fetch('/clear-download-cache', { method: 'POST' })
+                .catch(err => console.log('Cache clear failed:', err));
+            
+            // Clear download buttons
+            createDownloadButtons();
         }
 
         // File Processing
@@ -1033,7 +1046,7 @@
             totalProcessingTime = endTime - startTime;
             
             progressFill.style.width = '100%';
-            progressText.textContent = `Completed in ${totalProcessingTime}ms`;
+            progressText.textContent = `Completed in ${(totalProcessingTime / 1000).toFixed(2)}s`;
             progressStats.textContent = `${selectedFiles.length} / ${selectedFiles.length} files`;
 
             displayResults();
@@ -1098,7 +1111,7 @@
             document.getElementById('totalJWT').textContent = aggregated.totalJWT;
             document.getElementById('totalKeys').textContent = aggregated.totalKeys;
             document.getElementById('totalSensitive').textContent = aggregated.totalSensitive;
-            document.getElementById('totalTime').textContent = `${totalProcessingTime}ms`;
+            document.getElementById('totalTime').textContent = `${(totalProcessingTime / 1000).toFixed(2)}s`;
 
             displayFileResults();
             createDownloadButtons();
