@@ -20,7 +20,7 @@ import (
 var (
 	db     *sql.DB
 	dbPath = "/data/yossarian.db"
-	
+
 	// LDAP configuration
 	ldapServer       string
 	ldapBindDN       string
@@ -46,7 +46,7 @@ func initDB() error {
 		account TEXT PRIMARY KEY,
 		usn TEXT NOT NULL
 	);`
-	
+
 	_, err = db.Exec(createTableSQL)
 	return err
 }
@@ -67,28 +67,28 @@ func connectLDAP() (*ldap.Conn, error) {
 			}
 		}
 	}
-	
+
 	// Connect to LDAP server
 	var conn *ldap.Conn
 	var err error
-	
+
 	if tlsConfig != nil {
 		conn, err = ldap.DialURL(ldapServer, ldap.DialWithTLSConfig(tlsConfig))
 	} else {
 		conn, err = ldap.DialURL(ldapServer)
 	}
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to LDAP: %v", err)
 	}
-	
+
 	// Bind with service account
 	err = conn.Bind(ldapBindDN, ldapBindPassword)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to bind to LDAP: %v", err)
 	}
-	
+
 	return conn, nil
 }
 
@@ -98,75 +98,174 @@ func syncLDAPAccounts() error {
 		return nil
 	}
 
+	// Clear existing accounts before full sync
+	log.Printf("Clearing existing AD accounts before sync...")
+	result, err := db.Exec("DELETE FROM ad_accounts")
+	if err != nil {
+		return fmt.Errorf("failed to clear existing accounts: %v", err)
+	}
+	
+	if rowsAffected, err := result.RowsAffected(); err == nil {
+		log.Printf("Cleared %d existing accounts", rowsAffected)
+	}
+
 	conn, err := connectLDAP()
 	if err != nil {
 		return fmt.Errorf("LDAP connection failed: %v", err)
 	}
 	defer conn.Close()
 
-	// Search for user accounts
+	// ---------------------------
+	// USER ACCOUNT SEARCH (Paged)
+	// ---------------------------
 	userSearchRequest := ldap.NewSearchRequest(
 		ldapSearchBase,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
 		"(&(objectClass=user)(!(objectClass=computer))(sAMAccountName=*))",
-		[]string{"sAMAccountName", "distinguishedName"},
+		[]string{"sAMAccountName", "uSNCreated"},
 		nil,
 	)
 
-	userSearchResult, err := conn.Search(userSearchRequest)
-	if err != nil {
-		return fmt.Errorf("user search failed: %v", err)
+	userPagingControl := ldap.NewControlPaging(1000) // match AD's MaxPageSize
+	userSearchRequest.Controls = []ldap.Control{userPagingControl}
+
+	allUserEntries := []*ldap.Entry{}
+	pageCount := 0
+
+	for {
+		userSearchResult, err := conn.Search(userSearchRequest)
+		if err != nil {
+			return fmt.Errorf("user search failed: %v", err)
+		}
+
+		pageCount++
+		log.Printf("User search page %d: got %d entries, total so far: %d",
+			pageCount, len(userSearchResult.Entries),
+			len(allUserEntries)+len(userSearchResult.Entries))
+		
+		allUserEntries = append(allUserEntries, userSearchResult.Entries...)
+		
+		pagingResult := ldap.FindControl(userSearchResult.Controls, ldap.ControlTypePaging)
+		if pagingResult == nil {
+			break
+		}
+		pagingControl := pagingResult.(*ldap.ControlPaging)
+
+		if len(pagingControl.Cookie) == 0 {
+			break // no more pages
+		}
+
+		// update same control's cookie
+		userPagingControl.SetCookie(pagingControl.Cookie)
 	}
 
-	// Search for computer accounts
+	// final empty-cookie request to end paging
+	userPagingControl.SetCookie([]byte{})
+	_, _ = conn.Search(userSearchRequest)
+
+	// ------------------------------
+	// COMPUTER ACCOUNT SEARCH (Paged)
+	// ------------------------------
 	computerSearchRequest := ldap.NewSearchRequest(
 		ldapSearchBase,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
 		"(&(objectClass=computer)(sAMAccountName=*))",
-		[]string{"sAMAccountName", "distinguishedName"},
+		[]string{"sAMAccountName", "uSNCreated"},
 		nil,
 	)
 
-	computerSearchResult, err := conn.Search(computerSearchRequest)
-	if err != nil {
-		return fmt.Errorf("computer search failed: %v", err)
+	computerPagingControl := ldap.NewControlPaging(1000)
+	computerSearchRequest.Controls = []ldap.Control{computerPagingControl}
+
+	allComputerEntries := []*ldap.Entry{}
+	pageCount = 0
+
+	for {
+		computerSearchResult, err := conn.Search(computerSearchRequest)
+		if err != nil {
+			return fmt.Errorf("computer search failed: %v", err)
+		}
+
+		pageCount++
+		log.Printf("Computer search page %d: got %d entries, total so far: %d",
+			pageCount, len(computerSearchResult.Entries),
+			len(allComputerEntries)+len(computerSearchResult.Entries))
+
+		allComputerEntries = append(allComputerEntries, computerSearchResult.Entries...)
+
+		pagingResult := ldap.FindControl(computerSearchResult.Controls, ldap.ControlTypePaging)
+		if pagingResult == nil {
+			break
+		}
+		pagingControl := pagingResult.(*ldap.ControlPaging)
+
+		if len(pagingControl.Cookie) == 0 {
+			break
+		}
+
+		computerPagingControl.SetCookie(pagingControl.Cookie)
 	}
 
-	// Process results and update database
-	accountCount := 0
-	usn := 100000000 // Starting USN number
+	computerPagingControl.SetCookie([]byte{})
+	_, _ = conn.Search(computerSearchRequest)
 
-	// Process user accounts
-	for _, entry := range userSearchResult.Entries {
+	// -----------------------
+	// PROCESS & STORE RESULTS
+	// -----------------------
+	accountCount := 0
+	
+	// Users
+	for _, entry := range allUserEntries {
 		samAccountName := entry.GetAttributeValue("sAMAccountName")
-		if samAccountName != "" {
-			account := fmt.Sprintf("CORP\\%s", samAccountName)
-			usnString := fmt.Sprintf("USN%d", usn)
+		usnCreated := entry.GetAttributeValue("uSNCreated")
+		
+		if samAccountName != "" && usnCreated != "" {
+			domainNetBios := os.Getenv("DOMAIN_NETBIOS")
+			domainFqdn := os.Getenv("DOMAIN_FQDN")
+			domainAccount := fmt.Sprintf("%s\\%s", domainNetBios, samAccountName)
+			upnAccount := fmt.Sprintf("%s@%s", samAccountName, domainFqdn)
+			bareUsername := samAccountName
 			
-			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", account, usnString)
-			if err != nil {
-				log.Printf("Failed to insert user account %s: %v", account, err)
-			} else {
+			// Use real AD uSNCreated value
+			usnString := fmt.Sprintf("USN%s", usnCreated)
+			
+			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", domainAccount, usnString)
+			if err == nil {
 				accountCount++
-				usn++
+			}
+			
+			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", upnAccount, usnString)
+			if err == nil {
+				accountCount++
+			}
+			
+			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", bareUsername, usnString)
+			if err == nil {
+				accountCount++
 			}
 		}
 	}
 
-	// Process computer accounts
-	for _, entry := range computerSearchResult.Entries {
+	// Computers
+	for _, entry := range allComputerEntries {
 		samAccountName := entry.GetAttributeValue("sAMAccountName")
-		if samAccountName != "" {
-			// Computer accounts already end with $
-			account := samAccountName
-			usnString := fmt.Sprintf("USN%d", usn)
+		usnCreated := entry.GetAttributeValue("uSNCreated")
+		
+		if samAccountName != "" && usnCreated != "" {
+			computerWithDollar := samAccountName
+			computerWithoutDollar := strings.TrimSuffix(samAccountName, "$")
 			
-			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", account, usnString)
-			if err != nil {
-				log.Printf("Failed to insert computer account %s: %v", account, err)
-			} else {
+			// Use real AD uSNCreated value
+			usnString := fmt.Sprintf("USN%s", usnCreated)
+			
+			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", computerWithDollar, usnString)
+			if err == nil {
 				accountCount++
-				usn++
+			}
+			
+			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", computerWithoutDollar, usnString)
+			if err == nil {
+				accountCount++
 			}
 		}
 	}
@@ -174,10 +273,10 @@ func syncLDAPAccounts() error {
 	log.Printf("LDAP sync completed: %d accounts synchronized", accountCount)
 	return nil
 }
-
+	
 func lookupHandler(w http.ResponseWriter, r *http.Request) {
 	account := strings.TrimPrefix(r.URL.Path, "/lookup/")
-	
+
 	var usn string
 	err := db.QueryRow("SELECT usn FROM ad_accounts WHERE account = ?", account).Scan(&usn)
 	if err != nil {
@@ -243,11 +342,18 @@ func ldapStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get detailed counts
+	var userCount, computerCount int
+	db.QueryRow("SELECT COUNT(*) FROM ad_accounts WHERE account LIKE '%@%'").Scan(&userCount)
+	db.QueryRow("SELECT COUNT(*) FROM ad_accounts WHERE account LIKE '%$'").Scan(&computerCount)
+
 	status := map[string]interface{}{
 		"ldap_configured": ldapServer != "" && ldapBindDN != "" && ldapBindPassword != "",
 		"ldap_server":     ldapServer,
 		"sync_interval":   ldapSyncInterval,
 		"account_count":   accountCount,
+		"user_count":      userCount,
+		"computer_count":  computerCount,
 		"last_sync":       "Available in future version",
 	}
 
@@ -289,9 +395,60 @@ func ldapTestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userCount := len(searchResult.Entries)
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status": "success", "message": "LDAP connection successful", "users_found": %d, "connection_test": "passed"}`, userCount)
+}
+
+func ldapLimitedSyncHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if ldapServer == "" || ldapBindDN == "" || ldapBindPassword == "" {
+		http.Error(w, "LDAP not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Call the full sync function with pagination
+	log.Printf("Manual full LDAP sync triggered")
+	err := syncLDAPAccounts()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("LDAP sync failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get final count from database
+	var accountCount int
+	db.QueryRow("SELECT COUNT(*) FROM ad_accounts").Scan(&accountCount)
+
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"status": "success", "message": "Full LDAP sync completed", "accounts_imported": %d}`, accountCount)
+}
+
+func accountsListHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT account, usn FROM ad_accounts ORDER BY account")
+	if err != nil {
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	accounts := make(map[string]string)
+	for rows.Next() {
+		var account, usn string
+		if err := rows.Scan(&account, &usn); err != nil {
+			continue
+		}
+		accounts[account] = usn
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"accounts": accounts,
+		"total": len(accounts),
+	})
 }
 
 func main() {
@@ -301,7 +458,7 @@ func main() {
 	ldapBindPassword = os.Getenv("LDAP_BIND_PASSWORD")
 	ldapSearchBase = os.Getenv("LDAP_SEARCH_BASE")
 	dcCACertPath = os.Getenv("DC_CA_CERT_PATH")
-	
+
 	syncInterval := os.Getenv("LDAP_SYNC_INTERVAL")
 	if syncInterval != "" {
 		if interval, err := strconv.Atoi(syncInterval); err == nil {
@@ -330,6 +487,9 @@ func main() {
 	http.HandleFunc("/ldap/sync", ldapSyncHandler)
 	http.HandleFunc("/ldap/status", ldapStatusHandler)
 	http.HandleFunc("/ldap/test", ldapTestHandler)
+	http.HandleFunc("/ldap/sync-limited", ldapLimitedSyncHandler)
+	http.HandleFunc("/ldap/sync-full", ldapLimitedSyncHandler)  // Same function, production endpoint
+	http.HandleFunc("/accounts/list", accountsListHandler)
 
 	log.Printf("Database service starting on port 8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
