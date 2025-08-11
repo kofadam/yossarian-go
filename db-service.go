@@ -45,6 +45,12 @@ func initDB() error {
 	CREATE TABLE IF NOT EXISTS ad_accounts (
 		account TEXT PRIMARY KEY,
 		usn TEXT NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS sensitive_terms (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		term TEXT NOT NULL UNIQUE,
+		replacement TEXT DEFAULT '[SENSITIVE]',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
 
 	_, err = db.Exec(createTableSQL)
@@ -335,25 +341,24 @@ func ldapSyncHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func ldapStatusHandler(w http.ResponseWriter, r *http.Request) {
-	var accountCount int
-	err := db.QueryRow("SELECT COUNT(*) FROM ad_accounts").Scan(&accountCount)
-	if err != nil {
-		http.Error(w, "Database query failed", http.StatusInternalServerError)
-		return
-	}
-
-	// Get detailed counts
-	var userCount, computerCount int
+	// Get user count (divide by 3: domain\user, user@domain, user)
+	var userCount int
 	db.QueryRow("SELECT COUNT(*) FROM ad_accounts WHERE account LIKE '%@%'").Scan(&userCount)
+	
+	// Get computer count (no division needed: computer$ and computer)
+	var computerCount int
 	db.QueryRow("SELECT COUNT(*) FROM ad_accounts WHERE account LIKE '%$'").Scan(&computerCount)
+	
+	// Total unique accounts
+	accountCount := userCount/3 + computerCount/2
 
 	status := map[string]interface{}{
 		"ldap_configured": ldapServer != "" && ldapBindDN != "" && ldapBindPassword != "",
 		"ldap_server":     ldapServer,
 		"sync_interval":   ldapSyncInterval,
 		"account_count":   accountCount,
-		"user_count":      userCount,
-		"computer_count":  computerCount,
+		"user_count":      userCount / 3,
+		"computer_count":  computerCount / 2,
 		"last_sync":       "Available in future version",
 	}
 
@@ -451,6 +456,85 @@ func accountsListHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func sensitiveListHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT term, replacement FROM sensitive_terms ORDER BY term")
+	if err != nil {
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	terms := make(map[string]string)
+	for rows.Next() {
+		var term, replacement string
+		if err := rows.Scan(&term, &replacement); err != nil {
+			continue
+		}
+		terms[term] = replacement
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"terms": terms,
+		"total": len(terms),
+	})
+}
+
+func sensitiveAddHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Term        string `json:"term"`
+		Replacement string `json:"replacement"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Term == "" {
+		http.Error(w, "Term is required", http.StatusBadRequest)
+		return
+	}
+	if req.Replacement == "" {
+		req.Replacement = "[SENSITIVE]"
+	}
+
+	_, err := db.Exec("INSERT INTO sensitive_terms (term, replacement) VALUES (?, ?)", req.Term, req.Replacement)
+	if err != nil {
+		http.Error(w, "Failed to add term", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func sensitiveDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	term := r.URL.Query().Get("term")
+	if term == "" {
+		http.Error(w, "Term parameter required", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec("DELETE FROM sensitive_terms WHERE term = ?", term)
+	if err != nil {
+		http.Error(w, "Failed to delete term", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
 func main() {
 	// Load LDAP configuration
 	ldapServer = os.Getenv("LDAP_SERVER")
@@ -490,6 +574,9 @@ func main() {
 	http.HandleFunc("/ldap/sync-limited", ldapLimitedSyncHandler)
 	http.HandleFunc("/ldap/sync-full", ldapLimitedSyncHandler)  // Same function, production endpoint
 	http.HandleFunc("/accounts/list", accountsListHandler)
+	http.HandleFunc("/sensitive/list", sensitiveListHandler)
+	http.HandleFunc("/sensitive/add", sensitiveAddHandler)
+	http.HandleFunc("/sensitive/delete", sensitiveDeleteHandler)
 
 	log.Printf("Database service starting on port 8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))

@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: yossarian-ad-sync
+  namespace: yossarian-go
+spec:
+  schedule: "0 1 * * *"  # 01:00 every day
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: curl
+            image: curlimages/curl:latest
+            command:
+            - /bin/sh
+            - -c
+            - curl -X POST http://yossarian-db-service:8081/ldap/sync-full
+          restartPolicy: OnFailure

@@ -118,6 +118,70 @@ var (
 	sensitiveRegex *regexp.Regexp
 )
 
+var sensitiveTermsMap = make(map[string]string)
+
+func loadSensitiveTerms() {
+	if adServiceURL == "" {
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/sensitive/list", adServiceURL))
+	if err != nil {
+		log.Printf("Failed to load sensitive terms from database: %v", err)
+		loadSensitiveTermsFromConfigMap()
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		log.Printf("Database service returned %d for sensitive terms", resp.StatusCode)
+		loadSensitiveTermsFromConfigMap()
+		return
+	}
+
+	var result struct {
+		Terms map[string]string `json:"terms"`
+		Total int               `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("Failed to decode sensitive terms: %v", err)
+		loadSensitiveTermsFromConfigMap()
+		return
+	}
+
+	// Store terms with their replacements
+	sensitiveTermsMap = result.Terms
+	sensitiveTermsOrg = make([]string, 0, len(result.Terms))
+	for term := range result.Terms {
+		sensitiveTermsOrg = append(sensitiveTermsOrg, term)
+	}
+
+	if len(sensitiveTermsOrg) > 0 {
+		sensitiveRegex = regexp.MustCompile(`(?i)\b(` + strings.Join(sensitiveTermsOrg, "|") + `)\b`)
+		log.Printf("Loaded %d sensitive terms from database", len(sensitiveTermsOrg))
+	} else {
+		sensitiveRegex = nil
+		log.Printf("No sensitive terms found in database")
+	}
+}
+
+func loadSensitiveTermsFromConfigMap() {
+	sensitiveTermsEnv := os.Getenv("SENSITIVE_TERMS")
+	if sensitiveTermsEnv != "" {
+		sensitiveTermsOrg = strings.Split(sensitiveTermsEnv, ",")
+		for i, term := range sensitiveTermsOrg {
+			sensitiveTermsOrg[i] = strings.TrimSpace(term)
+		}
+		sensitiveRegex = regexp.MustCompile(`(?i)\b(` + strings.Join(sensitiveTermsOrg, "|") + `)\b`)
+		log.Printf("Loaded %d sensitive terms from ConfigMap", len(sensitiveTermsOrg))
+	} else {
+		sensitiveTermsOrg = []string{}
+		sensitiveRegex = nil
+		log.Printf("No sensitive terms configured")
+	}
+}
+
 func init() {
 	adminPassword = os.Getenv("ADMIN_PASSWORD")
 
@@ -162,18 +226,8 @@ func init() {
 	// Auto SSO configuration
 	autoSSOEnabled = os.Getenv("AUTO_SSO_ENABLED") == "true"
 	
-	// Load sensitive terms from environment variable (ConfigMap)
-	sensitiveTermsEnv := os.Getenv("SENSITIVE_TERMS")
-	if sensitiveTermsEnv != "" {
-		sensitiveTermsOrg = strings.Split(sensitiveTermsEnv, ",")
-		for i, term := range sensitiveTermsOrg {
-			sensitiveTermsOrg[i] = strings.TrimSpace(term)
-		}
-		sensitiveRegex = regexp.MustCompile(`(?i)\b(` + strings.Join(sensitiveTermsOrg, "|") + `)\b`)
-	} else {
-		sensitiveTermsOrg = []string{}
-		sensitiveRegex = nil
-	}
+	// Load sensitive terms from database (legacy ConfigMap as fallback)
+	loadSensitiveTerms()
 }
 
 func getHTTPClient() *http.Client {
@@ -484,9 +538,16 @@ func sanitizeText(text string, userWords []string) string {
 	// 3. Replace passwords in connection strings and config files
 	result = passwordRegex.ReplaceAllString(result, "[PASSWORD-REDACTED]")
 
-	// 4. Replace sensitive terms (case-insensitive)
+	// 4. Replace sensitive terms with custom replacements
 	if sensitiveRegex != nil {
-		result = sensitiveRegex.ReplaceAllString(result, "[SENSITIVE]")
+		result = sensitiveRegex.ReplaceAllStringFunc(result, func(match string) string {
+			for term, replacement := range sensitiveTermsMap {
+				if strings.EqualFold(match, term) {
+					return replacement
+				}
+			}
+			return "[SENSITIVE]"
+		})
 	}
 
 	// 5. Replace user words
@@ -1140,6 +1201,114 @@ func adminLogoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 }
 
+func proxyLDAPStatus(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get(fmt.Sprintf("%s/ldap/status", adServiceURL))
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func proxyAccountsList(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get(fmt.Sprintf("%s/accounts/list", adServiceURL))
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func proxyLDAPSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	resp, err := http.Post(fmt.Sprintf("%s/ldap/sync-full", adServiceURL), "application/json", nil)
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func proxyLDAPTest(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get(fmt.Sprintf("%s/ldap/test", adServiceURL))
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func proxySensitiveList(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get(fmt.Sprintf("%s/sensitive/list", adServiceURL))
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func proxySensitiveAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	resp, err := http.Post(fmt.Sprintf("%s/sensitive/add", adServiceURL), "application/json", r.Body)
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+	
+	// Reload terms after adding
+	go loadSensitiveTerms()
+}
+
+func proxySensitiveDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	term := r.URL.Query().Get("term")
+	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/sensitive/delete?term=%s", adServiceURL, url.QueryEscape(term)), nil)
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+	
+	// Reload terms after deleting
+	go loadSensitiveTerms()
+}
+
 func adminADHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		r.ParseForm()
@@ -1281,6 +1450,15 @@ func main() {
 	
 	http.HandleFunc("/admin", adminRequired(adminDashboardHandler))
 	http.HandleFunc("/admin/ad-accounts", adminRequired(adminADHandler))
+	
+	// Admin API proxies
+	http.HandleFunc("/admin/api/ldap/status", adminRequired(proxyLDAPStatus))
+	http.HandleFunc("/admin/api/accounts/list", adminRequired(proxyAccountsList))
+	http.HandleFunc("/admin/api/ldap/sync", adminRequired(proxyLDAPSync))
+	http.HandleFunc("/admin/api/ldap/test", adminRequired(proxyLDAPTest))
+	http.HandleFunc("/admin/api/sensitive/list", adminRequired(proxySensitiveList))
+	http.HandleFunc("/admin/api/sensitive/add", adminRequired(proxySensitiveAdd))
+	http.HandleFunc("/admin/api/sensitive/delete", adminRequired(proxySensitiveDelete))
 
 	// Debug route
 	http.HandleFunc("/debug", debugHandler)
