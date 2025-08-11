@@ -278,7 +278,7 @@ func lookupHandler(w http.ResponseWriter, r *http.Request) {
 	account := strings.TrimPrefix(r.URL.Path, "/lookup/")
 
 	var usn string
-	err := db.QueryRow("SELECT usn FROM ad_accounts WHERE account = ?", account).Scan(&usn)
+	err := db.QueryRow("SELECT usn FROM ad_accounts WHERE UPPER(account) = UPPER(?)", account).Scan(&usn)
 	if err != nil {
 		http.NotFound(w, r)
 		return

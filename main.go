@@ -55,6 +55,31 @@ var (
 	templates            *template.Template
 )
 
+var (
+    adLookupCache = make(map[string]string)
+    cacheMutex    sync.RWMutex
+)
+
+func lookupADAccountCached(account string) string {
+    // Check cache first
+    cacheMutex.RLock()
+    if cached, exists := adLookupCache[account]; exists {
+        cacheMutex.RUnlock()
+        return cached
+    }
+    cacheMutex.RUnlock()
+    
+    // Not in cache, do lookup
+    usn := lookupADAccount(account)
+    
+    // Cache the result (including empty results)
+    cacheMutex.Lock()
+    adLookupCache[account] = usn
+    cacheMutex.Unlock()
+    
+    return usn
+}
+
 // Global mapping storage
 var (
 	ipMappings = make(map[string]string)
@@ -85,7 +110,7 @@ var (
 // Simple patterns
 var (
 	ipRegex         = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
-	adRegex = regexp.MustCompile(`[A-Z0-9-]+\\[a-zA-Z0-9._-]+|[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+|[A-Z0-9-]+\$|\b[A-Z][A-Z0-9-]{2,}\b`)
+	adRegex         = regexp.MustCompile(`[A-Z0-9-]+\\[a-zA-Z0-9._-]+|[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+|[A-Z0-9-]+\$`)
 	jwtRegex        = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
 	privateKeyRegex = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
 	passwordRegex   = regexp.MustCompile(`(?i)(:([^:@\s]{3,50})@|password["':=\s]+["']?([^"',\s]{3,50})["']?)`)
@@ -471,9 +496,9 @@ func sanitizeText(text string, userWords []string) string {
 		}
 	}
 
-	// 6. Replace AD accounts
+	// 6. Replace AD accounts with caching
 	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
-		if usn := lookupADAccount(account); usn != "" {
+		if usn := lookupADAccountCached(account); usn != "" {
 			return usn
 		}
 		return "[AD-UNKNOWN]"
