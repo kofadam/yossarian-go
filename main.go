@@ -110,7 +110,7 @@ var (
 // Simple patterns
 var (
 	ipRegex         = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
-	adRegex         = regexp.MustCompile(`[A-Z0-9-]+\\[a-zA-Z0-9._-]+|[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+|[A-Z0-9-]+\$`)
+	adRegex = regexp.MustCompile(`[A-Z0-9-]+\\[a-zA-Z0-9._-]+|[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+|[A-Z0-9-]+\$|\\\\([A-Z0-9-]+)\\|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]+)\\|\\Users\\([a-zA-Z0-9._-]+)\\|/([a-zA-Z0-9._-]+)/`)
 	jwtRegex        = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
 	privateKeyRegex = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
 	passwordRegex   = regexp.MustCompile(`(?i)(:([^:@\s]{3,50})@|password["':=\s]+["']?([^"',\s]{3,50})["']?)`)

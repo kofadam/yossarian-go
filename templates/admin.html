@@ -242,8 +242,10 @@
             </div>
             <div class="stat-card">
                 <div class="stat-icon">👥</div>
-                <div class="stat-value" id="statADAccounts">-</div>
-                <div class="stat-label">AD Accounts</div>
+                <div class="stat-value">
+                    <span id="statUsers">-</span> + <span id="statComputers">-</span>
+                </div>
+                <div class="stat-label">Users + Computers</div>
             </div>
             <div class="stat-card">
                 <div class="stat-icon">🔒</div>
@@ -262,6 +264,7 @@
         <!-- Navigation Tabs -->
         <div class="nav-tabs">
             <button class="nav-tab active" onclick="showTab('overview')">📊 Overview</button>
+            <button class="nav-tab" onclick="showTab('ad-accounts')">👥 AD Accounts</button>
             <button class="nav-tab" onclick="showTab('sensitive-terms')">🔒 Sensitive Terms</button>
             <button class="nav-tab" onclick="showTab('system')">⚙️ System</button>
         </div>
@@ -304,7 +307,40 @@
                 </div>
             </div>
         </div>
-        
+
+        <!-- AD Accounts Tab -->
+        <div id="ad-accounts" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">👥 Active Directory Accounts</h2>
+                    <div class="card-subtitle">Live AD account mappings (<span id="accountCount">0</span> total)</div>
+                </div>
+                <div class="card-content">
+                    <div class="status-message" id="adStatus"></div>
+                    
+                    <div style="margin-bottom: 16px;">
+                        <button class="btn btn-primary" onclick="refreshADAccounts()">🔄 Refresh</button>
+                        <button class="btn btn-secondary" onclick="exportADAccounts()">📤 Export CSV</button>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Account</th>
+                                    <th>USN</th>
+                                    <th>Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adAccountsTable">
+                                <tr><td colspan="3" class="loading">Loading AD accounts...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Sensitive Terms Tab -->
         <div id="sensitive-terms" class="tab-content">
             <div class="card">
@@ -405,11 +441,12 @@
 
             // Load AD service status
             loadADStatus();
+            loadADAccounts();
             loadSensitiveTerms();
         }
 
         function loadADStatus() {
-            fetch('/admin/api/ldap/status')
+            fetch('/api/ad-service-status')
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('statADAccounts').textContent = data.account_count || 0;
@@ -420,6 +457,37 @@
                 .catch(e => {
                     document.getElementById('ldapStatus').className = 'health-indicator error';
                     document.getElementById('ldapStatus').textContent = '● Disconnected';
+                });
+        }
+
+        function loadADAccounts() {
+            const tbody = document.getElementById('adAccountsTable');
+            
+            fetch('/api/ad-accounts')
+                .then(r => r.json())
+                .then(data => {
+                    tbody.innerHTML = '';
+                    if (data.accounts && Object.keys(data.accounts).length > 0) {
+                        Object.entries(data.accounts).slice(0, 50).forEach(([account, usn]) => {
+                            const type = account.includes('$') ? 'Computer' : 
+                                        account.includes('@') ? 'UPN' : 
+                                        account.includes('\\') ? 'Domain' : 'Username';
+                            const typeClass = type === 'Computer' ? 'info' : 'healthy';
+                            
+                            tbody.innerHTML += `
+                                <tr>
+                                    <td><code>${account}</code></td>
+                                    <td><code>${usn}</code></td>
+                                    <td><span class="health-indicator ${typeClass}">${type}</span></td>
+                                </tr>
+                            `;
+                        });
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="3" class="loading">No AD accounts found</td></tr>';
+                    }
+                })
+                .catch(e => {
+                    tbody.innerHTML = '<tr><td colspan="3" class="loading">Failed to load AD accounts</td></tr>';
                 });
         }
 

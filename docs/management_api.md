@@ -81,4 +81,33 @@ curl http://localhost:8080/health
 curl http://localhost:8081/health
 ```
 
+**Quick SQLite search commands:**
+
+**1. Search for specific user/computer:**
+```bash
+kubectl exec -it deployment/yossarian-db-service -n yossarian-go -- sqlite3 /data/yossarian.db "SELECT * FROM ad_accounts WHERE account LIKE '%real-user%';"
+```
+
+**2. Search for computer accounts:**
+```bash
+kubectl exec -it deployment/yossarian-db-service -n yossarian-go -- sqlite3 /data/yossarian.db "SELECT * FROM ad_accounts WHERE account LIKE '%SERVER01%';"
+```
+
+**3. Count all entries:**
+```bash
+kubectl exec -it deployment/yossarian-db-service -n yossarian-go -- sqlite3 /data/yossarian.db "SELECT COUNT(*) FROM ad_accounts;"
+```
+
+**4. Show all computer accounts:**
+```bash
+kubectl exec -it deployment/yossarian-db-service -n yossarian-go -- sqlite3 /data/yossarian.db "SELECT * FROM ad_accounts WHERE account LIKE '%$' LIMIT 10;"
+```
+
+**5. Check if `real-user` exists in any format:**
+```bash
+kubectl exec -it deployment/yossarian-db-service -n yossarian-go -- sqlite3 /data/yossarian.db "SELECT * FROM ad_accounts WHERE UPPER(account) LIKE '%REAL-USER%';"
+```
+
+This will show if the user/computer is in the database and what USN it maps to.
+
 **🛡️ The complete enterprise log sanitization API suite!**

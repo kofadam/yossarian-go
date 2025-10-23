@@ -382,12 +382,12 @@ func ldapTestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Test search without importing
+	// Simple test search with limit 5
 	searchRequest := ldap.NewSearchRequest(
 		ldapSearchBase,
-		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 10, 0, false,
-		"(&(objectClass=user)(!(objectClass=computer))(sAMAccountName=*))",
-		[]string{"sAMAccountName", "distinguishedName"},
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 5, 0, false,
+		"(objectClass=user)",
+		[]string{"sAMAccountName"},
 		nil,
 	)
 
