@@ -587,33 +587,87 @@ func lookupADAccount(account string) string {
 	return result.USN
 }
 
-func sanitizeText(text string, userWords []string) string {
+func sanitizeText(text string, userWords []string) (string, map[string]int) {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
+
+	// Track statistics for logging
+	stats := map[string]int{
+		"private_keys":    0,
+		"jwt_tokens":      0,
+		"passwords":       0,
+		"ad_accounts":     0,
+		"ad_cache_hits":   0,
+		"ad_cache_misses": 0,
+		"sensitive_terms": 0,
+		"user_words":      0,
+		"ip_addresses":    0,
+	}
 
 	result := text
 	// 0. Remove comment blocks (they may contain sensitive metadata)
 	// result = commentRegex.ReplaceAllString(result, "[COMMENT-REDACTED]")
 
 	// 1. Replace private keys
+	privateKeyMatches := privateKeyRegex.FindAllString(result, -1)
+	stats["private_keys"] = len(privateKeyMatches)
 	result = privateKeyRegex.ReplaceAllString(result, "[PRIVATE-KEY-REDACTED]")
+	if stats["private_keys"] > 0 {
+		log.Printf("[DEBUG] Pattern detection - Private keys: %d found", stats["private_keys"])
+	}
 
 	// 2. Replace JWT tokens
+	jwtMatches := jwtRegex.FindAllString(result, -1)
+	stats["jwt_tokens"] = len(jwtMatches)
 	result = jwtRegex.ReplaceAllString(result, "[JWT-REDACTED]")
+	if stats["jwt_tokens"] > 0 {
+		log.Printf("[DEBUG] Pattern detection - JWT tokens: %d found", stats["jwt_tokens"])
+	}
 
 	// 3. Replace passwords in connection strings and config files
+	passwordMatches := passwordRegex.FindAllString(result, -1)
+	stats["passwords"] = len(passwordMatches)
 	result = passwordRegex.ReplaceAllString(result, "[PASSWORD-REDACTED]")
+	if stats["passwords"] > 0 {
+		log.Printf("[DEBUG] Pattern detection - Passwords: %d found", stats["passwords"])
+	}
 
 	// 4. Replace AD accounts with caching (case-insensitive)
+	adCandidates := adRegex.FindAllString(result, -1)
+	adCandidateCount := len(adCandidates)
+
 	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
 		// Always normalize to lowercase for consistent cache lookups
 		normalizedAccount := strings.ToLower(account)
+
+		// Check cache first
+		cacheMutex.RLock()
+		cached, inCache := adLookupCache[normalizedAccount]
+		cacheMutex.RUnlock()
+
+		if inCache {
+			stats["ad_cache_hits"]++
+			if cached != "" {
+				stats["ad_accounts"]++
+				return cached
+			}
+			return account
+		}
+
+		// Not in cache, do lookup
+		stats["ad_cache_misses"]++
 		if usn := lookupADAccountCached(normalizedAccount); usn != "" {
+			stats["ad_accounts"]++
 			return usn
 		}
 		// If not found in AD database, preserve original text (not an AD account)
 		return account
 	})
+
+	if adCandidateCount > 0 {
+		log.Printf("[DEBUG] Pattern detection - AD accounts: %d candidates, %d confirmed (cache hit: %d, miss: %d)",
+			adCandidateCount, stats["ad_accounts"], stats["ad_cache_hits"], stats["ad_cache_misses"])
+	}
 
 	// 4b. Replace server accounts with dynamic prefix matching
 	if serverRegex != nil {
@@ -628,6 +682,9 @@ func sanitizeText(text string, userWords []string) string {
 
 	// 5. Replace sensitive terms with custom replacements
 	if sensitiveRegex != nil {
+		sensitiveMatches := sensitiveRegex.FindAllString(result, -1)
+		stats["sensitive_terms"] = len(sensitiveMatches)
+
 		result = sensitiveRegex.ReplaceAllStringFunc(result, func(match string) string {
 			for term, replacement := range sensitiveTermsMap {
 				if strings.EqualFold(match, term) {
@@ -636,17 +693,33 @@ func sanitizeText(text string, userWords []string) string {
 			}
 			return "[SENSITIVE]"
 		})
+
+		if stats["sensitive_terms"] > 0 {
+			log.Printf("[DEBUG] Pattern detection - Sensitive terms: %d found", stats["sensitive_terms"])
+		}
 	}
 
 	// 6. Replace user words
 	for _, word := range userWords {
 		if word != "" && len(word) > 2 {
+			count := strings.Count(result, word)
+			stats["user_words"] += count
 			result = strings.ReplaceAll(result, word, "[USER-SENSITIVE]")
 		}
 	}
+	if stats["user_words"] > 0 {
+		log.Printf("[DEBUG] Pattern detection - User words: %d found", stats["user_words"])
+	}
 
 	// 7. Replace IPs
+	ipMatches := ipRegex.FindAllString(result, -1)
+	uniqueIPs := make(map[string]bool)
+	for _, ip := range ipMatches {
+		uniqueIPs[ip] = true
+	}
+
 	result = ipRegex.ReplaceAllStringFunc(result, func(ip string) string {
+		stats["ip_addresses"]++
 		if placeholder, exists := ipMappings[ip]; exists {
 			return placeholder
 		}
@@ -656,7 +729,12 @@ func sanitizeText(text string, userWords []string) string {
 		return placeholder
 	})
 
-	return result
+	if len(uniqueIPs) > 0 {
+		log.Printf("[DEBUG] Pattern detection - IP addresses: %d total occurrences, %d unique",
+			stats["ip_addresses"], len(uniqueIPs))
+	}
+
+	return result, stats
 }
 
 func isBinaryContent(content []byte) bool {
@@ -741,22 +819,38 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get username for audit logging
+	username := "anonymous"
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
+	}
+
 	err := r.ParseMultipartForm(int64(maxTotalUploadSizeMB) << 20)
 	if err != nil {
+		log.Printf("[ERROR] File upload failed: form parsing error for user=%s: %v", username, err)
 		http.Error(w, fmt.Sprintf("Files too large (max %dMB total)", maxTotalUploadSizeMB), http.StatusBadRequest)
 		return
 	}
 
 	files := r.MultipartForm.File["file"]
 	if len(files) == 0 {
+		log.Printf("[WARN] File upload rejected: no files provided by user=%s", username)
 		http.Error(w, "No files uploaded", http.StatusBadRequest)
 		return
 	}
 
 	if len(files) > maxFileCount {
+		log.Printf("[ERROR] File upload rejected: %d files exceeds limit of %d for user=%s",
+			len(files), maxFileCount, username)
 		http.Error(w, fmt.Sprintf("Maximum %d files allowed", maxFileCount), http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("[INFO] File upload started: user=%s, files=%d", username, len(files))
 
 	// Get user words from cookie
 	var userWords []string
@@ -782,45 +876,85 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	for _, fileHeader := range files {
 		// Check file size
 		if fileHeader.Size > int64(maxFileSizeMB)*1024*1024 {
-			log.Printf("Skipping file %s: exceeds %dMB limit", fileHeader.Filename, maxFileSizeMB)
+			log.Printf("[ERROR] File rejected: %s exceeds %dMB limit (%d bytes)",
+				fileHeader.Filename, maxFileSizeMB, fileHeader.Size)
 			continue
 		}
 
+		log.Printf("[DEBUG] File received: %s (%d bytes)", fileHeader.Filename, fileHeader.Size)
+
 		file, err := fileHeader.Open()
 		if err != nil {
+			log.Printf("[ERROR] Failed to open file %s: %v", fileHeader.Filename, err)
 			continue
 		}
 
 		content, err := io.ReadAll(file)
 		file.Close()
 		if err != nil {
+			log.Printf("[ERROR] Failed to read file %s: %v", fileHeader.Filename, err)
 			continue
 		}
 
 		// Basic binary detection
-		if isBinaryContent(content) && !isArchiveFile(fileHeader.Filename) {
+		isBinary := isBinaryContent(content)
+		isArchive := isArchiveFile(fileHeader.Filename)
+		log.Printf("[DEBUG] File type check: %s - binary=%v, archive=%v", fileHeader.Filename, isBinary, isArchive)
+
+		if isBinary && !isArchive {
+			log.Printf("[WARN] File skipped: %s (binary content detected)", fileHeader.Filename)
 			continue // Skip binary files
 		}
 
+		log.Printf("[INFO] Processing file: %s (%.2f KB)", fileHeader.Filename, float64(len(content))/1024)
+
 		// Handle ZIP files
 		if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
+			log.Printf("[INFO] ZIP archive detected: %s (%.2f MB)", fileHeader.Filename, float64(len(content))/1024/1024)
 			fileStartTime := time.Now()
+
+			log.Printf("[DEBUG] Extracting ZIP contents: %s", fileHeader.Filename)
 			extractedFiles := extractZipContent(content)
+			extractionTime := time.Since(fileStartTime)
+
 			if len(extractedFiles) == 0 {
-				log.Printf("No files extracted from ZIP: %s", fileHeader.Filename)
+				log.Printf("[ERROR] No files extracted from ZIP: %s", fileHeader.Filename)
 				continue
 			}
+
+			totalUncompressedSize := 0
+			for _, ef := range extractedFiles {
+				totalUncompressedSize += len(ef.Content)
+			}
+
+			log.Printf("[INFO] ZIP extraction complete: %s - %d files extracted (%.2f MB uncompressed) in %.2fs",
+				fileHeader.Filename, len(extractedFiles), float64(totalUncompressedSize)/1024/1024, extractionTime.Seconds())
+			log.Printf("[INFO] Processing ZIP contents: %s (%d files)", fileHeader.Filename, len(extractedFiles))
 
 			// Sanitize all extracted files
 			var sanitizedFiles []ExtractedFile
 			totalZipOriginalSize := 0
 			totalZipSanitizedSize := 0
+			totalZipStats := map[string]int{
+				"private_keys": 0, "jwt_tokens": 0, "passwords": 0,
+				"ad_accounts": 0, "sensitive_terms": 0, "user_words": 0,
+				"ip_addresses": 0,
+			}
 
 			for idx, extracted := range extractedFiles {
-				if idx%10 == 0 {
-					log.Printf("Processing file %d/%d in ZIP: %s", idx+1, len(extractedFiles), extracted.Name)
+				log.Printf("[DEBUG] Processing file %d/%d in ZIP: %s (%.2f KB)",
+					idx+1, len(extractedFiles), extracted.Name, float64(len(extracted.Content))/1024)
+
+				fileStartTime := time.Now()
+				sanitized, fileStats := sanitizeText(extracted.Content, userWords)
+				processingTime := time.Since(fileStartTime)
+
+				log.Printf("[PERF] Sanitized %d/%d: %s (%.2fs)", idx+1, len(extractedFiles), extracted.Name, processingTime.Seconds())
+
+				// Aggregate statistics
+				for key, value := range fileStats {
+					totalZipStats[key] += value
 				}
-				sanitized := sanitizeText(extracted.Content, userWords)
 				sanitizedFiles = append(sanitizedFiles, ExtractedFile{
 					Name:    extracted.Name,
 					Content: sanitized,
@@ -832,14 +966,25 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Recreate ZIP archive with sanitized content
+			log.Printf("[INFO] Recreating sanitized ZIP archive: %s", fileHeader.Filename)
+			recreateStartTime := time.Now()
+
 			sanitizedZipData, err := createZipArchive(sanitizedFiles)
 			if err != nil {
-				log.Printf("Failed to recreate ZIP archive %s: %v", fileHeader.Filename, err)
+				log.Printf("[ERROR] Failed to recreate ZIP archive %s: %v", fileHeader.Filename, err)
 				continue
 			}
 
+			recreationTime := time.Since(recreateStartTime)
+			log.Printf("[DEBUG] ZIP recreation completed in %.2fs", recreationTime.Seconds())
+
 			// Calculate processing time for ZIP (use file start time)
 			zipProcessingTime := time.Since(fileStartTime)
+
+			compressionRatio := (1.0 - float64(len(sanitizedZipData))/float64(totalZipOriginalSize)) * 100
+			log.Printf("[INFO] ZIP archive created: %s (%.2f MB sanitized, %.2f MB original, %.1f%% compression)",
+				fileHeader.Filename, float64(len(sanitizedZipData))/1024/1024,
+				float64(totalZipOriginalSize)/1024/1024, compressionRatio)
 
 			// Store results for the entire ZIP file
 			result := map[string]interface{}{
@@ -874,7 +1019,23 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			totalOriginalSize += len(content)
 			totalSanitizedSize += len(sanitizedZipData)
 
-			log.Printf("Processed ZIP file: %s (%d files, %d->%d bytes)", fileHeader.Filename, len(extractedFiles), len(content), len(sanitizedZipData))
+			log.Printf("[INFO] ZIP processing summary: %s", fileHeader.Filename)
+			log.Printf("[INFO]   Files: %d processed", len(extractedFiles))
+			log.Printf("[INFO]   Size: %.2f MB → %.2f MB (%.1f%% reduction)",
+				float64(totalZipOriginalSize)/1024/1024,
+				float64(totalZipSanitizedSize)/1024/1024,
+				(1.0-float64(totalZipSanitizedSize)/float64(totalZipOriginalSize))*100)
+			log.Printf("[INFO]   Patterns: IPs=%d, AD=%d, JWT=%d, Keys=%d, Sensitive=%d, UserWords=%d",
+				totalZipStats["ip_addresses"], totalZipStats["ad_accounts"], totalZipStats["jwt_tokens"],
+				totalZipStats["private_keys"], totalZipStats["sensitive_terms"], totalZipStats["user_words"])
+			log.Printf("[PERF] Total processing time: %.2fs (%.2f MB/sec)",
+				zipProcessingTime.Seconds(), float64(totalZipOriginalSize)/1024/1024/zipProcessingTime.Seconds())
+
+			log.Printf("[AUDIT] ZIP processed: user=%s, file=%s, files=%d, total_patterns=%d",
+				username, fileHeader.Filename, len(extractedFiles),
+				totalZipStats["ip_addresses"]+totalZipStats["ad_accounts"]+totalZipStats["jwt_tokens"]+
+					totalZipStats["private_keys"]+totalZipStats["sensitive_terms"]+totalZipStats["user_words"])
+
 			continue
 		}
 
@@ -883,7 +1044,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			for _, extracted := range extractedFiles {
 				// Sanitize content with timing
 				fileStartTime := time.Now()
-				sanitized := sanitizeText(extracted.Content, userWords)
+				sanitized, _ := sanitizeText(extracted.Content, userWords)
 				processingTime := time.Since(fileStartTime)
 
 				// Store results for each extracted file
@@ -916,8 +1077,29 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// Sanitize content with timing
 		fileStartTime := time.Now()
-		sanitized := sanitizeText(string(content), userWords)
+		log.Printf("[PERF] Sanitization started: %s", fileHeader.Filename)
+
+		sanitized, sanitizeStats := sanitizeText(string(content), userWords)
 		processingTime := time.Since(fileStartTime)
+
+		processingRateMBps := float64(len(content)) / 1024 / 1024 / processingTime.Seconds()
+		log.Printf("[PERF] Sanitization completed: %s in %.2fs (%.2f MB/sec)",
+			fileHeader.Filename, processingTime.Seconds(), processingRateMBps)
+
+		totalPatterns := sanitizeStats["private_keys"] + sanitizeStats["jwt_tokens"] +
+			sanitizeStats["passwords"] + sanitizeStats["ad_accounts"] +
+			sanitizeStats["sensitive_terms"] + sanitizeStats["user_words"] +
+			len(ipMappings)
+
+		log.Printf("[INFO] Results - File: %s, IPs: %d, AD: %d, JWT: %d, Keys: %d, Sensitive: %d, UserWords: %d, Total: %d",
+			fileHeader.Filename,
+			sanitizeStats["ip_addresses"],
+			sanitizeStats["ad_accounts"],
+			sanitizeStats["jwt_tokens"],
+			sanitizeStats["private_keys"],
+			sanitizeStats["sensitive_terms"],
+			sanitizeStats["user_words"],
+			totalPatterns)
 
 		// Store results
 		result := map[string]interface{}{
@@ -953,20 +1135,58 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			combinedSanitized += content.(string) + "\n\n"
 		}
 	}
-	// Debug: Log what we're storing
-	log.Printf("Storing %d files for download", len(results))
+	// Store files for download
+	log.Printf("[INFO] Storing %d files for download", len(results))
+
+	storedCount := 0
+	totalStoredSize := 0
+
 	// Don't recreate map - append to existing files
 	for _, result := range results {
 		if content, exists := result["sanitized_content"]; exists && content != nil {
 			filename := result["filename"].(string)
-			lastSanitizedFiles[filename] = content.(string)
-			log.Printf("Stored file for download: %s (%d bytes)", filename, len(content.(string)))
+			contentStr := content.(string)
+			lastSanitizedFiles[filename] = contentStr
+
+			storedCount++
+			totalStoredSize += len(contentStr)
+
+			log.Printf("[DEBUG] File stored for download: %s (%.2f KB)", filename, float64(len(contentStr))/1024)
 		}
 	}
-	log.Printf("Total files available for download: %d", len(lastSanitizedFiles))
+
+	log.Printf("[INFO] Storage complete: %d files stored (%.2f MB total)",
+		storedCount, float64(totalStoredSize)/1024/1024)
+	log.Printf("[INFO] Total files available for download: %d", len(lastSanitizedFiles))
 
 	lastSanitizedContent = combinedSanitized
 	lastSanitizedFilename = "sanitized-files.txt"
+
+	// Final processing summary
+	totalProcessingTime := time.Since(time.Now()) // This will be updated in next change
+	overallRateMBps := float64(totalOriginalSize) / 1024 / 1024 / totalProcessingTime.Seconds()
+
+	log.Printf("[INFO] ========== Upload Processing Complete ==========")
+	log.Printf("[INFO] User: %s", username)
+	log.Printf("[INFO] Files Processed: %d", len(results))
+	log.Printf("[INFO] Total Size: %.2f MB → %.2f MB (%.1f%% reduction)",
+		float64(totalOriginalSize)/1024/1024,
+		float64(totalSanitizedSize)/1024/1024,
+		(1.0-float64(totalSanitizedSize)/float64(totalOriginalSize))*100)
+	log.Printf("[INFO] IP Mappings Created: %d", len(ipMappings))
+	log.Printf("[PERF] Overall Rate: %.2f MB/sec", overallRateMBps)
+
+	// Aggregate all patterns across all files
+	totalPatterns := 0
+	for _, result := range results {
+		totalPatterns += result["total_ips"].(int) + result["ad_accounts"].(int) +
+			result["jwt_tokens"].(int) + result["private_keys"].(int) +
+			result["sensitive_terms"].(int) + result["user_words"].(int)
+	}
+
+	log.Printf("[AUDIT] Upload completed: user=%s, files=%d, total_size_mb=%.2f, patterns_found=%d",
+		username, len(results), float64(totalOriginalSize)/1024/1024, totalPatterns)
+	log.Printf("[INFO] ===============================================")
 
 	// Return JSON response
 	w.Header().Set("Content-Type", "application/json")
@@ -988,26 +1208,39 @@ func extractZipContent(zipData []byte) []ExtractedFile {
 
 	reader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
 	if err != nil {
-		log.Printf("Failed to read ZIP archive: %v", err)
+		log.Printf("[ERROR] Failed to read ZIP archive: %v", err)
 		return extractedFiles
 	}
+
+	totalFiles := len(reader.File)
+	skippedDirs := 0
+	skippedLarge := 0
+	skippedBinary := 0
+	failedOpen := 0
+	failedRead := 0
+
+	log.Printf("[DEBUG] ZIP contains %d entries", totalFiles)
 
 	for _, file := range reader.File {
 		// Skip directories
 		if file.FileInfo().IsDir() {
+			skippedDirs++
 			continue
 		}
 
 		// Skip very large files in ZIP
 		if file.UncompressedSize64 > uint64(maxZipFileSizeMB)*1024*1024 {
-			log.Printf("Skipping large file in ZIP: %s (%d bytes, max %dMB)", file.Name, file.UncompressedSize64, maxZipFileSizeMB)
+			log.Printf("[WARN] Skipping large file in ZIP: %s (%.2f MB, max %dMB)",
+				file.Name, float64(file.UncompressedSize64)/1024/1024, maxZipFileSizeMB)
+			skippedLarge++
 			continue
 		}
 
 		// Open file within ZIP
 		rc, err := file.Open()
 		if err != nil {
-			log.Printf("Failed to open file %s in ZIP: %v", file.Name, err)
+			log.Printf("[ERROR] Failed to open file %s in ZIP: %v", file.Name, err)
+			failedOpen++
 			continue
 		}
 
@@ -1015,23 +1248,32 @@ func extractZipContent(zipData []byte) []ExtractedFile {
 		content, err := io.ReadAll(rc)
 		rc.Close()
 		if err != nil {
-			log.Printf("Failed to read file %s in ZIP: %v", file.Name, err)
+			log.Printf("[ERROR] Failed to read file %s in ZIP: %v", file.Name, err)
+			failedRead++
 			continue
 		}
 
 		// Skip binary files
 		if isBinaryContent(content) {
-			log.Printf("Skipping binary file in ZIP: %s", file.Name)
+			log.Printf("[WARN] Skipping binary file in ZIP: %s", file.Name)
+			skippedBinary++
 			continue
 		}
 
 		extractedFiles = append(extractedFiles, ExtractedFile{
 			Name:    file.Name,
 			Content: string(content),
+			Mode:    file.Mode(),
+			ModTime: file.Modified,
 		})
 
-		log.Printf("Extracted file from ZIP: %s (%d bytes)", file.Name, len(content))
+		log.Printf("[DEBUG] Extracted: %s (%.2f KB)", file.Name, float64(len(content))/1024)
 	}
+
+	log.Printf("[INFO] ZIP extraction summary: %d total entries, %d extracted, %d skipped (dirs=%d, large=%d, binary=%d, errors=%d)",
+		totalFiles, len(extractedFiles),
+		skippedDirs+skippedLarge+skippedBinary+failedOpen+failedRead,
+		skippedDirs, skippedLarge, skippedBinary, failedOpen+failedRead)
 
 	return extractedFiles
 }
@@ -1086,12 +1328,20 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func downloadAllZipHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Download All ZIP requested - have %d files", len(lastSanitizedFiles))
-	for filename := range lastSanitizedFiles {
-		log.Printf("Available file: %s", filename)
+	// Get username for audit logging
+	username := "anonymous"
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
 	}
 
+	log.Printf("[INFO] Download all ZIP requested: user=%s, files_available=%d", username, len(lastSanitizedFiles))
+
 	if len(lastSanitizedFiles) == 0 {
+		log.Printf("[WARN] Download failed: no sanitized files available for user=%s", username)
 		http.Error(w, "No sanitized files available", http.StatusNotFound)
 		return
 	}
@@ -1115,19 +1365,39 @@ func downloadAllZipHandler(w http.ResponseWriter, r *http.Request) {
 
 	err := zipWriter.Close()
 	if err != nil {
+		log.Printf("[ERROR] Failed to finalize ZIP for user=%s: %v", username, err)
 		http.Error(w, "Failed to finalize ZIP", http.StatusInternalServerError)
 		return
 	}
+
+	zipSize := buf.Len()
+	log.Printf("[INFO] ZIP archive created for download: %.2f MB (%d files)",
+		float64(zipSize)/1024/1024, len(lastSanitizedFiles))
 
 	// Send ZIP file
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"sanitized-files.zip\"")
 	w.Write(buf.Bytes())
+
+	log.Printf("[AUDIT] Download completed: user=%s, type=all_files_zip, size_mb=%.2f, file_count=%d",
+		username, float64(zipSize)/1024/1024, len(lastSanitizedFiles))
 }
 
 func individualFileHandler(w http.ResponseWriter, r *http.Request) {
 	filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
 	filename, _ = url.QueryUnescape(filename)
+
+	// Get username for audit logging
+	username := "anonymous"
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
+	}
+
+	log.Printf("[INFO] Individual file download requested: user=%s, file=%s", username, filename)
 
 	if content, exists := lastSanitizedFiles[filename]; exists {
 		// Determine content type based on file extension
@@ -1139,7 +1409,11 @@ func individualFileHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 		w.Write([]byte(content))
+
+		log.Printf("[AUDIT] Download completed: user=%s, type=individual_file, file=%s, size_mb=%.2f",
+			username, filename, float64(len(content))/1024/1024)
 	} else {
+		log.Printf("[ERROR] Download failed: file not found: user=%s, file=%s", username, filename)
 		http.Error(w, "File not found", http.StatusNotFound)
 	}
 }
