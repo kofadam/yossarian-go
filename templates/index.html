@@ -566,6 +566,167 @@
         }
 
         
+        /* Getting Started Section */
+        .getting-started {
+            background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+            border-left: 4px solid var(--md-primary);
+        }
+
+        .getting-started details {
+            cursor: pointer;
+        }
+
+        .getting-started summary {
+            padding: 20px 24px;
+            font-size: 18px;
+            font-weight: 500;
+            color: var(--md-primary);
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .getting-started summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .getting-started summary::before {
+            content: '▼';
+            font-size: 14px;
+            transition: transform 0.3s;
+        }
+
+        .getting-started details[open] summary::before {
+            transform: rotate(-180deg);
+        }
+
+        .getting-started-content {
+            padding: 0 24px 24px;
+        }
+
+        .help-section {
+            margin-bottom: 32px;
+        }
+
+        .help-section h3 {
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--md-on-surface);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .help-section p {
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--md-on-surface-variant);
+            margin-bottom: 12px;
+        }
+
+        .example-box {
+            background: white;
+            border-radius: 8px;
+            padding: 16px;
+            margin: 12px 0;
+            border-left: 3px solid var(--md-primary);
+        }
+
+        .example-item {
+            margin-bottom: 16px;
+        }
+
+        .example-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .example-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--md-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .example-text {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            padding: 8px 12px;
+            border-radius: 4px;
+            background: var(--md-surface-variant);
+            color: var(--md-on-surface);
+            word-break: break-all;
+        }
+
+        .example-text.before {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .example-text.after {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .step-list {
+            counter-reset: step-counter;
+            list-style: none;
+            padding: 0;
+        }
+
+        .step-list li {
+            counter-increment: step-counter;
+            margin-bottom: 20px;
+            padding-left: 50px;
+            position: relative;
+        }
+
+        .step-list li::before {
+            content: counter(step-counter);
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 36px;
+            height: 36px;
+            background: var(--md-primary);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 16px;
+        }
+
+        .step-list li strong {
+            display: block;
+            font-size: 15px;
+            color: var(--md-on-surface);
+            margin-bottom: 4px;
+        }
+
+        .step-list li p {
+            margin: 0;
+            font-size: 14px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .tip-box {
+            background: #fff3e0;
+            border-left: 4px solid var(--md-warning);
+            padding: 12px 16px;
+            border-radius: 4px;
+            margin-top: 16px;
+        }
+
+        .tip-box strong {
+            color: var(--md-warning);
+            font-size: 14px;
+        }
+
         /* Responsive Design */
         @media (max-width: 768px) {
             .container {
@@ -598,7 +759,7 @@
     <!-- App Bar -->
     <header class="app-bar">
         <h1>🛡️ Yossarian Go</h1>
-        <div class="subtitle">Enterprise Log Sanitization System <span id="version" style="opacity: 0.7; font-size: 12px;"></span></div>
+        <div class="subtitle">Automatically remove sensitive information from log files <span id="version" style="opacity: 0.7; font-size: 12px;"></span></div>
         <nav class="nav-links">
             <span id="username" style="color: white; margin-right: 15px;"></span>
             <a href="/health">📊 Health Check</a>
@@ -612,6 +773,151 @@
         <div class="user-banner" id="userBanner" style="display: none;">
             <div class="welcome">👤 Welcome back, <span id="userName">User</span>!</div>
             <div class="auth-info">🔐 Authenticated via Enterprise SSO</div>
+        </div>
+
+        <!-- Getting Started Section -->
+        <div class="card getting-started">
+            <details>
+                <summary>🎯 Getting Started - How to Use Yossarian</summary>
+                <div class="getting-started-content">
+                    
+                    <!-- What Does Yossarian Do? -->
+                    <div class="help-section">
+                        <h3>🛡️ What Does Yossarian Do?</h3>
+                        <p>
+                            Yossarian automatically finds and removes sensitive information from your log files, 
+                            making them safe to share with external support teams, vendors, or less-secure storage.
+                        </p>
+                        <p>
+                            <strong>Think of it as a "redaction tool" for your technical files.</strong> 
+                            Just like blacking out sensitive information in a document, Yossarian replaces 
+                            sensitive data with safe placeholders while keeping your logs readable and useful.
+                        </p>
+                    </div>
+
+                    <!-- What Gets Protected? -->
+                    <div class="help-section">
+                        <h3>📋 What Gets Protected?</h3>
+                        <p>Yossarian automatically detects and protects:</p>
+                        
+                        <div class="example-box">
+                            <div class="example-item">
+                                <div class="example-label">🌐 Network Addresses (IP Addresses)</div>
+                                <div class="example-text before">Server at 192.168.1.100 crashed at midnight</div>
+                                <div class="example-text after">Server at [IP-001] crashed at midnight</div>
+                            </div>
+
+                            <div class="example-item">
+                                <div class="example-label">👤 Usernames & Accounts</div>
+                                <div class="example-text before">CORP\john.doe accessed the database</div>
+                                <div class="example-text after">USN123456789 accessed the database</div>
+                            </div>
+
+                            <div class="example-item">
+                                <div class="example-label">🔑 Passwords & Credentials</div>
+                                <div class="example-text before">password=MySecret123 user=admin</div>
+                                <div class="example-text after">[PASSWORD-REDACTED] user=admin</div>
+                            </div>
+
+                            <div class="example-item">
+                                <div class="example-label">🔐 Security Tokens & Keys</div>
+                                <div class="example-text before">token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</div>
+                                <div class="example-text after">token=[JWT-REDACTED]</div>
+                            </div>
+
+                            <div class="example-item">
+                                <div class="example-label">🏢 Your Custom Sensitive Words</div>
+                                <div class="example-text before">ProjectPhoenix deadline is next week</div>
+                                <div class="example-text after">[SENSITIVE] deadline is next week</div>
+                            </div>
+                        </div>
+
+                        <div class="tip-box">
+                            <strong>💡 TIP:</strong> All replacements are consistent - if "192.168.1.100" appears 
+                            100 times, it will always become "[IP-001]" so you can still track patterns!
+                        </div>
+                    </div>
+
+                    <!-- File Size Limits -->
+                    <div class="help-section">
+                        <h3>📦 File Size Limits</h3>
+                        <p>To ensure smooth processing, the following limits apply:</p>
+                        
+                        <div class="example-box">
+                            <div class="example-item">
+                                <div class="example-label">📁 Individual Files</div>
+                                <p style="margin: 8px 0; font-size: 14px;">
+                                    Maximum <strong id="helpMaxFileSize">50MB</strong> per file
+                                </p>
+                            </div>
+
+                            <div class="example-item">
+                                <div class="example-label">📦 ZIP Archives</div>
+                                <p style="margin: 8px 0; font-size: 14px;">
+                                    Files inside ZIP archives: Maximum <strong id="helpMaxZipFileSize">10MB</strong> each (uncompressed)
+                                </p>
+                            </div>
+
+                            <div class="example-item">
+                                <div class="example-label">📊 Total Upload</div>
+                                <p style="margin: 8px 0; font-size: 14px;">
+                                    Maximum <strong id="helpMaxFileCount">10</strong> files, 
+                                    <strong id="helpMaxTotalSize">100MB</strong> total
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="tip-box">
+                            <strong>💡 TIP:</strong> If you have a very large ZIP file, consider extracting it first 
+                            and uploading the individual log files instead. This gives you better control and 
+                            allows larger individual files to be processed.
+                        </div>
+                    </div>
+
+                    <!-- How to Use -->
+                    <div class="help-section">
+                        <h3>📚 How to Use Yossarian (3 Easy Steps)</h3>
+                        
+                        <ol class="step-list">
+                            <li>
+                                <strong>Add Your Custom Sensitive Words (Optional)</strong>
+                                <p>
+                                    If your files contain company-specific secrets like project codenames, 
+                                    client names, or internal system names, add them in the "Personal Sensitive Words" 
+                                    section below. This is completely optional - Yossarian will still protect 
+                                    standard sensitive data without this step.
+                                </p>
+                            </li>
+                            
+                            <li>
+                                <strong>Upload Your Files</strong>
+                                <p>
+                                    Drag and drop your log files, or click the upload area to browse. 
+                                    Yossarian supports .log, .txt, .zip, .json, and other text files. 
+                                    You can upload up to 10 files at once (max 50MB each).
+                                </p>
+                            </li>
+                            
+                            <li>
+                                <strong>Download Protected Files</strong>
+                                <p>
+                                    Click "🔒 Sanitize Files" to process your uploads. Review the summary 
+                                    to see what was protected, then download your cleaned files and the audit report. 
+                                    The audit report shows exactly what was changed, so you can verify nothing 
+                                    important was removed.
+                                </p>
+                            </li>
+                        </ol>
+
+                        <div class="tip-box">
+                            <strong>⚠️ IMPORTANT:</strong> Always review the sanitized files before sharing them 
+                            externally. While Yossarian catches common patterns, it's good practice to verify 
+                            that all sensitive information has been properly protected.
+                        </div>
+                    </div>
+
+                </div>
+            </details>
         </div>
 
         <!-- Personal Sensitive Words -->
@@ -646,7 +952,7 @@
         <div class="card">
             <div class="card-header">
                 <h2 class="card-title">📁 Upload & Sanitize Files</h2>
-                <div class="card-subtitle">Support for multiple log files, archives (zip, tar.gz) • Max 50MB per file • Up to 10 files</div>
+                <div class="card-subtitle" id="uploadLimitsSubtitle">Support for multiple log files, archives (zip, tar.gz) • Loading limits...</div>
             </div>
             <div class="card-content">
                 <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
@@ -776,13 +1082,54 @@
         let selectedFiles = [];
         let processingResults = [];
         let totalProcessingTime = 0;
+        
+        // File upload limits (loaded from backend)
+        let maxTotalUploadSizeMB = 100;
+        let maxFileSizeMB = 50;
+        let maxZipFileSizeMB = 10;
+        let maxFileCount = 10;
 
         // Initialize on page load
         window.onload = function() {
+            loadConfigLimits();
             loadWords();
             initializeFileUpload();
             createDownloadButtons(); // Initialize empty download section
         };
+        
+        // Load configuration limits from backend
+        function loadConfigLimits() {
+            fetch('/api/config')
+                .then(r => r.json())
+                .then(data => {
+                    maxTotalUploadSizeMB = data.max_total_upload_size_mb || 100;
+                    maxFileSizeMB = data.max_file_size_mb || 50;
+                    maxZipFileSizeMB = data.max_zip_file_size_mb || 10;
+                    maxFileCount = data.max_file_count || 10;
+                    
+                    // Update UI subtitle with actual limits
+                    document.getElementById('uploadLimitsSubtitle').textContent = 
+                        `Support for multiple log files, archives (zip, tar.gz) • Max ${maxFileSizeMB}MB per file • Files inside ZIP: ${maxZipFileSizeMB}MB • Up to ${maxFileCount} files`;
+                    
+                    // Update help section values if elements exist
+                    const helpMaxFileSize = document.getElementById('helpMaxFileSize');
+                    const helpMaxZipFileSize = document.getElementById('helpMaxZipFileSize');
+                    const helpMaxFileCount = document.getElementById('helpMaxFileCount');
+                    const helpMaxTotalSize = document.getElementById('helpMaxTotalSize');
+                    
+                    if (helpMaxFileSize) helpMaxFileSize.textContent = `${maxFileSizeMB}MB`;
+                    if (helpMaxZipFileSize) helpMaxZipFileSize.textContent = `${maxZipFileSizeMB}MB`;
+                    if (helpMaxFileCount) helpMaxFileCount.textContent = maxFileCount;
+                    if (helpMaxTotalSize) helpMaxTotalSize.textContent = `${maxTotalUploadSizeMB}MB`;
+                    
+                    console.log('Config limits loaded:', data);
+                })
+                .catch(e => {
+                    console.log('Failed to load config limits, using defaults:', e);
+                    document.getElementById('uploadLimitsSubtitle').textContent = 
+                        `Support for multiple log files, archives (zip, tar.gz) • Max 50MB per file • Files inside ZIP: 10MB • Up to 10 files`;
+                });
+        }
         // File Upload Handling
         function initializeFileUpload() {
             const uploadZone = document.getElementById('uploadZone');
@@ -822,8 +1169,8 @@
             const fileArray = Array.from(files);
             
             // Validate file count
-            if (fileArray.length > 10) {
-                showStatus('error', 'Maximum 10 files allowed. Please select fewer files.', 'uploadStatus');
+            if (fileArray.length > maxFileCount) {
+                showStatus('error', `Maximum ${maxFileCount} files allowed. Please select fewer files.`, 'uploadStatus');
                 return;
             }
 
@@ -840,9 +1187,9 @@
             createDownloadButtons(); // Reset download section
             
             fileArray.forEach(file => {
-                // Validate file size (50MB)
-                if (file.size > 50 * 1024 * 1024) {
-                    showStatus('error', `File "${file.name}" exceeds 50MB limit and will be skipped.`);
+                // Validate file size
+                if (file.size > maxFileSizeMB * 1024 * 1024) {
+                    showStatus('error', `File "${file.name}" exceeds ${maxFileSizeMB}MB limit and will be skipped.`, 'uploadStatus');
                     return;
                 }
 

@@ -28,6 +28,10 @@ data:
   LDAP_SEARCH_BASE: "DC=yourdomain,DC=com"
   DOMAIN_NETBIOS: "YOURDOMAIN"
   DOMAIN_FQDN: "yourdomain.local"
+  MAX_TOTAL_UPLOAD_SIZE_MB: "100"
+  MAX_FILE_SIZE_MB: "50"
+  MAX_ZIP_FILE_SIZE_MB: "10"
+  MAX_FILE_COUNT: "10"
   
 ---
 apiVersion: v1

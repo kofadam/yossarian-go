@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,39 +46,39 @@ var (
 
 // Global storage for download and admin
 var (
-    lastSanitizedContent  string
-    lastSanitizedFilename string
-    lastSanitizedFiles    map[string]string
-	adminSessions        = make(map[string]time.Time)
-	sessionUsers         = make(map[string]string) // sessionID -> username
-	sessionRoles         = make(map[string][]string) // sessionID -> roles
-	sessionMutex         sync.Mutex
-	templates            *template.Template
+	lastSanitizedContent  string
+	lastSanitizedFilename string
+	lastSanitizedFiles    map[string]string
+	adminSessions         = make(map[string]time.Time)
+	sessionUsers          = make(map[string]string)   // sessionID -> username
+	sessionRoles          = make(map[string][]string) // sessionID -> roles
+	sessionMutex          sync.Mutex
+	templates             *template.Template
 )
 
 var (
-    adLookupCache = make(map[string]string)
-    cacheMutex    sync.RWMutex
+	adLookupCache = make(map[string]string)
+	cacheMutex    sync.RWMutex
 )
 
 func lookupADAccountCached(account string) string {
-    // Check cache first
-    cacheMutex.RLock()
-    if cached, exists := adLookupCache[account]; exists {
-        cacheMutex.RUnlock()
-        return cached
-    }
-    cacheMutex.RUnlock()
-    
-    // Not in cache, do lookup
-    usn := lookupADAccount(account)
-    
-    // Cache the result (including empty results)
-    cacheMutex.Lock()
-    adLookupCache[account] = usn
-    cacheMutex.Unlock()
-    
-    return usn
+	// Check cache first
+	cacheMutex.RLock()
+	if cached, exists := adLookupCache[account]; exists {
+		cacheMutex.RUnlock()
+		return cached
+	}
+	cacheMutex.RUnlock()
+
+	// Not in cache, do lookup
+	usn := lookupADAccount(account)
+
+	// Cache the result (including empty results)
+	cacheMutex.Lock()
+	adLookupCache[account] = usn
+	cacheMutex.Unlock()
+
+	return usn
 }
 
 // Global mapping storage
@@ -89,10 +90,18 @@ var (
 	// Admin configuration
 	adminPassword     string
 	sensitiveTermsOrg []string
+	serverPrefixes    []string
+	serverRegex       *regexp.Regexp
+
+	// File upload limits (configurable via environment)
+	maxTotalUploadSizeMB int
+	maxFileSizeMB        int
+	maxZipFileSizeMB     int
+	maxFileCount         int
 
 	// OIDC configuration
-	oidcEnabled   bool
-	oidcIssuerURL string
+	oidcEnabled      bool
+	oidcIssuerURL    string
 	oidcClientID     string
 	oidcClientSecret string
 	oidcRedirectURL  string
@@ -102,7 +111,7 @@ var (
 
 	// AD service configuration
 	adServiceURL string
-	
+
 	// Auto SSO configuration
 	autoSSOEnabled bool
 )
@@ -110,14 +119,13 @@ var (
 // Simple patterns
 var (
 	ipRegex         = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
-	adRegex = regexp.MustCompile(`[A-Z0-9-]+\\[a-zA-Z0-9._-]+|[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+|[A-Z0-9-]+\$|\\\\([A-Z0-9-]+)\\|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]+)\\|\\Users\\([a-zA-Z0-9._-]+)\\|/([a-zA-Z0-9._-]+)/`)
+	adRegex         = regexp.MustCompile(`\b[A-Z0-9-]+\\[a-zA-Z0-9._-]{4,15}\b|\b[a-zA-Z0-9._-]{4,15}@[a-zA-Z0-9.-]+\b|\b[A-Z0-9-]{4,15}\$\b|\b(?:A-M|B-P|D-[1-9CKLMQT]|H-[FP]|J-P|L-[1-9P]|S-C|T-[CL])-[A-Za-z0-9-]{6,11}\b|\bD-PC-[A-Za-z0-9-]{5,10}\b|\b(?:a-m|b-p|d-[1-9cklmqt]|h-[fp]|j-p|l-[1-9p]|s-c|t-[cl])-[a-zA-Z0-9-]{6,11}\b|\bd-pc-[a-zA-Z0-9-]{5,10}\b|\b(?:dvd|til|DVD|TIL)[0-9a-zA-Z]{1,20}\b|\\\\([A-Z0-9-]+)\\|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]{4,15})\\|\\Users\\([a-zA-Z0-9._-]{4,15})\\|/([a-zA-Z0-9._-]{4,15})/`)
 	jwtRegex        = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
 	privateKeyRegex = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
 	passwordRegex   = regexp.MustCompile(`(?i)(:([^:@\s]{3,50})@|password["':=\s]+["']?([^"',\s]{3,50})["']?)`)
 	// commentRegex    = regexp.MustCompile(`(?m)^#.*$`)
 	sensitiveRegex *regexp.Regexp
 )
-
 var sensitiveTermsMap = make(map[string]string)
 
 func loadSensitiveTerms() {
@@ -166,6 +174,33 @@ func loadSensitiveTerms() {
 	}
 }
 
+func loadServerPrefixes() {
+	serverPrefixesEnv := os.Getenv("SERVER_PREFIXES")
+	if serverPrefixesEnv != "" {
+		serverPrefixes = strings.Split(serverPrefixesEnv, ",")
+		for i, prefix := range serverPrefixes {
+			serverPrefixes[i] = strings.TrimSpace(prefix)
+		}
+
+		// Build dynamic regex for server patterns
+		// Format: SLLS-prd-dbserver, ABCD-dev-appserver
+		escapedPrefixes := make([]string, len(serverPrefixes))
+		for i, prefix := range serverPrefixes {
+			escapedPrefixes[i] = regexp.QuoteMeta(prefix)
+		}
+
+		// Pattern: (SLLS|ABCD|...)-(prd|dev|tst|uat|sit|qa|prod|stg)-[alphanumeric]{2,20}
+		serverPattern := fmt.Sprintf(`\b(?:%s)-(?:prd|dev|tst|uat|sit|qa|prod|stg)-[a-zA-Z0-9]{2,20}\b`, strings.Join(escapedPrefixes, "|"))
+		serverRegex = regexp.MustCompile(serverPattern)
+
+		log.Printf("Loaded %d server prefixes from ConfigMap", len(serverPrefixes))
+	} else {
+		serverPrefixes = []string{}
+		serverRegex = nil
+		log.Printf("No server prefixes configured")
+	}
+}
+
 func loadSensitiveTermsFromConfigMap() {
 	sensitiveTermsEnv := os.Getenv("SENSITIVE_TERMS")
 	if sensitiveTermsEnv != "" {
@@ -182,6 +217,22 @@ func loadSensitiveTermsFromConfigMap() {
 	}
 }
 
+// Removed loadComputerPrefixes() function - was causing memory issues
+
+// Helper function to get environment variable as integer with default
+func getEnvAsInt(key string, defaultValue int) int {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid value for %s: %s, using default: %d", key, valueStr, defaultValue)
+		return defaultValue
+	}
+	return value
+}
+
 func init() {
 	adminPassword = os.Getenv("ADMIN_PASSWORD")
 
@@ -190,6 +241,15 @@ func init() {
 	if adServiceURL == "" {
 		adServiceURL = "http://yossarian-db-service:8081"
 	}
+
+	// Configure file upload limits from environment (with defaults)
+	maxTotalUploadSizeMB = getEnvAsInt("MAX_TOTAL_UPLOAD_SIZE_MB", 100)
+	maxFileSizeMB = getEnvAsInt("MAX_FILE_SIZE_MB", 50)
+	maxZipFileSizeMB = getEnvAsInt("MAX_ZIP_FILE_SIZE_MB", 10)
+	maxFileCount = getEnvAsInt("MAX_FILE_COUNT", 10)
+
+	log.Printf("File upload limits configured: Total=%dMB, PerFile=%dMB, ZipFile=%dMB, MaxFiles=%d",
+		maxTotalUploadSizeMB, maxFileSizeMB, maxZipFileSizeMB, maxFileCount)
 
 	// OIDC configuration
 	oidcEnabled = os.Getenv("OIDC_ENABLED") == "true"
@@ -210,24 +270,30 @@ func init() {
 		if err != nil {
 			log.Printf("WARNING: Failed to initialize OIDC provider: %v", err)
 			oidcEnabled = false
+			autoSSOEnabled = false
 		} else {
 			oidcProvider = provider
 			oauth2Config = &oauth2.Config{
-					ClientID:     oidcClientID,
-					ClientSecret: oidcClientSecret,
-					RedirectURL:  oidcRedirectURL,
-					Endpoint:     provider.Endpoint(),
-					Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
-				}
+				ClientID:     oidcClientID,
+				ClientSecret: oidcClientSecret,
+				RedirectURL:  oidcRedirectURL,
+				Endpoint:     provider.Endpoint(),
+				Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+			}
+			autoSSOEnabled = true // Enable auto SSO when OIDC is successfully configured
 			log.Printf("OIDC enabled with issuer: %s", oidcIssuerURL)
+			log.Printf("Auto SSO enforcement: ENABLED - all users must authenticate via OIDC")
 		}
+	} else {
+		autoSSOEnabled = false
+		log.Printf("OIDC not configured - Auto SSO enforcement: DISABLED")
 	}
 
-	// Auto SSO configuration
-	autoSSOEnabled = os.Getenv("AUTO_SSO_ENABLED") == "true"
-	
 	// Load sensitive terms from database (legacy ConfigMap as fallback)
 	loadSensitiveTerms()
+
+	// Load server prefixes from ConfigMap
+	loadServerPrefixes()
 }
 
 func getHTTPClient() *http.Client {
@@ -260,14 +326,14 @@ func oidcLoginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 		return
 	}
-	
+
 	state := generateSessionID() // Reuse your existing function
-	
+
 	// Store state in session for CSRF protection
 	sessionMutex.Lock()
 	adminSessions[state] = time.Now().Add(10 * time.Minute)
 	sessionMutex.Unlock()
-	
+
 	http.Redirect(w, r, oauth2Config.AuthCodeURL(state), http.StatusSeeOther)
 }
 
@@ -276,19 +342,19 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "OIDC not enabled", http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Verify state
 	state := r.URL.Query().Get("state")
 	sessionMutex.Lock()
 	_, validState := adminSessions[state]
 	delete(adminSessions, state)
 	sessionMutex.Unlock()
-	
+
 	if !validState {
 		http.Error(w, "Invalid state", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Exchange code for token
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, customHTTPClient)
 	token, err := oauth2Config.Exchange(ctx, r.URL.Query().Get("code"))
@@ -296,26 +362,26 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to exchange token", http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Get user info
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok {
 		http.Error(w, "No id_token", http.StatusInternalServerError)
 		return
 	}
-	
+
 	verifier := oidcProvider.Verifier(&oidc.Config{ClientID: oidcClientID})
 	idToken, err := verifier.Verify(ctx, rawIDToken)
 	if err != nil {
 		http.Error(w, "Failed to verify token", http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Extract claims including roles
 	var claims struct {
-		Email             string   `json:"email"`
-		Name              string   `json:"name"`
-		PreferredUsername string   `json:"preferred_username"`
+		Email             string `json:"email"`
+		Name              string `json:"name"`
+		PreferredUsername string `json:"preferred_username"`
 		ResourceAccess    struct {
 			YossarianGo struct {
 				Roles []string `json:"roles"`
@@ -326,7 +392,7 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		} `json:"realm_access"`
 	}
 	idToken.Claims(&claims)
-	
+
 	// Use preferred_username or email as display name
 	username := claims.PreferredUsername
 	if username == "" {
@@ -335,7 +401,7 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = "SSO User"
 	}
-	
+
 	// Extract roles (try client roles first, then realm roles)
 	var userRoles []string
 	if len(claims.ResourceAccess.YossarianGo.Roles) > 0 {
@@ -343,7 +409,7 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		userRoles = claims.RealmAccess.Roles
 	}
-	
+
 	log.Printf("OIDC: User %s has roles: %v", username, userRoles)
 	if username == "" {
 		username = claims.Email
@@ -351,7 +417,7 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = "SSO User"
 	}
-	
+
 	// Create session
 	sessionID := generateSessionID()
 	sessionMutex.Lock()
@@ -359,9 +425,9 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	sessionUsers[sessionID] = username
 	sessionRoles[sessionID] = userRoles
 	sessionMutex.Unlock()
-	
+
 	log.Printf("OIDC: User %s logged in successfully", username)
-	
+
 	cookie := &http.Cookie{
 		Name:     "admin_session",
 		Value:    sessionID,
@@ -371,7 +437,7 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   1800,
 	}
 	http.SetCookie(w, cookie)
-	
+
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -538,7 +604,29 @@ func sanitizeText(text string, userWords []string) string {
 	// 3. Replace passwords in connection strings and config files
 	result = passwordRegex.ReplaceAllString(result, "[PASSWORD-REDACTED]")
 
-	// 4. Replace sensitive terms with custom replacements
+	// 4. Replace AD accounts with caching (case-insensitive)
+	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
+		// Always normalize to lowercase for consistent cache lookups
+		normalizedAccount := strings.ToLower(account)
+		if usn := lookupADAccountCached(normalizedAccount); usn != "" {
+			return usn
+		}
+		// If not found in AD database, preserve original text (not an AD account)
+		return account
+	})
+
+	// 4b. Replace server accounts with dynamic prefix matching
+	if serverRegex != nil {
+		result = serverRegex.ReplaceAllStringFunc(result, func(account string) string {
+			normalizedAccount := strings.ToLower(account)
+			if usn := lookupADAccountCached(normalizedAccount); usn != "" {
+				return usn
+			}
+			return account
+		})
+	}
+
+	// 5. Replace sensitive terms with custom replacements
 	if sensitiveRegex != nil {
 		result = sensitiveRegex.ReplaceAllStringFunc(result, func(match string) string {
 			for term, replacement := range sensitiveTermsMap {
@@ -550,20 +638,12 @@ func sanitizeText(text string, userWords []string) string {
 		})
 	}
 
-	// 5. Replace user words
+	// 6. Replace user words
 	for _, word := range userWords {
 		if word != "" && len(word) > 2 {
 			result = strings.ReplaceAll(result, word, "[USER-SENSITIVE]")
 		}
 	}
-
-	// 6. Replace AD accounts with caching
-	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
-		if usn := lookupADAccountCached(account); usn != "" {
-			return usn
-		}
-		return "[AD-UNKNOWN]"
-	})
 
 	// 7. Replace IPs
 	result = ipRegex.ReplaceAllStringFunc(result, func(ip string) string {
@@ -621,19 +701,30 @@ func userInfoHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"authenticated": false}`)
 		return
 	}
-	
+
 	sessionMutex.Lock()
 	username, exists := sessionUsers[cookie.Value]
 	sessionMutex.Unlock()
-	
+
 	if !exists {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"authenticated": false}`)
 		return
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"authenticated": true, "username": "%s"}`, username)
+}
+
+func configLimitsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	config := map[string]interface{}{
+		"max_total_upload_size_mb": maxTotalUploadSizeMB,
+		"max_file_size_mb":         maxFileSizeMB,
+		"max_zip_file_size_mb":     maxZipFileSizeMB,
+		"max_file_count":           maxFileCount,
+	}
+	json.NewEncoder(w).Encode(config)
 }
 
 func debugHandler(w http.ResponseWriter, r *http.Request) {
@@ -650,9 +741,9 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := r.ParseMultipartForm(100 << 20) // 100MB total
+	err := r.ParseMultipartForm(int64(maxTotalUploadSizeMB) << 20)
 	if err != nil {
-		http.Error(w, "Files too large", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Files too large (max %dMB total)", maxTotalUploadSizeMB), http.StatusBadRequest)
 		return
 	}
 
@@ -662,8 +753,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(files) > 10 {
-		http.Error(w, "Maximum 10 files allowed", http.StatusBadRequest)
+	if len(files) > maxFileCount {
+		http.Error(w, fmt.Sprintf("Maximum %d files allowed", maxFileCount), http.StatusBadRequest)
 		return
 	}
 
@@ -689,9 +780,10 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, fileHeader := range files {
-		// Check file size (50MB per file)
-		if fileHeader.Size > 50*1024*1024 {
-			continue // Skip files over 50MB
+		// Check file size
+		if fileHeader.Size > int64(maxFileSizeMB)*1024*1024 {
+			log.Printf("Skipping file %s: exceeds %dMB limit", fileHeader.Filename, maxFileSizeMB)
+			continue
 		}
 
 		file, err := fileHeader.Open()
@@ -748,14 +840,14 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Calculate processing time for ZIP (use file start time)
 			zipProcessingTime := time.Since(fileStartTime)
-			
+
 			// Store results for the entire ZIP file
 			result := map[string]interface{}{
 				"filename":          fileHeader.Filename,
 				"original_size":     len(content),
 				"sanitized_size":    len(sanitizedZipData),
 				"processing_time":   fmt.Sprintf("%.2fs", zipProcessingTime.Seconds()),
-				"total_ips":         0,     // Will be calculated below
+				"total_ips":         0, // Will be calculated below
 				"ad_accounts":       0,
 				"jwt_tokens":        0,
 				"private_keys":      0,
@@ -872,7 +964,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	log.Printf("Total files available for download: %d", len(lastSanitizedFiles))
-	
+
 	lastSanitizedContent = combinedSanitized
 	lastSanitizedFilename = "sanitized-files.txt"
 
@@ -906,9 +998,9 @@ func extractZipContent(zipData []byte) []ExtractedFile {
 			continue
 		}
 
-		// Skip very large files (>10MB extracted)
-		if file.UncompressedSize64 > 10*1024*1024 {
-			log.Printf("Skipping large file in ZIP: %s (%d bytes)", file.Name, file.UncompressedSize64)
+		// Skip very large files in ZIP
+		if file.UncompressedSize64 > uint64(maxZipFileSizeMB)*1024*1024 {
+			log.Printf("Skipping large file in ZIP: %s (%d bytes, max %dMB)", file.Name, file.UncompressedSize64, maxZipFileSizeMB)
 			continue
 		}
 
@@ -998,7 +1090,7 @@ func downloadAllZipHandler(w http.ResponseWriter, r *http.Request) {
 	for filename := range lastSanitizedFiles {
 		log.Printf("Available file: %s", filename)
 	}
-	
+
 	if len(lastSanitizedFiles) == 0 {
 		http.Error(w, "No sanitized files available", http.StatusNotFound)
 		return
@@ -1032,7 +1124,6 @@ func downloadAllZipHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=\"sanitized-files.zip\"")
 	w.Write(buf.Bytes())
 }
-
 
 func individualFileHandler(w http.ResponseWriter, r *http.Request) {
 	filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
@@ -1069,7 +1160,7 @@ func mappingsHandler(w http.ResponseWriter, r *http.Request) {
 func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		w.Header().Set("Content-Type", "text/html")
-		
+
 		// Show SSO button if OIDC enabled
 		ssoButton := ""
 		if oidcEnabled {
@@ -1080,7 +1171,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 			</p>
 			<p style="text-align: center;">OR</p>`
 		}
-		
+
 		fmt.Fprintf(w, `
 		<h1>Yossarian Admin Login</h1>
 		%s
@@ -1094,23 +1185,23 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 		`, ssoButton)
 		return
 	}
-	
+
 	if r.Method == "POST" {
 		r.ParseForm()
 		password := r.FormValue("password")
-		
+
 		if adminPassword == "" {
 			http.Error(w, "Admin password not configured", http.StatusInternalServerError)
 			return
 		}
-		
+
 		if password == adminPassword {
 			sessionID := generateSessionID()
-			
+
 			sessionMutex.Lock()
 			adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
 			sessionMutex.Unlock()
-			
+
 			cookie := &http.Cookie{
 				Name:     "admin_session",
 				Value:    sessionID,
@@ -1120,7 +1211,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 				MaxAge:   1800,
 			}
 			http.SetCookie(w, cookie)
-			
+
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 		} else {
 			w.Header().Set("Content-Type", "text/html")
@@ -1208,7 +1299,7 @@ func proxyLDAPStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	io.Copy(w, resp.Body)
 }
@@ -1220,7 +1311,7 @@ func proxyAccountsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	io.Copy(w, resp.Body)
 }
@@ -1230,14 +1321,14 @@ func proxyLDAPSync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	resp, err := http.Post(fmt.Sprintf("%s/ldap/sync-full", adServiceURL), "application/json", nil)
 	if err != nil {
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	io.Copy(w, resp.Body)
 }
@@ -1249,7 +1340,7 @@ func proxyLDAPTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	io.Copy(w, resp.Body)
 }
@@ -1261,7 +1352,7 @@ func proxySensitiveList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	io.Copy(w, resp.Body)
 }
@@ -1271,17 +1362,17 @@ func proxySensitiveAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	resp, err := http.Post(fmt.Sprintf("%s/sensitive/add", adServiceURL), "application/json", r.Body)
 	if err != nil {
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	io.Copy(w, resp.Body)
-	
+
 	// Reload terms after adding
 	go loadSensitiveTerms()
 }
@@ -1291,7 +1382,7 @@ func proxySensitiveDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	term := r.URL.Query().Get("term")
 	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/sensitive/delete?term=%s", adServiceURL, url.QueryEscape(term)), nil)
 	client := &http.Client{}
@@ -1301,10 +1392,10 @@ func proxySensitiveDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	io.Copy(w, resp.Body)
-	
+
 	// Reload terms after deleting
 	go loadSensitiveTerms()
 }
@@ -1361,7 +1452,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/auth/oidc/login", http.StatusSeeOther)
 		return
 	}
-	
+
 	// Auto SSO: Validate user has required roles
 	if autoSSOEnabled && isValidAdminSession(r) {
 		if !hasRole(r, "admin") && !hasRole(r, "user") {
@@ -1405,12 +1496,12 @@ func clearDownloadCacheHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// Clear the global download cache
 	lastSanitizedFiles = make(map[string]string)
 	lastSanitizedContent = ""
 	lastSanitizedFilename = ""
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status": "cleared"}`)
 }
@@ -1432,6 +1523,7 @@ func main() {
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/api/userinfo", userInfoHandler)
+	http.HandleFunc("/api/config", configLimitsHandler)
 	http.HandleFunc("/upload", uploadHandler)
 	http.HandleFunc("/mappings/csv", mappingsHandler)
 	http.HandleFunc("/download/sanitized", downloadAllZipHandler)
@@ -1439,18 +1531,17 @@ func main() {
 	http.HandleFunc("/download/sanitized/", individualFileHandler)
 	http.HandleFunc("/clear-download-cache", clearDownloadCacheHandler)
 
-	
 	// Admin routes
 	http.HandleFunc("/admin/login", adminLoginHandler)
 	http.HandleFunc("/admin/logout", adminLogoutHandler)
-	
+
 	// OIDC routes
 	http.HandleFunc("/auth/oidc/login", oidcLoginHandler)
 	http.HandleFunc("/auth/oidc/callback", oidcCallbackHandler)
-	
+
 	http.HandleFunc("/admin", adminRequired(adminDashboardHandler))
 	http.HandleFunc("/admin/ad-accounts", adminRequired(adminADHandler))
-	
+
 	// Admin API proxies
 	http.HandleFunc("/admin/api/ldap/status", adminRequired(proxyLDAPStatus))
 	http.HandleFunc("/admin/api/accounts/list", adminRequired(proxyAccountsList))

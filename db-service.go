@@ -110,7 +110,7 @@ func syncLDAPAccounts() error {
 	if err != nil {
 		return fmt.Errorf("failed to clear existing accounts: %v", err)
 	}
-	
+
 	if rowsAffected, err := result.RowsAffected(); err == nil {
 		log.Printf("Cleared %d existing accounts", rowsAffected)
 	}
@@ -148,9 +148,9 @@ func syncLDAPAccounts() error {
 		log.Printf("User search page %d: got %d entries, total so far: %d",
 			pageCount, len(userSearchResult.Entries),
 			len(allUserEntries)+len(userSearchResult.Entries))
-		
+
 		allUserEntries = append(allUserEntries, userSearchResult.Entries...)
-		
+
 		pagingResult := ldap.FindControl(userSearchResult.Controls, ldap.ControlTypePaging)
 		if pagingResult == nil {
 			break
@@ -219,32 +219,34 @@ func syncLDAPAccounts() error {
 	// PROCESS & STORE RESULTS
 	// -----------------------
 	accountCount := 0
-	
+
 	// Users
 	for _, entry := range allUserEntries {
 		samAccountName := entry.GetAttributeValue("sAMAccountName")
 		usnCreated := entry.GetAttributeValue("uSNCreated")
-		
+
 		if samAccountName != "" && usnCreated != "" {
 			domainNetBios := os.Getenv("DOMAIN_NETBIOS")
 			domainFqdn := os.Getenv("DOMAIN_FQDN")
-			domainAccount := fmt.Sprintf("%s\\%s", domainNetBios, samAccountName)
-			upnAccount := fmt.Sprintf("%s@%s", samAccountName, domainFqdn)
-			bareUsername := samAccountName
-			
+
+			// Store all variants in lowercase for consistent matching
+			domainAccount := strings.ToLower(fmt.Sprintf("%s\\%s", domainNetBios, samAccountName))
+			upnAccount := strings.ToLower(fmt.Sprintf("%s@%s", samAccountName, domainFqdn))
+			bareUsername := strings.ToLower(samAccountName)
+
 			// Use real AD uSNCreated value
 			usnString := fmt.Sprintf("USN%s", usnCreated)
-			
+
 			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", domainAccount, usnString)
 			if err == nil {
 				accountCount++
 			}
-			
+
 			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", upnAccount, usnString)
 			if err == nil {
 				accountCount++
 			}
-			
+
 			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", bareUsername, usnString)
 			if err == nil {
 				accountCount++
@@ -256,20 +258,35 @@ func syncLDAPAccounts() error {
 	for _, entry := range allComputerEntries {
 		samAccountName := entry.GetAttributeValue("sAMAccountName")
 		usnCreated := entry.GetAttributeValue("uSNCreated")
-		
+
 		if samAccountName != "" && usnCreated != "" {
-			computerWithDollar := samAccountName
-			computerWithoutDollar := strings.TrimSuffix(samAccountName, "$")
-			
+			// Store computer accounts in both lowercase and uppercase variants
+			computerWithDollar := strings.ToLower(samAccountName)
+			computerWithoutDollar := strings.ToLower(strings.TrimSuffix(samAccountName, "$"))
+			computerWithDollarUpper := strings.ToUpper(samAccountName)
+			computerWithoutDollarUpper := strings.ToUpper(strings.TrimSuffix(samAccountName, "$"))
+
 			// Use real AD uSNCreated value
 			usnString := fmt.Sprintf("USN%s", usnCreated)
-			
+
+			// Store lowercase variants
 			_, err := db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", computerWithDollar, usnString)
 			if err == nil {
 				accountCount++
 			}
-			
+
 			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", computerWithoutDollar, usnString)
+			if err == nil {
+				accountCount++
+			}
+
+			// Store uppercase variants
+			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", computerWithDollarUpper, usnString)
+			if err == nil {
+				accountCount++
+			}
+
+			_, err = db.Exec("INSERT OR REPLACE INTO ad_accounts (account, usn) VALUES (?, ?)", computerWithoutDollarUpper, usnString)
 			if err == nil {
 				accountCount++
 			}
@@ -279,12 +296,15 @@ func syncLDAPAccounts() error {
 	log.Printf("LDAP sync completed: %d accounts synchronized", accountCount)
 	return nil
 }
-	
+
 func lookupHandler(w http.ResponseWriter, r *http.Request) {
 	account := strings.TrimPrefix(r.URL.Path, "/lookup/")
 
+	// Normalize to lowercase for consistent lookups
+	account = strings.ToLower(account)
+
 	var usn string
-	err := db.QueryRow("SELECT usn FROM ad_accounts WHERE UPPER(account) = UPPER(?)", account).Scan(&usn)
+	err := db.QueryRow("SELECT usn FROM ad_accounts WHERE LOWER(account) = LOWER(?)", account).Scan(&usn)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -344,11 +364,11 @@ func ldapStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Get user count (divide by 3: domain\user, user@domain, user)
 	var userCount int
 	db.QueryRow("SELECT COUNT(*) FROM ad_accounts WHERE account LIKE '%@%'").Scan(&userCount)
-	
+
 	// Get computer count (no division needed: computer$ and computer)
 	var computerCount int
 	db.QueryRow("SELECT COUNT(*) FROM ad_accounts WHERE account LIKE '%$'").Scan(&computerCount)
-	
+
 	// Total unique accounts
 	accountCount := userCount/3 + computerCount/2
 
@@ -452,7 +472,7 @@ func accountsListHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"accounts": accounts,
-		"total": len(accounts),
+		"total":    len(accounts),
 	})
 }
 
@@ -572,7 +592,7 @@ func main() {
 	http.HandleFunc("/ldap/status", ldapStatusHandler)
 	http.HandleFunc("/ldap/test", ldapTestHandler)
 	http.HandleFunc("/ldap/sync-limited", ldapLimitedSyncHandler)
-	http.HandleFunc("/ldap/sync-full", ldapLimitedSyncHandler)  // Same function, production endpoint
+	http.HandleFunc("/ldap/sync-full", ldapLimitedSyncHandler) // Same function, production endpoint
 	http.HandleFunc("/accounts/list", accountsListHandler)
 	http.HandleFunc("/sensitive/list", sensitiveListHandler)
 	http.HandleFunc("/sensitive/add", sensitiveAddHandler)
