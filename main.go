@@ -27,6 +27,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	// ✅ ADD: Prometheus client libraries
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // User info structure for future OIDC
@@ -66,9 +71,12 @@ func lookupADAccountCached(account string) string {
 	cacheMutex.RLock()
 	if cached, exists := adLookupCache[account]; exists {
 		cacheMutex.RUnlock()
+		adCacheHits.Inc() // ✅ ADD: Record cache hit
 		return cached
 	}
 	cacheMutex.RUnlock()
+
+	adCacheMisses.Inc() // ✅ ADD: Record cache miss
 
 	// Not in cache, do lookup
 	usn := lookupADAccount(account)
@@ -114,6 +122,78 @@ var (
 
 	// Auto SSO configuration
 	autoSSOEnabled bool
+)
+
+// ✅ ADD: Prometheus metrics
+var (
+	// HTTP request metrics
+	httpRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "yossarian_http_requests_total",
+			Help: "Total number of HTTP requests",
+		},
+		[]string{"method", "endpoint", "status"},
+	)
+
+	// Upload metrics
+	uploadSize = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "yossarian_upload_size_bytes",
+			Help:    "Size of uploaded files in bytes",
+			Buckets: []float64{1024, 10240, 102400, 1048576, 10485760, 104857600}, // 1KB to 100MB
+		},
+		[]string{"file_type"},
+	)
+
+	processingDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "yossarian_processing_duration_seconds",
+			Help:    "Time taken to process files",
+			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60}, // 0.1s to 60s
+		},
+		[]string{"operation"},
+	)
+
+	// Pattern detection metrics
+	patternsDetected = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "yossarian_patterns_detected_total",
+			Help: "Total number of sensitive patterns detected",
+		},
+		[]string{"pattern_type"},
+	)
+
+	// Error counter
+	errorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "yossarian_errors_total",
+			Help: "Total number of errors by type",
+		},
+		[]string{"error_type"},
+	)
+
+	// AD cache metrics
+	adCacheHits = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "yossarian_ad_cache_hits_total",
+			Help: "Total number of AD cache hits",
+		},
+	)
+
+	adCacheMisses = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "yossarian_ad_cache_misses_total",
+			Help: "Total number of AD cache misses",
+		},
+	)
+
+	// Active sessions gauge
+	activeSessions = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "yossarian_active_sessions",
+			Help: "Number of active user sessions",
+		},
+	)
 )
 
 // Simple patterns
@@ -424,6 +504,7 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
 	sessionUsers[sessionID] = username
 	sessionRoles[sessionID] = userRoles
+	activeSessions.Inc() // ✅ ADD: Track active sessions
 	sessionMutex.Unlock()
 
 	log.Printf("OIDC: User %s logged in successfully", username)
@@ -647,6 +728,8 @@ func sanitizeText(text string, userWords []string) (string, map[string]int) {
 
 		if inCache {
 			stats["ad_cache_hits"]++
+			adCacheHits.Inc()
+			adCacheHits.Inc() // ✅ ADD: Record to Prometheus
 			if cached != "" {
 				stats["ad_accounts"]++
 				return cached
@@ -656,6 +739,7 @@ func sanitizeText(text string, userWords []string) (string, map[string]int) {
 
 		// Not in cache, do lookup
 		stats["ad_cache_misses"]++
+		adCacheMisses.Inc()
 		if usn := lookupADAccountCached(normalizedAccount); usn != "" {
 			stats["ad_accounts"]++
 			return usn
@@ -1100,7 +1184,19 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			sanitizeStats["sensitive_terms"],
 			sanitizeStats["user_words"],
 			totalPatterns)
+		// ✅ ADD: Record metrics to Prometheus
+		fileExt := filepath.Ext(fileHeader.Filename)
+		uploadSize.WithLabelValues(fileExt).Observe(float64(len(content)))
+		processingDuration.WithLabelValues("upload").Observe(processingTime.Seconds())
 
+		// Record pattern detections from sanitizeStats
+		patternsDetected.WithLabelValues("ip_address").Add(float64(sanitizeStats["ip_addresses"]))
+		patternsDetected.WithLabelValues("ad_account").Add(float64(sanitizeStats["ad_accounts"]))
+		patternsDetected.WithLabelValues("jwt_token").Add(float64(sanitizeStats["jwt_tokens"]))
+		patternsDetected.WithLabelValues("private_key").Add(float64(sanitizeStats["private_keys"]))
+		patternsDetected.WithLabelValues("password").Add(float64(sanitizeStats["passwords"]))
+		patternsDetected.WithLabelValues("sensitive_term").Add(float64(sanitizeStats["sensitive_terms"]))
+		patternsDetected.WithLabelValues("user_word").Add(float64(sanitizeStats["user_words"]))
 		// Store results
 		result := map[string]interface{}{
 			"filename":          fileHeader.Filename,
@@ -1474,6 +1570,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 			sessionMutex.Lock()
 			adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
+			activeSessions.Inc()
 			sessionMutex.Unlock()
 
 			cookie := &http.Cookie{
@@ -1553,6 +1650,7 @@ func adminLogoutHandler(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		sessionMutex.Lock()
 		delete(adminSessions, cookie.Value)
+		activeSessions.Dec()
 		sessionMutex.Unlock()
 	}
 
@@ -1828,6 +1926,9 @@ func main() {
 	// Debug route
 	http.HandleFunc("/debug", debugHandler)
 
-	log.Printf("Server starting on port %s", port)
+	// ✅ ADD: Prometheus metrics endpoint
+	http.Handle("/metrics", promhttp.Handler())
+
+	log.Printf("Server starting on port %s with /metrics endpoint", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
