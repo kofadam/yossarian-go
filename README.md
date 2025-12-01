@@ -28,6 +28,9 @@ Enterprise-grade log sanitization system built in Go, designed for air-gapped en
 - **Air-gap ready** - no external dependencies
 - **Audit trails** - complete IP mapping exports
 - **Session-based auth** - secure admin panel
+  
+<img width="1402" height="993" alt="image" src="https://github.com/user-attachments/assets/88a14f1f-d9b0-4afd-909b-21c554df5777" />
+
 
 ## Quick Start
 
