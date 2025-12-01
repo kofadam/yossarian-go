@@ -1,5 +1,5 @@
 # Yossarian Go - Enterprise Log Sanitization System
-
+!Docker Image Version (latest by date)
 🛡️ **Air-gapped log sanitization with Material Design UI**
 
 ## Overview
