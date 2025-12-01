@@ -1,0 +1,45 @@
+# Yossarian Go - Prometheus ServiceMonitor
+# This tells Prometheus Operator to scrape metrics from Yossarian
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: yossarian-go
+  namespace: yossarian
+  labels:
+    app: yossarian-go
+    release: prometheus-operator  # IMPORTANT: Match your Prometheus release label
+spec:
+  selector:
+    matchLabels:
+      app: yossarian-go
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    relabelings:
+    # Add namespace label
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+    # Add pod name
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+---
+# Ensure your Service has the correct labels
+apiVersion: v1
+kind: Service
+metadata:
+  name: yossarian-go
+  namespace: yossarian
+  labels:
+    app: yossarian-go  # Must match ServiceMonitor selector
+spec:
+  selector:
+    app: yossarian-go
+  ports:
+  - name: http  # Must match ServiceMonitor endpoint port name
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP

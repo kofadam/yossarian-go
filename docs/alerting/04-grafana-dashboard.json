@@ -1,0 +1,197 @@
+{
+  "dashboard": {
+    "title": "Yossarian Go - Monitoring & Alerts",
+    "uid": "yossarian-go",
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "tags": ["yossarian", "monitoring", "alerts"],
+    "editable": true,
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Application Status",
+        "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "up{job=\"yossarian-go\"}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "green"}
+              ]
+            },
+            "mappings": [
+              {"type": "value", "value": "0", "text": "DOWN"},
+              {"type": "value", "value": "1", "text": "UP"}
+            ]
+          }
+        },
+        "options": {
+          "colorMode": "background",
+          "textMode": "value_and_name"
+        }
+      },
+      {
+        "id": 2,
+        "type": "graph",
+        "title": "Request Rate (req/sec)",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+        "targets": [
+          {
+            "expr": "rate(yossarian_http_requests_total[5m])",
+            "legendFormat": "{{ method }} {{ endpoint }}",
+            "refId": "A"
+          }
+        ],
+        "alert": {
+          "name": "High Request Rate",
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [100],
+                "type": "gt"
+              },
+              "operator": {"type": "and"},
+              "query": {
+                "params": ["A", "5m", "now"]
+              },
+              "reducer": {
+                "params": [],
+                "type": "avg"
+              },
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "frequency": "1m",
+          "handler": 1,
+          "message": "Request rate exceeded 100 req/sec",
+          "noDataState": "no_data",
+          "notifications": []
+        }
+      },
+      {
+        "id": 3,
+        "type": "graph",
+        "title": "Error Rate",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+        "targets": [
+          {
+            "expr": "rate(yossarian_errors_total[5m])",
+            "legendFormat": "{{ error_type }}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "label": "Errors/sec"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "type": "graph",
+        "title": "Processing Time (P95)",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(yossarian_processing_duration_seconds_bucket[5m]))",
+            "legendFormat": "{{ operation }}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "s",
+            "label": "Duration"
+          }
+        ],
+        "alert": {
+          "name": "Slow Processing",
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [10],
+                "type": "gt"
+              },
+              "operator": {"type": "and"},
+              "query": {
+                "params": ["A", "5m", "now"]
+              },
+              "reducer": {
+                "params": [],
+                "type": "avg"
+              },
+              "type": "query"
+            }
+          ],
+          "frequency": "1m",
+          "message": "P95 processing time > 10 seconds"
+        }
+      },
+      {
+        "id": 5,
+        "type": "graph",
+        "title": "Pattern Detection Rate",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+        "targets": [
+          {
+            "expr": "rate(yossarian_patterns_detected_total[5m])",
+            "legendFormat": "{{ pattern_type }}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "type": "stat",
+        "title": "AD Cache Hit Rate",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 20},
+        "targets": [
+          {
+            "expr": "rate(yossarian_ad_cache_hits_total[5m]) / (rate(yossarian_ad_cache_hits_total[5m]) + rate(yossarian_ad_cache_misses_total[5m]))",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 0.7, "color": "yellow"},
+                {"value": 0.9, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 7,
+        "type": "stat",
+        "title": "Active Sessions",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 20},
+        "targets": [
+          {
+            "expr": "yossarian_active_sessions",
+            "refId": "A"
+          }
+        ]
+      }
+    ]
+  }
+}

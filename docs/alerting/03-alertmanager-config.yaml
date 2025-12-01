@@ -1,0 +1,231 @@
+# AlertManager Configuration for Yossarian Go
+# This defines HOW alerts are routed and WHERE they are sent
+
+# Apply this as a Secret in the monitoring namespace
+# kubectl create secret generic alertmanager-config \
+#   --from-file=alertmanager.yaml=03-alertmanager-config.yaml \
+#   -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+global:
+  # How long to wait before declaring alert resolved
+  resolve_timeout: 5m
+  
+  # SMTP settings for email notifications
+  smtp_from: 'alertmanager@company.com'
+  smtp_smarthost: 'smtp.company.com:587'
+  smtp_auth_username: 'alertmanager'
+  smtp_auth_password: 'YOUR_SMTP_PASSWORD'  # Use secret!
+  smtp_require_tls: true
+
+# Optional: Custom message templates
+templates:
+- '/etc/alertmanager/config/*.tmpl'
+
+# ========================================
+# ROUTING TREE
+# ========================================
+route:
+  # Default receiver if no routes match
+  receiver: 'default-notifications'
+  
+  # Group alerts by these labels
+  group_by: ['alertname', 'cluster', 'namespace']
+  
+  # Wait 30s before sending first notification (to group similar alerts)
+  group_wait: 30s
+  
+  # Wait 5m before sending additional alerts in same group
+  group_interval: 5m
+  
+  # Resend alert every 12h if still firing
+  repeat_interval: 12h
+
+  # ========================================
+  # SUB-ROUTES (specific routing rules)
+  # ========================================
+  routes:
+  
+  # CRITICAL alerts → PagerDuty + Slack
+  - match:
+      severity: critical
+    receiver: 'critical-alerts'
+    group_wait: 10s
+    repeat_interval: 5m
+    continue: true  # Also match subsequent routes
+    
+  # Yossarian-specific alerts → Yossarian team
+  - match_re:
+      alertname: 'Yossarian.*'
+    receiver: 'yossarian-team'
+    group_by: ['alertname', 'component']
+    routes:
+    
+      # Database issues → Also notify DB team
+      - match:
+          component: database
+        receiver: 'database-team'
+        continue: true
+        
+      # Performance issues → Platform team
+      - match:
+          component: performance
+        receiver: 'platform-team'
+        
+      # Security-related → Security team
+      - match:
+          component: security
+        receiver: 'security-team'
+
+  # INFO level alerts → Logging only (no pages)
+  - match:
+      severity: info
+    receiver: 'info-logger'
+    group_interval: 1h
+    repeat_interval: 24h
+
+# ========================================
+# INHIBITION RULES
+# ========================================
+# Suppress less important alerts when more severe ones are firing
+inhibit_rules:
+
+# If application is down, don't alert on performance
+- source_match:
+    alertname: 'YossarianDown'
+  target_match_re:
+    alertname: 'Yossarian(Slow|High).*'
+  equal: ['namespace', 'pod']
+
+# If pod is restarting, suppress memory alerts
+- source_match:
+    alertname: 'YossarianPodRestartLoop'
+  target_match:
+    alertname: 'YossarianHighMemoryUsage'
+  equal: ['namespace', 'pod']
+
+# Critical suppresses warnings
+- source_match:
+    severity: 'critical'
+  target_match:
+    severity: 'warning'
+  equal: ['alertname', 'namespace']
+
+# ========================================
+# RECEIVERS (Notification Destinations)
+# ========================================
+receivers:
+
+# Default: Slack general channel
+- name: 'default-notifications'
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/WEBHOOK/URL'
+    channel: '#platform-alerts'
+    username: 'AlertManager'
+    color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+    title: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+    text: |-
+      {{ range .Alerts }}
+      *Alert:* {{ .Labels.alertname }}
+      *Severity:* {{ .Labels.severity }}
+      *Summary:* {{ .Annotations.summary }}
+      *Description:* {{ .Annotations.description }}
+      {{ if .Labels.namespace }}*Namespace:* {{ .Labels.namespace }}{{ end }}
+      {{ if .Annotations.runbook_url }}*Runbook:* {{ .Annotations.runbook_url }}{{ end }}
+      {{ end }}
+    send_resolved: true
+
+# Critical alerts → PagerDuty
+- name: 'critical-alerts'
+  pagerduty_configs:
+  - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
+    description: '{{ template "pagerduty.default.description" . }}'
+    details:
+      firing: '{{ template "pagerduty.default.instances" .Alerts.Firing }}'
+      resolved: '{{ template "pagerduty.default.instances" .Alerts.Resolved }}'
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/CRITICAL/WEBHOOK'
+    channel: '#critical-alerts'
+    username: 'CRITICAL AlertManager'
+    color: 'danger'
+    title: '🚨 CRITICAL: {{ .GroupLabels.alertname }}'
+    text: |-
+      @channel CRITICAL ALERT
+      {{ range .Alerts }}
+      *Summary:* {{ .Annotations.summary }}
+      *Description:* {{ .Annotations.description }}
+      *Time:* {{ .StartsAt.Format "2006-01-02 15:04:05" }}
+      {{ end }}
+
+# Yossarian team notifications
+- name: 'yossarian-team'
+  email_configs:
+  - to: 'yossarian-team@company.com'
+    headers:
+      Subject: '[{{ .Status }}] Yossarian Alert: {{ .GroupLabels.alertname }}'
+    html: |
+      <h2>Yossarian Alert: {{ .GroupLabels.alertname }}</h2>
+      <p><strong>Status:</strong> {{ .Status }}</p>
+      {{ range .Alerts }}
+      <h3>{{ .Labels.alertname }}</h3>
+      <ul>
+        <li><strong>Severity:</strong> {{ .Labels.severity }}</li>
+        <li><strong>Component:</strong> {{ .Labels.component }}</li>
+        <li><strong>Summary:</strong> {{ .Annotations.summary }}</li>
+        <li><strong>Description:</strong> {{ .Annotations.description }}</li>
+        <li><strong>Started:</strong> {{ .StartsAt.Format "2006-01-02 15:04:05 MST" }}</li>
+        {{ if .Annotations.runbook_url }}
+        <li><strong>Runbook:</strong> <a href="{{ .Annotations.runbook_url }}">{{ .Annotations.runbook_url }}</a></li>
+        {{ end }}
+      </ul>
+      {{ end }}
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/YOSSARIAN/WEBHOOK'
+    channel: '#yossarian-alerts'
+    username: 'Yossarian AlertManager'
+    icon_emoji: ':shield:'
+    color: '{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}danger{{ else }}warning{{ end }}{{ else }}good{{ end }}'
+    title: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+    text: |-
+      *Component:* {{ .GroupLabels.component }}
+      {{ range .Alerts }}
+      *Summary:* {{ .Annotations.summary }}
+      *Details:* {{ .Annotations.description }}
+      {{ if .Annotations.dashboard }}*Dashboard:* <{{ .Annotations.dashboard }}|View in Grafana>{{ end }}
+      {{ end }}
+    actions:
+    - type: button
+      text: 'View Runbook'
+      url: '{{ (index .Alerts 0).Annotations.runbook_url }}'
+    - type: button
+      text: 'View in AlertManager'
+      url: '{{ .ExternalURL }}'
+
+# Database team
+- name: 'database-team'
+  email_configs:
+  - to: 'db-team@company.com'
+    headers:
+      Subject: '[DB] Yossarian Alert: {{ .GroupLabels.alertname }}'
+
+# Platform team
+- name: 'platform-team'
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/PLATFORM/WEBHOOK'
+    channel: '#platform-performance'
+
+# Security team
+- name: 'security-team'
+  email_configs:
+  - to: 'security-team@company.com'
+    headers:
+      Subject: '[SECURITY] Yossarian Alert: {{ .GroupLabels.alertname }}'
+
+# Info alerts → Just log to Slack
+- name: 'info-logger'
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/INFO/WEBHOOK'
+    channel: '#yossarian-info'
+    username: 'Yossarian Info'
+    color: 'good'
+    title: 'ℹ️ {{ .GroupLabels.alertname }}'
+    send_resolved: false

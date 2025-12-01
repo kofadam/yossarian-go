@@ -1,0 +1,218 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: yossarian-alerts
+  namespace: yossarian
+  labels:
+    app: yossarian-go
+    prometheus: kube-prometheus  # Match your Prometheus instance label
+    role: alert-rules
+spec:
+  groups:
+  
+  # ========================================
+  # Application Health & Availability
+  # ========================================
+  - name: yossarian-availability
+    interval: 30s
+    rules:
+    
+    - alert: YossarianDown
+      expr: up{job="yossarian-go"} == 0
+      for: 1m
+      labels:
+        severity: critical
+        component: availability
+        team: platform
+      annotations:
+        summary: "Yossarian Go application is down"
+        description: "Prometheus cannot scrape metrics from Yossarian Go in namespace {{ $labels.namespace }} for 1 minute"
+        runbook_url: "https://runbooks.company.com/yossarian/down"
+        dashboard: "https://grafana.company.com/d/yossarian"
+
+    - alert: YossarianPodRestartLoop
+      expr: |
+        rate(kube_pod_container_status_restarts_total{
+          namespace="yossarian",
+          pod=~"yossarian-go-.*"
+        }[15m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+        component: infrastructure
+        team: platform
+      annotations:
+        summary: "Yossarian Go pod {{ $labels.pod }} is restarting frequently"
+        description: "Pod has restarted {{ $value | humanize }} times in 15 minutes"
+        
+    - alert: YossarianHighMemoryUsage
+      expr: |
+        (container_memory_working_set_bytes{
+          namespace="yossarian",
+          pod=~"yossarian-go-.*"
+        } / container_spec_memory_limit_bytes{
+          namespace="yossarian",
+          pod=~"yossarian-go-.*"
+        }) > 0.85
+      for: 5m
+      labels:
+        severity: warning
+        component: resources
+      annotations:
+        summary: "Yossarian Go is using high memory"
+        description: "Pod {{ $labels.pod }} memory usage is {{ $value | humanizePercentage }}"
+
+  # ========================================
+  # Application Performance
+  # ========================================
+  - name: yossarian-performance
+    interval: 30s
+    rules:
+    
+    - alert: YossarianSlowFileProcessing
+      expr: |
+        histogram_quantile(0.95, 
+          rate(yossarian_processing_duration_seconds_bucket{
+            operation="upload"
+          }[5m])
+        ) > 10
+      for: 5m
+      labels:
+        severity: warning
+        component: performance
+      annotations:
+        summary: "Yossarian file processing is slow"
+        description: "95th percentile upload processing time is {{ $value | humanizeDuration }} (threshold: 10s)"
+        
+    - alert: YossarianHighErrorRate
+      expr: |
+        (
+          sum(rate(yossarian_errors_total[5m])) 
+          / 
+          sum(rate(yossarian_http_requests_total[5m]))
+        ) > 0.05
+      for: 3m
+      labels:
+        severity: warning
+        component: application
+      annotations:
+        summary: "High error rate in Yossarian Go"
+        description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+    - alert: YossarianNoRequests
+      expr: |
+        rate(yossarian_http_requests_total[5m]) == 0
+      for: 10m
+      labels:
+        severity: info
+        component: monitoring
+      annotations:
+        summary: "Yossarian Go is not receiving requests"
+        description: "No HTTP requests in the last 10 minutes - may indicate network issue or low usage"
+
+  # ========================================
+  # Upload & Processing Metrics
+  # ========================================
+  - name: yossarian-uploads
+    interval: 30s
+    rules:
+    
+    - alert: YossarianHighUploadVolume
+      expr: |
+        rate(yossarian_http_requests_total{endpoint="/upload"}[5m]) > 10
+      for: 5m
+      labels:
+        severity: info
+        component: capacity
+      annotations:
+        summary: "High upload volume in Yossarian Go"
+        description: "Upload rate is {{ $value | humanize }} requests/sec (threshold: 10/sec)"
+        
+    - alert: YossarianLargeFilesDetected
+      expr: |
+        histogram_quantile(0.95, 
+          rate(yossarian_upload_size_bytes_bucket[5m])
+        ) > 52428800  # 50MB
+      for: 10m
+      labels:
+        severity: info
+        component: capacity
+      annotations:
+        summary: "Large files being uploaded to Yossarian"
+        description: "95th percentile upload size is {{ $value | humanize1024 }}B"
+
+  # ========================================
+  # Database Service Health
+  # ========================================
+  - name: yossarian-database
+    interval: 30s
+    rules:
+    
+    - alert: YossarianDBServiceDown
+      expr: up{job="yossarian-db-service"} == 0
+      for: 1m
+      labels:
+        severity: critical
+        component: database
+      annotations:
+        summary: "Yossarian DB Service is down"
+        description: "The database service pod is not responding to health checks"
+
+    - alert: YossarianHighADCacheMissRate
+      expr: |
+        (
+          rate(yossarian_ad_cache_misses_total[5m]) 
+          / 
+          (rate(yossarian_ad_cache_hits_total[5m]) + rate(yossarian_ad_cache_misses_total[5m]))
+        ) > 0.3
+      for: 10m
+      labels:
+        severity: warning
+        component: database
+      annotations:
+        summary: "High AD cache miss rate in Yossarian"
+        description: "Cache miss rate is {{ $value | humanizePercentage }} (threshold: 30%)"
+
+    - alert: YossarianLDAPSyncStale
+      expr: |
+        (time() - yossarian_ldap_last_sync_timestamp) > 86400  # 24 hours
+      for: 5m
+      labels:
+        severity: warning
+        component: integration
+      annotations:
+        summary: "LDAP sync is stale"
+        description: "Last successful LDAP sync was {{ $value | humanizeDuration }} ago"
+
+  # ========================================
+  # Pattern Detection Metrics
+  # ========================================
+  - name: yossarian-detection
+    interval: 30s
+    rules:
+    
+    - alert: YossarianLowPatternDetection
+      expr: |
+        (
+          sum(rate(yossarian_patterns_detected_total[10m])) 
+          / 
+          sum(rate(yossarian_http_requests_total{endpoint="/upload"}[10m]))
+        ) < 1
+      for: 30m
+      labels:
+        severity: info
+        component: detection
+      annotations:
+        summary: "Low pattern detection rate"
+        description: "Detecting less than 1 pattern per upload - may indicate issue with regex patterns or clean data"
+
+    - alert: YossarianHighSensitiveDataVolume
+      expr: |
+        rate(yossarian_patterns_detected_total{pattern_type="ip_address"}[5m]) > 1000
+      for: 10m
+      labels:
+        severity: info
+        component: security
+      annotations:
+        summary: "High volume of sensitive patterns detected"
+        description: "Detecting {{ $value | humanize }} IP addresses per second"
