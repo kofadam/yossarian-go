@@ -30,6 +30,13 @@ Enterprise-grade log sanitization system built in Go, designed for air-gapped en
 - **Audit trails** – complete IP mapping exports
 - **Session-based auth** – secure admin panel
 
+### 📊 Monitoring & Observability
+- **Prometheus metrics** - `/metrics` endpoint with comprehensive instrumentation
+- **Alert rules** - Production-ready alerts for availability, performance, and errors
+- **Grafana dashboards** - Pre-built dashboards for visualization
+- **Cache metrics** - AD lookup cache hit/miss tracking
+- **Pattern detection** - Real-time pattern detection statistics
+
 <img width="1402" height="993" alt="image" src="https://github.com/user-attachments/assets/88a14f1f-d9b0-4afd-909b-21c554df5777" />
 
 ## Docker Images
@@ -56,3 +63,37 @@ docker-compose up --build
 http://localhost:8080        # Main interface
 http://localhost:8080/admin  # Admin panel (password: admin123)
 ```
+## Monitoring
+
+### Prometheus Metrics
+
+The application exposes metrics at `/metrics`:
+
+- `yossarian_http_requests_total` - HTTP request counter by method/endpoint/status
+- `yossarian_upload_size_bytes` - Histogram of uploaded file sizes
+- `yossarian_processing_duration_seconds` - Processing time histogram
+- `yossarian_patterns_detected_total` - Counter for each pattern type (IP, AD, JWT, etc.)
+- `yossarian_errors_total` - Error counter by type
+- `yossarian_ad_cache_hits_total` - AD cache hit counter
+- `yossarian_ad_cache_misses_total` - AD cache miss counter
+- `yossarian_active_sessions` - Current active sessions gauge
+
+### Alert Rules
+
+Production-ready alerts included:
+
+**Critical Alerts:**
+- `YossarianDown` - Application completely down
+- `YossarianPodRestartLoop` - Pod crash looping
+- `YossarianDBServiceDown` - Database service unavailable
+
+**Warning Alerts:**
+- `YossarianHighErrorRate` - Error rate > 5%
+- `YossarianSlowFileProcessing` - P95 processing time > 10s
+- `YossarianHighMemoryUsage` - Memory usage > 85%
+- `YossarianHighADCacheMissRate` - Cache miss rate > 30%
+
+**Info Alerts:**
+- `YossarianHighUploadVolume` - High upload traffic
+- `YossarianLargeFilesUploaded` - Large files being processed
+- `YossarianNoRequests` - No traffic received
