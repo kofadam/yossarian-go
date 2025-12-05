@@ -424,6 +424,19 @@
             100% { transform: translateX(100%); }
         }
 
+        /* Details/Summary styling */
+        details summary::-webkit-details-marker {
+            display: none;
+        }
+        
+        details[open] #wordsToggleIcon {
+            transform: rotate(90deg);
+        }
+        
+        details summary:hover {
+            background: var(--md-surface-variant);
+        }
+
         .progress-text {
             font-size: 12px;
             color: var(--md-on-surface-variant);
@@ -976,30 +989,79 @@
 
         <!-- Personal Sensitive Words -->
         <div class="card">
-            <div class="card-header">
-                <h2 class="card-title">🔒 Personal Sensitive Words</h2>
-                <div class="card-subtitle">Add your own sensitive terms (stored securely in browser)</div>
-            </div>
-            <div class="card-content">
-                <div class="words-section">
-                    <div class="textarea-field">
-                        <label for="sensitiveWords">Sensitive Terms</label>
-                        <textarea 
-                            id="sensitiveWords" 
-                            placeholder="Enter words separated by commas, e.g.: MyCompany, SecretProject, internal-server, DatabasePassword123"
-                        ></textarea>
+            <details>
+                <summary style="padding: 20px 24px; font-size: 16px; font-weight: 500; color: var(--md-primary); cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px;">
+                    <span style="font-size: 14px; transition: transform 0.3s;" id="wordsToggleIcon">▶</span>
+                    🔐 Personal Sensitive Words
+                    <span style="font-size: 14px; color: var(--md-on-surface-variant); font-weight: 400;" id="wordsCount">(0 words stored)</span>
+                </summary>
+                
+                <div class="card-content" style="padding-top: 0;">
+                    <div class="card-subtitle" style="margin-bottom: 16px; color: var(--md-on-surface-variant);">
+                        Add your own sensitive terms (stored encrypted in browser)
                     </div>
-                    <div class="button-group">
-                        <button type="button" class="btn btn-primary" onclick="saveWords()">
-                            💾 Save Words
-                        </button>
-                        <button type="button" class="btn btn-secondary" onclick="clearWords()">
-                            🗑️ Clear All
-                        </button>
-                    </div>
+                    
                     <div class="status-message" id="wordsStatus"></div>
+                    
+                    <!-- Words Table -->
+                    <div class="table-container" style="margin-bottom: 16px;">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 40%;">Term</th>
+                                    <th style="width: 40%;">Replacement</th>
+                                    <th style="width: 20%; text-align: center;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="personalWordsTable">
+                                <tr>
+                                    <td colspan="3" style="text-align: center; color: var(--md-on-surface-variant); padding: 20px;">
+                                        No personal words added yet
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Add New Word Form -->
+                    <div style="background: var(--md-surface-variant); padding: 16px; border-radius: 8px;">
+                        <div style="font-weight: 500; margin-bottom: 12px; color: var(--md-on-surface);">
+                            ➕ Add New Word
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end;">
+                            <div>
+                                <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 6px;">
+                                    TERM
+                                </label>
+                                <input 
+                                    type="text" 
+                                    id="newWordTerm" 
+                                    placeholder="MyCompany"
+                                    style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;"
+                                />
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 6px;">
+                                    REPLACEMENT
+                                </label>
+                                <input 
+                                    type="text" 
+                                    id="newWordReplacement" 
+                                    placeholder="[SNIPPED]"
+                                    style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;"
+                                    onkeypress="if(event.key==='Enter') addPersonalWord()"
+                                />
+                            </div>
+                            <button type="button" class="btn btn-primary" onclick="addPersonalWord()">
+                                ➕ Add
+                            </button>
+                        </div>
+                        <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 8px;">
+                            💡 Leave replacement empty to use default: [SNIPPED]
+                        </div>
+                    </div>
                 </div>
-            </div>
+            </details>
         </div>
 
         <!-- File Upload & Processing -->
@@ -1164,7 +1226,7 @@
         // Initialize on page load
         window.onload = function() {
             loadConfigLimits();
-            loadWords();
+            displayPersonalWords(); // Load personal words table
             initializeFileUpload();
             createDownloadButtons(); // Initialize empty download section
         };
@@ -1514,6 +1576,13 @@
             // Add detailed report flag
             const detailedReportEnabled = document.getElementById('detailedReportCheckbox').checked;
             formData.append('generate_detailed_report', detailedReportEnabled ? 'true' : 'false');
+            
+            // Add personal sensitive words from new format
+            const personalWords = getPersonalWordsForSanitization();
+            if (personalWords) {
+                // Set as cookie for backend to read
+                setCookie('sensitive_words', personalWords, 1); // 1 day expiry
+            }
 
             const response = await fetch('/upload', {
                 method: 'POST',
@@ -1666,7 +1735,143 @@
             createDownloadButtons();
         }
 
-        // Sensitive Words Management
+        // ============================================
+        // PERSONAL SENSITIVE WORDS MANAGEMENT
+        // ============================================
+        
+        // Simple XOR encryption for localStorage
+        function encryptWords(text) {
+            const key = 'yossarian-' + window.location.hostname;
+            return btoa(text.split('').map((c, i) => 
+                String.fromCharCode(c.charCodeAt(0) ^ key.charCodeAt(i % key.length))
+            ).join(''));
+        }
+        
+        function decryptWords(encrypted) {
+            const key = 'yossarian-' + window.location.hostname;
+            try {
+                return atob(encrypted).split('').map((c, i) => 
+                    String.fromCharCode(c.charCodeAt(0) ^ key.charCodeAt(i % key.length))
+                ).join('');
+            } catch (e) {
+                return null;
+            }
+        }
+        
+        // Get personal words from encrypted localStorage
+        function getPersonalWords() {
+            try {
+                const encrypted = localStorage.getItem('personal_sensitive_words');
+                if (!encrypted) return [];
+                
+                const decrypted = decryptWords(encrypted);
+                if (!decrypted) return [];
+                
+                return JSON.parse(decrypted);
+            } catch (e) {
+                console.error('Failed to load personal words:', e);
+                return [];
+            }
+        }
+        
+        // Save personal words to encrypted localStorage
+        function savePersonalWords(words) {
+            try {
+                const json = JSON.stringify(words);
+                const encrypted = encryptWords(json);
+                localStorage.setItem('personal_sensitive_words', encrypted);
+                return true;
+            } catch (e) {
+                console.error('Failed to save personal words:', e);
+                return false;
+            }
+        }
+        
+        // Display personal words in table
+        function displayPersonalWords() {
+            const words = getPersonalWords();
+            const tbody = document.getElementById('personalWordsTable');
+            const countSpan = document.getElementById('wordsCount');
+            
+            countSpan.textContent = `(${words.length} word${words.length !== 1 ? 's' : ''} stored)`;
+            
+            if (words.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="3" style="text-align: center; color: var(--md-on-surface-variant); padding: 20px;">
+                            No personal words added yet
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = words.map((word, index) => `
+                <tr>
+                    <td><code style="background: var(--md-surface-variant); padding: 4px 8px; border-radius: 4px;">${escapeHtml(word.term)}</code></td>
+                    <td><code style="background: var(--md-surface-variant); padding: 4px 8px; border-radius: 4px;">${escapeHtml(word.replacement)}</code></td>
+                    <td style="text-align: center;">
+                        <button class="btn btn-error" style="padding: 6px 12px; font-size: 12px;" onclick="removePersonalWord(${index})">
+                            🗑️ Remove
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+        
+        // Add new personal word
+        function addPersonalWord() {
+            const termInput = document.getElementById('newWordTerm');
+            const replacementInput = document.getElementById('newWordReplacement');
+            
+            const term = termInput.value.trim();
+            const replacement = replacementInput.value.trim() || '[SNIPPED]';
+            
+            if (!term) {
+                showStatus('error', 'Please enter a term', 'wordsStatus');
+                return;
+            }
+            
+            // Check for duplicates
+            const words = getPersonalWords();
+            if (words.some(w => w.term.toLowerCase() === term.toLowerCase())) {
+                showStatus('error', `Term "${term}" already exists`, 'wordsStatus');
+                return;
+            }
+            
+            // Add word
+            words.push({ term, replacement });
+            
+            if (savePersonalWords(words)) {
+                showStatus('success', `Added "${term}" → "${replacement}"`, 'wordsStatus');
+                termInput.value = '';
+                replacementInput.value = '';
+                displayPersonalWords();
+            } else {
+                showStatus('error', 'Failed to save word', 'wordsStatus');
+            }
+        }
+        
+        // Remove personal word
+        function removePersonalWord(index) {
+            const words = getPersonalWords();
+            const removed = words.splice(index, 1)[0];
+            
+            if (savePersonalWords(words)) {
+                showStatus('success', `Removed "${removed.term}"`, 'wordsStatus');
+                displayPersonalWords();
+            } else {
+                showStatus('error', 'Failed to remove word', 'wordsStatus');
+            }
+        }
+        
+        // Get words as comma-separated string (for backend)
+        function getPersonalWordsForSanitization() {
+            const words = getPersonalWords();
+            return words.map(w => w.term).join(',');
+        }
+        
+        // Legacy function support (deprecated but keeping for compatibility)
         function loadWords() {
             const words = getCookie('sensitive_words');
             if (words) {

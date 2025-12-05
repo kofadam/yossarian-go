@@ -1584,7 +1584,7 @@ func downloadDetailedReportHandler(w http.ResponseWriter, r *http.Request) {
 	// Send CSV file
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"yossarian-detailed-report-%s.csv\"",
-		time.Now().Format("2006-01-02")))
+		time.Now().Format("2006-01-02_15-04-05")))
 	w.Write(buf.Bytes())
 
 	log.Printf("[AUDIT] Detailed report downloaded: user=%s, replacements=%d, size_kb=%.2f",
@@ -1695,7 +1695,8 @@ func mappingsHandler(w http.ResponseWriter, r *http.Request) {
 	defer mapMutex.Unlock()
 
 	w.Header().Set("Content-Type", "text/csv")
-	w.Header().Set("Content-Disposition", "attachment; filename=\"ip_mappings.csv\"")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"yossarian-ip-mappings-%s.csv\"",
+		time.Now().Format("2006-01-02_15-04-05")))
 
 	fmt.Fprintf(w, "original_ip,placeholder,type,timestamp\n")
 	for original, placeholder := range ipMappings {
