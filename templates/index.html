@@ -399,6 +399,29 @@
             border-radius: 4px;
             transition: width 0.3s ease;
             width: 0%;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(255, 255, 255, 0.3),
+                transparent
+            );
+            animation: shimmer 1.5s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
         }
 
         .progress-text {
@@ -732,6 +755,17 @@
             .container {
                 padding: 16px;
             }
+            
+            /* Stack Hebrew box on mobile */
+            .card-content[style*="justify-content: space-between"] {
+                flex-direction: column !important;
+                gap: 16px !important;
+                text-align: center !important;
+            }
+            
+            .card-content[style*="justify-content: space-between"] > div {
+                text-align: center !important;
+            }
 
             .button-group {
                 flex-direction: column;
@@ -775,17 +809,21 @@
             <div class="auth-info">🔐 Authenticated via Enterprise SSO</div>
         </div>
 
-        <!-- Hebrew Documentation Link -->
+                <!-- Hebrew Documentation Link -->
         <div class="card" style="background: linear-gradient(135deg, #e8f5e9, #c8e6c9); border-left: 4px solid #4caf50;">
-            <div class="card-content" style="text-align: center; padding: 30px;">
-                <div style="font-size: 48px; margin-bottom: 16px;">📖</div>
-                <h2 style="font-size: 24px; font-weight: 500; margin-bottom: 12px; color: #2e7d32;">איך זה עובד</h2>
-                <p style="font-size: 16px; color: #558b2f; margin-bottom: 20px;">מדריך מפורט בעברית להשתמשות במערכת</p>
+            <div class="card-content" style="display: flex; align-items: center; justify-content: space-between; padding: 20px 24px;">
+                <div style="display: flex; align-items: center; gap: 16px;">
+                    <div style="font-size: 32px;">📖</div>
+                    <div style="text-align: left;">
+                        <h2 style="font-size: 16px; font-weight: 500; margin: 0 0 4px 0; color: #2e7d32;">איך זה עובד</h2>
+                        <p style="font-size: 13px; color: #558b2f; margin: 0;">מדריך מפורט בעברית להשתמשות במערכת</p>
+                    </div>
+                </div>
                 <a href="https://myconfluence.mydomain.local/mypage/Yossarian+User+Guide+Hebrew" 
                    target="_blank" 
                    rel="noopener noreferrer"
                    class="btn btn-success" 
-                   style="font-size: 16px; padding: 12px 32px;">
+                   style="font-size: 14px; padding: 10px 24px; white-space: nowrap;">
                     📚 פתח מדריך מלא
                 </a>
             </div>
@@ -1002,10 +1040,20 @@
                     </div>
                     <div class="progress-text" id="progressText">Preparing files...</div>
                 </div>
+                <!-- Detailed Report Option -->
+                <div style="margin-top: 16px; padding: 12px; background: #f5f5f5; border-radius: 8px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="detailedReportCheckbox" style="width: 18px; height: 18px; cursor: pointer;">
+                        <span style="font-size: 14px; font-weight: 500;">Generate detailed replacement report (CSV)</span>
+                    </label>
+                    <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 4px; margin-left: 26px;">
+                        Shows line numbers, original values, and replacements for learning
+                    </div>
+                </div>
 
                 <div class="button-group" style="margin-top: 16px;">
                     <button type="button" class="btn btn-primary" id="processBtn" onclick="processFiles()" disabled>
-                        🔍 Sanitize Files
+                        🔒 Sanitize Files
                     </button>
                     <button type="button" class="btn btn-secondary" onclick="clearFiles()">
                         🗑️ Clear Files
@@ -1086,6 +1134,14 @@
                         <div class="download-description">Detailed report of all sanitization activities</div>
                         <a href="#" class="btn btn-primary" id="downloadReport" onclick="generateReport()">
                             📄 Generate Report
+                        </a>
+                    </div>
+                    <div class="download-card" id="detailedReportCard" style="display: none;">
+                        <div class="download-icon">🔍</div>
+                        <div class="download-title">Detailed Replacement Report</div>
+                        <div class="download-description">Line-by-Line Changes - CSV</div>
+                        <a href="/download/detailed-report" class="btn btn-success" id="downloadDetailedReport">
+                            📊 Download CSV
                         </a>
                     </div>
                 </div>
@@ -1343,6 +1399,18 @@
             document.getElementById('fileList').classList.remove('visible');
             document.getElementById('progressContainer').classList.remove('visible');
             document.getElementById('resultsSection').classList.remove('visible');
+            document.getElementById('detailedReportCard').style.display = 'none';
+            document.getElementById('detailedReportCheckbox').checked = false;
+            
+            // Reset button state
+            const processBtn = document.getElementById('processBtn');
+            const uploadZone = document.getElementById('uploadZone');
+            processBtn.disabled = false;
+            processBtn.textContent = '🔒 Sanitize Files';
+            processBtn.style.opacity = '1';
+            uploadZone.classList.remove('processing');
+            uploadZone.style.pointerEvents = 'auto';
+            
             updateProcessButton();
             
             // Clear download files from server
@@ -1361,6 +1429,15 @@
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
             const progressStats = document.getElementById('progressStats');
+            const processBtn = document.getElementById('processBtn');
+            const uploadZone = document.getElementById('uploadZone');
+
+            // Disable UI during processing
+            processBtn.disabled = true;
+            processBtn.textContent = '⏳ Processing...';
+            processBtn.style.opacity = '0.6';
+            uploadZone.classList.add('processing');
+            uploadZone.style.pointerEvents = 'none';
 
             progressContainer.classList.add('visible');
             processingResults = [];
@@ -1373,7 +1450,7 @@
                 const progress = ((i) / selectedFiles.length) * 100;
 
                 progressFill.style.width = `${progress}%`;
-                progressText.textContent = `Processing ${fileObj.file.name}...`;
+                progressText.textContent = `Processing ${fileObj.file.name}... (${Math.round(progress)}%)`;
                 progressStats.textContent = `${i} / ${selectedFiles.length} files`;
 
                 fileObj.status = 'processing';
@@ -1405,12 +1482,26 @@
                 }
             }
 
+            // Always re-enable UI, even if there were errors
+            processBtn.disabled = false;
+            processBtn.textContent = '🔒 Sanitize Files';
+            processBtn.style.opacity = '1';
+            uploadZone.classList.remove('processing');
+            uploadZone.style.pointerEvents = 'auto';
+
             const endTime = Date.now();
             totalProcessingTime = endTime - startTime;
             
             progressFill.style.width = '100%';
             progressText.textContent = `Completed in ${(totalProcessingTime / 1000).toFixed(2)}s`;
             progressStats.textContent = `${selectedFiles.length} / ${selectedFiles.length} files`;
+
+            // Re-enable UI
+            processBtn.disabled = false;
+            processBtn.textContent = '🔒 Sanitize Files';
+            processBtn.style.opacity = '1';
+            uploadZone.classList.remove('processing');
+            uploadZone.style.pointerEvents = 'auto';
 
             displayResults();
             enableDownloads();
@@ -1419,6 +1510,10 @@
         async function processFile(file) {
             const formData = new FormData();
             formData.append('file', file);
+            
+            // Add detailed report flag
+            const detailedReportEnabled = document.getElementById('detailedReportCheckbox').checked;
+            formData.append('generate_detailed_report', detailedReportEnabled ? 'true' : 'false');
 
             const response = await fetch('/upload', {
                 method: 'POST',
@@ -1560,6 +1655,12 @@
                 btn.style.opacity = '1';
                 btn.classList.remove('disabled');
             });
+            
+            // Show detailed report card if it was generated
+            const detailedReportEnabled = document.getElementById('detailedReportCheckbox').checked;
+            if (detailedReportEnabled) {
+                document.getElementById('detailedReportCard').style.display = 'block';
+            }
             
             // Create download buttons for individual files
             createDownloadButtons();

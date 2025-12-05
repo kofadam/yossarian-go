@@ -61,10 +61,37 @@ var (
 	templates             *template.Template
 )
 
+// Detailed replacement tracking
+type Replacement struct {
+	Category  string
+	File      string
+	Line      int
+	Original  string
+	Sanitized string
+}
+
+var (
+	detailedReplacements []Replacement
+	replacementMutex     sync.Mutex
+)
+
 var (
 	adLookupCache = make(map[string]string)
 	cacheMutex    sync.RWMutex
 )
+
+func recordReplacement(category, filename string, lineNum int, original, sanitized string) {
+	replacementMutex.Lock()
+	defer replacementMutex.Unlock()
+
+	detailedReplacements = append(detailedReplacements, Replacement{
+		Category:  category,
+		File:      filename,
+		Line:      lineNum,
+		Original:  original,
+		Sanitized: sanitized,
+	})
+}
 
 func lookupADAccountCached(account string) string {
 	// Check cache first
@@ -668,7 +695,7 @@ func lookupADAccount(account string) string {
 	return result.USN
 }
 
-func sanitizeText(text string, userWords []string) (string, map[string]int) {
+func sanitizeText(text string, userWords []string, trackReplacements bool, filename string) (string, map[string]int) {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
 
@@ -690,34 +717,64 @@ func sanitizeText(text string, userWords []string) (string, map[string]int) {
 	// result = commentRegex.ReplaceAllString(result, "[COMMENT-REDACTED]")
 
 	// 1. Replace private keys
-	privateKeyMatches := privateKeyRegex.FindAllString(result, -1)
+	privateKeyMatches := privateKeyRegex.FindAllStringIndex(result, -1)
 	stats["private_keys"] = len(privateKeyMatches)
+
+	if trackReplacements && len(privateKeyMatches) > 0 {
+		for _, match := range privateKeyMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Private_Key", filename, lineNum, original, "[PRIVATE-KEY-REDACTED]")
+		}
+	}
+
 	result = privateKeyRegex.ReplaceAllString(result, "[PRIVATE-KEY-REDACTED]")
 	if stats["private_keys"] > 0 {
 		log.Printf("[DEBUG] Pattern detection - Private keys: %d found", stats["private_keys"])
 	}
 
 	// 2. Replace JWT tokens
-	jwtMatches := jwtRegex.FindAllString(result, -1)
+	jwtMatches := jwtRegex.FindAllStringIndex(result, -1)
 	stats["jwt_tokens"] = len(jwtMatches)
+
+	if trackReplacements && len(jwtMatches) > 0 {
+		for _, match := range jwtMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("JWT_Token", filename, lineNum, original, "[JWT-REDACTED]")
+		}
+	}
+
 	result = jwtRegex.ReplaceAllString(result, "[JWT-REDACTED]")
 	if stats["jwt_tokens"] > 0 {
 		log.Printf("[DEBUG] Pattern detection - JWT tokens: %d found", stats["jwt_tokens"])
 	}
 
 	// 3. Replace passwords in connection strings and config files
-	passwordMatches := passwordRegex.FindAllString(result, -1)
+	passwordMatches := passwordRegex.FindAllStringIndex(result, -1)
 	stats["passwords"] = len(passwordMatches)
+
+	if trackReplacements && len(passwordMatches) > 0 {
+		for _, match := range passwordMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Password", filename, lineNum, original, "[PASSWORD-REDACTED]")
+		}
+	}
+
 	result = passwordRegex.ReplaceAllString(result, "[PASSWORD-REDACTED]")
 	if stats["passwords"] > 0 {
 		log.Printf("[DEBUG] Pattern detection - Passwords: %d found", stats["passwords"])
 	}
 
 	// 4. Replace AD accounts with caching (case-insensitive)
-	adCandidates := adRegex.FindAllString(result, -1)
+	adCandidates := adRegex.FindAllStringIndex(result, -1)
 	adCandidateCount := len(adCandidates)
 
+	matchIndex := 0
 	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
+		matchPos := adCandidates[matchIndex]
+		matchIndex++
 		// Always normalize to lowercase for consistent cache lookups
 		normalizedAccount := strings.ToLower(account)
 
@@ -742,6 +799,13 @@ func sanitizeText(text string, userWords []string) (string, map[string]int) {
 		adCacheMisses.Inc()
 		if usn := lookupADAccountCached(normalizedAccount); usn != "" {
 			stats["ad_accounts"]++
+
+			// Track replacement
+			if trackReplacements {
+				lineNum := strings.Count(result[:matchPos[0]], "\n") + 1
+				recordReplacement("AD_Account", filename, lineNum, account, usn)
+			}
+
 			return usn
 		}
 		// If not found in AD database, preserve original text (not an AD account)
@@ -766,16 +830,29 @@ func sanitizeText(text string, userWords []string) (string, map[string]int) {
 
 	// 5. Replace sensitive terms with custom replacements
 	if sensitiveRegex != nil {
-		sensitiveMatches := sensitiveRegex.FindAllString(result, -1)
+		sensitiveMatches := sensitiveRegex.FindAllStringIndex(result, -1)
 		stats["sensitive_terms"] = len(sensitiveMatches)
 
+		matchIndexSensitive := 0
 		result = sensitiveRegex.ReplaceAllStringFunc(result, func(match string) string {
-			for term, replacement := range sensitiveTermsMap {
+			matchPos := sensitiveMatches[matchIndexSensitive]
+			matchIndexSensitive++
+
+			replacement := "[SENSITIVE]"
+			for term, customReplacement := range sensitiveTermsMap {
 				if strings.EqualFold(match, term) {
-					return replacement
+					replacement = customReplacement
+					break
 				}
 			}
-			return "[SENSITIVE]"
+
+			// Track replacement
+			if trackReplacements {
+				lineNum := strings.Count(result[:matchPos[0]], "\n") + 1
+				recordReplacement("Sensitive_Term", filename, lineNum, match, replacement)
+			}
+
+			return replacement
 		})
 
 		if stats["sensitive_terms"] > 0 {
@@ -786,8 +863,24 @@ func sanitizeText(text string, userWords []string) (string, map[string]int) {
 	// 6. Replace user words
 	for _, word := range userWords {
 		if word != "" && len(word) > 2 {
-			count := strings.Count(result, word)
-			stats["user_words"] += count
+			// Find all occurrences
+			if trackReplacements {
+				startPos := 0
+				for {
+					idx := strings.Index(result[startPos:], word)
+					if idx == -1 {
+						break
+					}
+					actualPos := startPos + idx
+					lineNum := strings.Count(result[:actualPos], "\n") + 1
+					recordReplacement("User_Word", filename, lineNum, word, "[USER-SENSITIVE]")
+					startPos = actualPos + len(word)
+					stats["user_words"]++
+				}
+			} else {
+				count := strings.Count(result, word)
+				stats["user_words"] += count
+			}
 			result = strings.ReplaceAll(result, word, "[USER-SENSITIVE]")
 		}
 	}
@@ -796,20 +889,34 @@ func sanitizeText(text string, userWords []string) (string, map[string]int) {
 	}
 
 	// 7. Replace IPs
-	ipMatches := ipRegex.FindAllString(result, -1)
+	ipMatches := ipRegex.FindAllStringIndex(result, -1)
 	uniqueIPs := make(map[string]bool)
-	for _, ip := range ipMatches {
+	for _, match := range ipMatches {
+		ip := result[match[0]:match[1]]
 		uniqueIPs[ip] = true
 	}
 
+	matchIndexIP := 0
 	result = ipRegex.ReplaceAllStringFunc(result, func(ip string) string {
+		matchPos := ipMatches[matchIndexIP]
+		matchIndexIP++
+
 		stats["ip_addresses"]++
-		if placeholder, exists := ipMappings[ip]; exists {
-			return placeholder
+		var placeholder string
+		if existing, exists := ipMappings[ip]; exists {
+			placeholder = existing
+		} else {
+			placeholder = fmt.Sprintf("[IP-%03d]", ipCounter)
+			ipMappings[ip] = placeholder
+			ipCounter++
 		}
-		placeholder := fmt.Sprintf("[IP-%03d]", ipCounter)
-		ipMappings[ip] = placeholder
-		ipCounter++
+
+		// Track replacement
+		if trackReplacements {
+			lineNum := strings.Count(result[:matchPos[0]], "\n") + 1
+			recordReplacement("IP_Address", filename, lineNum, ip, placeholder)
+		}
+
 		return placeholder
 	})
 
@@ -851,7 +958,7 @@ func countMatches(text, pattern string) int {
 	return strings.Count(text, pattern)
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
+func mainHealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status": "ok", "service": "yossarian-go", "version": "%s", "build_time": "%s", "commit": "%s"}`, Version, BuildTime, GitCommit)
 }
@@ -935,6 +1042,16 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[INFO] File upload started: user=%s, files=%d", username, len(files))
+
+	// Check if detailed report was requested
+	generateDetailedReport := r.FormValue("generate_detailed_report") == "true"
+	if generateDetailedReport {
+		// Clear previous detailed replacements
+		replacementMutex.Lock()
+		detailedReplacements = []Replacement{}
+		replacementMutex.Unlock()
+		log.Printf("[INFO] Detailed replacement report requested by user=%s", username)
+	}
 
 	// Get user words from cookie
 	var userWords []string
@@ -1030,7 +1147,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 					idx+1, len(extractedFiles), extracted.Name, float64(len(extracted.Content))/1024)
 
 				fileStartTime := time.Now()
-				sanitized, fileStats := sanitizeText(extracted.Content, userWords)
+				fullFilename := fmt.Sprintf("%s:%s", fileHeader.Filename, extracted.Name)
+				sanitized, fileStats := sanitizeText(extracted.Content, userWords, generateDetailedReport, fullFilename)
 				processingTime := time.Since(fileStartTime)
 
 				log.Printf("[PERF] Sanitized %d/%d: %s (%.2fs)", idx+1, len(extractedFiles), extracted.Name, processingTime.Seconds())
@@ -1128,7 +1246,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			for _, extracted := range extractedFiles {
 				// Sanitize content with timing
 				fileStartTime := time.Now()
-				sanitized, _ := sanitizeText(extracted.Content, userWords)
+				sanitized, _ := sanitizeText(extracted.Content, userWords, false, extracted.Name)
 				processingTime := time.Since(fileStartTime)
 
 				// Store results for each extracted file
@@ -1163,7 +1281,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		fileStartTime := time.Now()
 		log.Printf("[PERF] Sanitization started: %s", fileHeader.Filename)
 
-		sanitized, sanitizeStats := sanitizeText(string(content), userWords)
+		sanitized, sanitizeStats := sanitizeText(string(content), userWords, generateDetailedReport, fileHeader.Filename)
 		processingTime := time.Since(fileStartTime)
 
 		processingRateMBps := float64(len(content)) / 1024 / 1024 / processingTime.Seconds()
@@ -1421,6 +1539,64 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized_%s\"", lastSanitizedFilename))
 	w.Write([]byte(lastSanitizedContent))
+}
+
+func downloadDetailedReportHandler(w http.ResponseWriter, r *http.Request) {
+	// Get username for audit logging
+	username := "anonymous"
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
+	}
+
+	log.Printf("[INFO] Detailed report download requested: user=%s", username)
+
+	replacementMutex.Lock()
+	defer replacementMutex.Unlock()
+
+	if len(detailedReplacements) == 0 {
+		log.Printf("[WARN] No detailed replacements available for user=%s", username)
+		http.Error(w, "No detailed report available. Please enable the option before processing files.", http.StatusNotFound)
+		return
+	}
+
+	// Generate CSV
+	var buf bytes.Buffer
+	buf.WriteString("Category,File,Line,Original,Sanitized\n")
+
+	for _, repl := range detailedReplacements {
+		// Escape CSV fields
+		category := escapeCSV(repl.Category)
+		file := escapeCSV(repl.File)
+		original := escapeCSV(repl.Original)
+		sanitized := escapeCSV(repl.Sanitized)
+
+		fmt.Fprintf(&buf, "%s,%s,%d,%s,%s\n", category, file, repl.Line, original, sanitized)
+	}
+
+	reportSize := buf.Len()
+	log.Printf("[INFO] Detailed report generated: %d replacements, %.2f KB",
+		len(detailedReplacements), float64(reportSize)/1024)
+
+	// Send CSV file
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"yossarian-detailed-report-%s.csv\"",
+		time.Now().Format("2006-01-02")))
+	w.Write(buf.Bytes())
+
+	log.Printf("[AUDIT] Detailed report downloaded: user=%s, replacements=%d, size_kb=%.2f",
+		username, len(detailedReplacements), float64(reportSize)/1024)
+}
+
+func escapeCSV(field string) string {
+	// If field contains comma, quote, or newline, wrap in quotes and escape internal quotes
+	if strings.ContainsAny(field, ",\"\n\r") {
+		return `"` + strings.ReplaceAll(field, `"`, `""`) + `"`
+	}
+	return field
 }
 
 func downloadAllZipHandler(w http.ResponseWriter, r *http.Request) {
@@ -1893,7 +2069,7 @@ func main() {
 	initTemplates()
 
 	http.HandleFunc("/", homeHandler)
-	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/health", mainHealthHandler)
 	http.HandleFunc("/api/userinfo", userInfoHandler)
 	http.HandleFunc("/api/config", configLimitsHandler)
 	http.HandleFunc("/upload", uploadHandler)
@@ -1901,6 +2077,7 @@ func main() {
 	http.HandleFunc("/download/sanitized", downloadAllZipHandler)
 	http.HandleFunc("/download/sanitized/single", downloadHandler)
 	http.HandleFunc("/download/sanitized/", individualFileHandler)
+	http.HandleFunc("/download/detailed-report", downloadDetailedReportHandler)
 	http.HandleFunc("/clear-download-cache", clearDownloadCacheHandler)
 
 	// Admin routes
