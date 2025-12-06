@@ -51,9 +51,29 @@ func initDB() error {
 		term TEXT NOT NULL UNIQUE,
 		replacement TEXT DEFAULT '[SENSITIVE]',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE TABLE IF NOT EXISTS org_settings (
+		key TEXT PRIMARY KEY,
+		value TEXT,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_by TEXT
 	);`
 
 	_, err = db.Exec(createTableSQL)
+	if err != nil {
+		return err
+	}
+
+	// Insert default org settings
+	defaultSettings := `
+	INSERT OR IGNORE INTO org_settings (key, value) VALUES 
+		('disclaimer_enabled', 'false'),
+		('disclaimer_text', ''),
+		('docs_enabled', 'false'),
+		('docs_title', 'Documentation'),
+		('docs_url', '');`
+
+	_, err = db.Exec(defaultSettings)
 	return err
 }
 
@@ -555,6 +575,93 @@ func sensitiveDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
+func orgSettingsUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Update each setting
+	for key, value := range req {
+		// Validate allowed keys
+		allowedKeys := map[string]bool{
+			"disclaimer_enabled": true,
+			"disclaimer_text":    true,
+			"docs_enabled":       true,
+			"docs_title":         true,
+			"docs_url":           true,
+		}
+
+		if !allowedKeys[key] {
+			continue // Skip unknown keys
+		}
+
+		_, err := db.Exec(
+			"INSERT OR REPLACE INTO org_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+			key, value,
+		)
+		if err != nil {
+			http.Error(w, "Failed to update settings", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func orgSettingsPublicHandler(w http.ResponseWriter, r *http.Request) {
+	// Only return public-facing settings (not admin-only settings)
+	publicKeys := []string{
+		"disclaimer_enabled",
+		"disclaimer_text",
+		"docs_enabled",
+		"docs_title",
+		"docs_url",
+	}
+
+	settings := make(map[string]string)
+	for _, key := range publicKeys {
+		var value string
+		err := db.QueryRow("SELECT value FROM org_settings WHERE key = ?", key).Scan(&value)
+		if err == nil {
+			settings[key] = value
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(settings)
+}
+
+func orgSettingsListHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT key, value FROM org_settings ORDER BY key")
+	if err != nil {
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	settings := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			continue
+		}
+		settings[key] = value
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"settings": settings,
+	})
+}
+
 func main() {
 	// Load LDAP configuration
 	ldapServer = os.Getenv("LDAP_SERVER")
@@ -597,6 +704,9 @@ func main() {
 	http.HandleFunc("/sensitive/list", sensitiveListHandler)
 	http.HandleFunc("/sensitive/add", sensitiveAddHandler)
 	http.HandleFunc("/sensitive/delete", sensitiveDeleteHandler)
+	http.HandleFunc("/org-settings/list", orgSettingsListHandler)
+	http.HandleFunc("/org-settings/update", orgSettingsUpdateHandler)
+	http.HandleFunc("/org-settings/public", orgSettingsPublicHandler)
 
 	log.Printf("Database service starting on port 8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))

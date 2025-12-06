@@ -446,7 +446,7 @@
         }
 
         function loadADStatus() {
-            fetch('/api/ad-service-status')
+            fetch('/admin/api/ldap/status')
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('statADAccounts').textContent = data.account_count || 0;
@@ -463,7 +463,7 @@
         function loadADAccounts() {
             const tbody = document.getElementById('adAccountsTable');
             
-            fetch('/api/ad-accounts')
+            fetch('/admin/api/accounts/list')
                 .then(r => r.json())
                 .then(data => {
                     tbody.innerHTML = '';
@@ -494,7 +494,7 @@
         // Actions
         function syncAD() {
             showStatus('info', 'Starting AD synchronization...', 'adStatus');
-            fetch('http://yossarian-db-service:8081/ldap/sync-full', { method: 'POST' })
+            fetch('/admin/api/ldap/sync', { method: 'POST' })
                 .then(r => r.json())
                 .then(data => {
                     showStatus('success', `AD sync completed. ${data.accounts_imported || 0} accounts imported.`, 'adStatus');
@@ -506,7 +506,7 @@
 
         function testLDAP() {
             showStatus('info', 'Testing LDAP connection...', 'adStatus');
-            fetch('http://yossarian-db-service:8081/ldap/test')
+            fetch('/admin/api/ldap/test')
                 .then(r => r.json())
                 .then(data => {
                     if (data.status === 'success') {
@@ -528,7 +528,7 @@
         }
 
         function exportADAccounts() {
-            fetch('http://yossarian-db-service:8081/accounts/list')
+            fetch('/admin/api/accounts/list')
                 .then(r => r.json())
                 .then(data => {
                     const csv = 'Account,USN\n' + 

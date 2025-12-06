@@ -1,4 +1,4 @@
-version: '3.3'
+version: '3.8'
 
 services:
   yossarian-go:
@@ -9,9 +9,22 @@ services:
       - PORT=8080
       - ADMIN_PASSWORD=admin123
       - OIDC_ENABLED=false
-      - SENSITIVE_TERMS=ProjectApollo,ClientMegaCorp,confidential,classified,restricted,internal-only
+      - AD_SERVICE_URL=http://yossarian-db-service:8081
       - MAX_TOTAL_UPLOAD_SIZE_MB=100
       - MAX_FILE_SIZE_MB=50
       - MAX_ZIP_FILE_SIZE_MB=10
       - MAX_FILE_COUNT=10
+    depends_on:
+      - yossarian-db-service
     restart: unless-stopped
+
+  yossarian-db-service:
+    image: yossarian-go-db-service:latest
+    ports:
+      - "8081:8081"
+    volumes:
+      - db-data:/data
+    restart: unless-stopped
+
+volumes:
+  db-data:

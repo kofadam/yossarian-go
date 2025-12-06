@@ -1,35 +1,40 @@
-FROM golang:1.21 AS builder
+FROM golang:1.23-alpine AS builder
 
-# Install ca-certificates for HTTPS
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install build dependencies for CGO (SQLite)
+RUN apk add --no-cache ca-certificates gcc musl-dev sqlite-dev
 
 # Set working directory
 WORKDIR /app
 
-# Copy go module files first (for better layer caching)
-COPY go.mod go.sum* ./
+# Copy go mod files
+COPY go.mod go.sum ./
 
 # Download dependencies (air-gap: this layer is cached unless go.mod changes)
 RUN go mod download
 
 COPY db-service.go ./
-RUN CGO_ENABLED=1 GOOS=linux go build -a \
-    -o db-service db-service.go
 
-# Final stage - minimal runtime image  
-FROM debian:12-slim
+# Build the binary with CGO enabled (required for SQLite)
+# Set CGO flags for musl libc compatibility
+ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
+RUN CGO_ENABLED=1 go build -o db-service db-service.go
 
-# Install ca-certificates and wget for health checks
-RUN apt-get update && apt-get install -y ca-certificates wget && rm -rf /var/lib/apt/lists/*
+# Final stage - minimal runtime image
+FROM alpine:latest
 
-# Set working directory
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates sqlite-libs
+
 WORKDIR /app
 
-# Copy binary from builder stage
+# Copy the binary from builder
 COPY --from=builder /app/db-service .
+
+# Create data directory
+RUN mkdir -p /data
 
 # Expose port
 EXPOSE 8081
 
-# Run the application
+# Run the service
 CMD ["./db-service"]
