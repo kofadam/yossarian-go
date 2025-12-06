@@ -55,8 +55,10 @@ var (
 	lastSanitizedFilename string
 	lastSanitizedFiles    map[string]string
 	adminSessions         = make(map[string]time.Time)
-	sessionUsers          = make(map[string]string)   // sessionID -> username
-	sessionRoles          = make(map[string][]string) // sessionID -> roles
+	sessionUsers          = make(map[string]string)    // sessionID -> username
+	sessionRoles          = make(map[string][]string)  // sessionID -> roles
+	sessionTokens         = make(map[string]string)    // sessionID -> ID token
+	sessionTokenExpiry    = make(map[string]time.Time) // sessionID -> token expiry
 	sessionMutex          sync.Mutex
 	templates             *template.Template
 )
@@ -527,11 +529,17 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create session
 	sessionID := generateSessionID()
+
+	// Calculate token expiry (ID tokens typically expire in 5-30 minutes)
+	tokenExpiry := time.Now().Add(time.Duration(idToken.Expiry.Sub(time.Now())))
+
 	sessionMutex.Lock()
-	adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
+	adminSessions[sessionID] = tokenExpiry // Use token expiry, not arbitrary 30 min
 	sessionUsers[sessionID] = username
 	sessionRoles[sessionID] = userRoles
-	activeSessions.Inc() // ✅ ADD: Track active sessions
+	sessionTokens[sessionID] = rawIDToken
+	sessionTokenExpiry[sessionID] = tokenExpiry
+	activeSessions.Inc()
 	sessionMutex.Unlock()
 
 	log.Printf("OIDC: User %s logged in successfully", username)
@@ -568,13 +576,36 @@ func isValidAdminSession(r *http.Request) bool {
 	sessionMutex.Lock()
 	defer sessionMutex.Unlock()
 
+	// Check if session exists
 	expiry, exists := adminSessions[cookie.Value]
-	if !exists || time.Now().After(expiry) {
-		delete(adminSessions, cookie.Value)
+	if !exists {
 		return false
 	}
 
-	adminSessions[cookie.Value] = time.Now().Add(30 * time.Minute)
+	// Check if Keycloak token is expired
+	tokenExpiry, hasTokenExpiry := sessionTokenExpiry[cookie.Value]
+	if hasTokenExpiry && time.Now().After(tokenExpiry) {
+		// Token expired - force re-authentication
+		delete(adminSessions, cookie.Value)
+		delete(sessionUsers, cookie.Value)
+		delete(sessionRoles, cookie.Value)
+		delete(sessionTokens, cookie.Value)
+		delete(sessionTokenExpiry, cookie.Value)
+		activeSessions.Dec()
+		log.Printf("[AUTH] Session %s expired due to Keycloak token expiry", cookie.Value[:8])
+		return false
+	}
+
+	// For password-based sessions (no token), use Yossarian expiry
+	if !hasTokenExpiry && time.Now().After(expiry) {
+		delete(adminSessions, cookie.Value)
+		delete(sessionUsers, cookie.Value)
+		delete(sessionRoles, cookie.Value)
+		activeSessions.Dec()
+		return false
+	}
+
+	// Do NOT extend session - respect Keycloak token lifetime
 	return true
 }
 
@@ -1827,8 +1858,14 @@ func adminLogoutHandler(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		sessionMutex.Lock()
 		delete(adminSessions, cookie.Value)
+		delete(sessionUsers, cookie.Value)
+		delete(sessionRoles, cookie.Value)
+		delete(sessionTokens, cookie.Value)
+		delete(sessionTokenExpiry, cookie.Value)
 		activeSessions.Dec()
 		sessionMutex.Unlock()
+
+		log.Printf("[AUTH] User logged out: session=%s", cookie.Value[:8])
 	}
 
 	http.SetCookie(w, &http.Cookie{
