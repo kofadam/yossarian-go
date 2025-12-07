@@ -3,7 +3,7 @@
 ![Go Version](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)
 ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-v0.9.9-blue)
+![Version](https://img.shields.io/badge/Version-v0.9.9.1-blue)
 
 🛡️ **Air-gapped log sanitization with Material Design UI**
 
