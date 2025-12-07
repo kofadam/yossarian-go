@@ -822,25 +822,8 @@
             <div class="auth-info">🔐 Authenticated via Enterprise SSO</div>
         </div>
 
-                <!-- Hebrew Documentation Link -->
-        <div class="card" style="background: linear-gradient(135deg, #e8f5e9, #c8e6c9); border-left: 4px solid #4caf50;">
-            <div class="card-content" style="display: flex; align-items: center; justify-content: space-between; padding: 20px 24px;">
-                <div style="display: flex; align-items: center; gap: 16px;">
-                    <div style="font-size: 32px;">📖</div>
-                    <div style="text-align: left;">
-                        <h2 style="font-size: 16px; font-weight: 500; margin: 0 0 4px 0; color: #2e7d32;">איך זה עובד</h2>
-                        <p style="font-size: 13px; color: #558b2f; margin: 0;">מדריך מפורט בעברית להשתמשות במערכת</p>
-                    </div>
-                </div>
-                <a href="https://myconfluence.mydomain.local/mypage/Yossarian+User+Guide+Hebrew" 
-                   target="_blank" 
-                   rel="noopener noreferrer"
-                   class="btn btn-success" 
-                   style="font-size: 14px; padding: 10px 24px; white-space: nowrap;">
-                    📚 פתח מדריך מלא
-                </a>
-            </div>
-        </div>
+                <!-- Dynamic Organization Settings (Disclaimer & Documentation) -->
+        <div id="orgSettingsContainer"></div>
 
         <!-- Getting Started Section -->
         <div class="card getting-started">
@@ -1973,6 +1956,73 @@
             showStatus('success', 'Processing report downloaded successfully!');
         }
 
+        // Load and display organization settings
+        function loadOrgSettings() {
+            fetch('/api/org-settings/public')
+                .then(r => r.json())
+                .then(data => {
+                    const container = document.getElementById('orgSettingsContainer');
+                    if (!container) return;
+
+                    let html = '';
+
+                    // Show disclaimer if enabled
+                    if (data.disclaimer_enabled === 'true' && data.disclaimer_text) {
+                        html += `
+                            <div class="card" style="background: linear-gradient(135deg, #fff3e0, #ffe0b2); border-left: 4px solid #f57c00;">
+                                <div class="card-content" style="padding: 20px 24px;">
+                                    <div style="display: flex; align-items: flex-start; gap: 16px;">
+                                        <div style="font-size: 32px;">⚠️</div>
+                                        <div style="flex: 1;">
+                                            <h2 style="font-size: 16px; font-weight: 500; margin: 0 0 8px 0; color: #e65100;">NOTICE</h2>
+                                            <div style="font-size: 14px; color: #ef6c00; line-height: 1.6;">
+                                                ${escapeHtml(data.disclaimer_text)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    // Show documentation link if enabled
+                    if (data.docs_enabled === 'true' && data.docs_url) {
+                        html += `
+                            <div class="card" style="background: linear-gradient(135deg, #e8f5e9, #c8e6c9); border-left: 4px solid #4caf50;">
+                                <div class="card-content" style="display: flex; align-items: center; justify-content: space-between; padding: 20px 24px;">
+                                    <div style="display: flex; align-items: center; gap: 16px;">
+                                        <div style="font-size: 32px;">📚</div>
+                                        <div style="text-align: left;">
+                                            <h2 style="font-size: 16px; font-weight: 500; margin: 0 0 4px 0; color: #2e7d32;">${escapeHtml(data.docs_title || 'Documentation')}</h2>
+                                            <p style="font-size: 13px; color: #558b2f; margin: 0;">Click to view full documentation</p>
+                                        </div>
+                                    </div>
+                                    <a href="${escapeHtml(data.docs_url)}" 
+                                       target="_blank" 
+                                       rel="noopener noreferrer"
+                                       class="btn btn-success" 
+                                       style="font-size: 14px; padding: 10px 24px; white-space: nowrap;">
+                                        📖 View Documentation
+                                    </a>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    container.innerHTML = html;
+                })
+                .catch(e => {
+                    console.log('Organization settings not available:', e);
+                });
+        }
+
+        // Utility function for HTML escaping
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         // Initialize user info (if authenticated)
         function initializeUserInfo() {
             // This would be populated by server-side template or API call
@@ -1981,6 +2031,9 @@
             // userBanner.style.display = 'block';
             // document.getElementById('userName').textContent = 'John Doe';
         }
+        // Load organization settings
+        loadOrgSettings();
+
         // Load version info
         fetch('/health')
             .then(r => r.json())

@@ -266,6 +266,7 @@
             <button class="nav-tab active" onclick="showTab('overview')">📊 Overview</button>
             <button class="nav-tab" onclick="showTab('ad-accounts')">👥 AD Accounts</button>
             <button class="nav-tab" onclick="showTab('sensitive-terms')">🔒 Sensitive Terms</button>
+            <button class="nav-tab" onclick="showTab('org-settings')">🏢 Organization</button>
             <button class="nav-tab" onclick="showTab('system')">⚙️ System</button>
         </div>
 
@@ -388,6 +389,101 @@
             </div>
         </div>
 
+        <!-- Organization Settings Tab -->
+        <div id="org-settings" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">🏢 Organization Settings</h2>
+                    <div class="card-subtitle">Configure organization-wide disclaimer and documentation</div>
+                </div>
+                <div class="card-content">
+                    <div class="status-message" id="orgStatus"></div>
+
+                    <!-- Disclaimer Section -->
+                    <div style="background: var(--md-surface-variant); padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+                        <h3 style="font-size: 16px; font-weight: 500; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+                            ⚠️ Disclaimer Settings
+                        </h3>
+                        
+                        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; cursor: pointer;">
+                            <input type="checkbox" id="disclaimerEnabled" style="width: 18px; height: 18px;">
+                            <span style="font-weight: 500;">Show disclaimer on main page</span>
+                        </label>
+
+                        <div>
+                            <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 8px;">
+                                DISCLAIMER TEXT (Markdown supported)
+                            </label>
+                            <textarea 
+                                id="disclaimerText" 
+                                rows="6"
+                                placeholder="**Warning**: This system processes sensitive data..."
+                                style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-family: monospace; font-size: 13px;"
+                            ></textarea>
+                            <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 8px;">
+                                💡 Supports Markdown: **bold**, *italic*, [links](url), lists, etc.
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary" onclick="saveOrgSettings()" style="margin-top: 12px;">
+                            💾 Save Disclaimer
+                        </button>
+                    </div>
+
+                    <!-- Documentation Section -->
+                    <div style="background: var(--md-surface-variant); padding: 20px; border-radius: 8px;">
+                        <h3 style="font-size: 16px; font-weight: 500; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+                            📚 Documentation Settings
+                        </h3>
+                        
+                        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; cursor: pointer;">
+                            <input type="checkbox" id="docsEnabled" style="width: 18px; height: 18px;">
+                            <span style="font-weight: 500;">Show documentation link on main page</span>
+                        </label>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                            <div>
+                                <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 8px;">
+                                    DOCUMENTATION TITLE
+                                </label>
+                                <input 
+                                    type="text" 
+                                    id="docsTitle" 
+                                    placeholder="User Guide"
+                                    style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px;"
+                                />
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 8px;">
+                                    DOCUMENTATION URL
+                                </label>
+                                <input 
+                                    type="url" 
+                                    id="docsUrl" 
+                                    placeholder="https://docs.example.com/yossarian"
+                                    style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px;"
+                                />
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary" onclick="saveOrgSettings()" style="margin-top: 12px;">
+                            💾 Save Documentation
+                        </button>
+                    </div>
+
+                    <!-- Preview Section -->
+                    <div style="margin-top: 24px; padding: 20px; background: white; border: 2px solid var(--md-primary); border-radius: 8px;">
+                        <h3 style="font-size: 16px; font-weight: 500; margin-bottom: 16px;">
+                            👁️ Preview (How it will appear on main page)
+                        </h3>
+                        <div id="orgPreview" style="min-height: 100px; color: var(--md-on-surface-variant);">
+                            Settings will preview here...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- System Tab -->
         <div id="system" class="tab-content">
             <div class="card">
@@ -405,6 +501,12 @@
     </div>
 
     <script>
+        // Utility Functions
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
         // Tab Management
         function showTab(tabName) {
             document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
@@ -415,6 +517,9 @@
 
         // Load Dynamic Data
         function loadDynamicData() {
+            // Load organization settings
+            loadOrgSettings();
+            
             // Load health status
             fetch('/health')
                 .then(r => r.json())
@@ -707,6 +812,106 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', loadDynamicData);
+
+        // Organization Settings Functions
+        function loadOrgSettings() {
+            fetch('/admin/api/org-settings/list')
+                .then(r => r.json())
+                .then(data => {
+                    const settings = data.settings || {};
+                    
+                    // Load disclaimer settings
+                    document.getElementById('disclaimerEnabled').checked = settings.disclaimer_enabled === 'true';
+                    document.getElementById('disclaimerText').value = settings.disclaimer_text || '';
+                    
+                    // Load documentation settings
+                    document.getElementById('docsEnabled').checked = settings.docs_enabled === 'true';
+                    document.getElementById('docsTitle').value = settings.docs_title || 'Documentation';
+                    document.getElementById('docsUrl').value = settings.docs_url || '';
+                    
+                    updateOrgPreview();
+                })
+                .catch(e => {
+                    showStatus('error', 'Failed to load organization settings: ' + e.message, 'orgStatus');
+                });
+        }
+
+        function saveOrgSettings() {
+            const settings = {
+                disclaimer_enabled: document.getElementById('disclaimerEnabled').checked ? 'true' : 'false',
+                disclaimer_text: document.getElementById('disclaimerText').value,
+                docs_enabled: document.getElementById('docsEnabled').checked ? 'true' : 'false',
+                docs_title: document.getElementById('docsTitle').value || 'Documentation',
+                docs_url: document.getElementById('docsUrl').value
+            };
+
+            fetch('/admin/api/org-settings/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            })
+            .then(r => r.json())
+            .then(data => {
+                showStatus('success', 'Organization settings saved successfully!', 'orgStatus');
+                updateOrgPreview();
+            })
+            .catch(e => {
+                showStatus('error', 'Failed to save settings: ' + e.message, 'orgStatus');
+            });
+        }
+
+        function updateOrgPreview() {
+            const disclaimerEnabled = document.getElementById('disclaimerEnabled').checked;
+            const disclaimerText = document.getElementById('disclaimerText').value;
+            const docsEnabled = document.getElementById('docsEnabled').checked;
+            const docsTitle = document.getElementById('docsTitle').value || 'Documentation';
+            const docsUrl = document.getElementById('docsUrl').value;
+
+            let preview = '';
+
+            if (disclaimerEnabled && disclaimerText) {
+                preview += `
+                    <div style="background: #fff3e0; border-left: 4px solid #f57c00; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                        <div style="font-weight: 500; margin-bottom: 8px;">⚠️ NOTICE</div>
+                        <div style="font-size: 14px;">${escapeHtml(disclaimerText)}</div>
+                    </div>
+                `;
+            }
+
+            if (docsEnabled && docsUrl) {
+                preview += `
+                    <div style="background: linear-gradient(135deg, #e3f2fd, #bbdefb); border-left: 4px solid #1976d2; padding: 16px; border-radius: 8px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <div>
+                                <div style="font-weight: 500; margin-bottom: 4px;">📚 ${escapeHtml(docsTitle)}</div>
+                                <div style="font-size: 13px; color: #1565c0;">${escapeHtml(docsUrl)}</div>
+                            </div>
+                            <div style="padding: 8px 16px; background: #1976d2; color: white; border-radius: 20px; font-size: 13px;">
+                                View Documentation →
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (!preview) {
+                preview = '<div style="color: var(--md-on-surface-variant);">No settings enabled. Check the boxes above to enable disclaimer or documentation.</div>';
+            }
+
+            document.getElementById('orgPreview').innerHTML = preview;
+        }
+
+        // Add event listeners for live preview
+        document.addEventListener('DOMContentLoaded', function() {
+            const orgFields = ['disclaimerEnabled', 'disclaimerText', 'docsEnabled', 'docsTitle', 'docsUrl'];
+            orgFields.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('input', updateOrgPreview);
+                    el.addEventListener('change', updateOrgPreview);
+                }
+            });
+        });
     </script>
 </body>
 </html>

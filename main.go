@@ -686,11 +686,29 @@ func showAccessDenied(w http.ResponseWriter, r *http.Request) {
 func adminRequired(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isValidAdminSession(r) {
+			// Check if this is an API endpoint
+			if strings.HasPrefix(r.URL.Path, "/admin/api/") || strings.HasPrefix(r.URL.Path, "/api/") {
+				// Return JSON error for API endpoints
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized", "message": "Session expired or invalid"})
+				return
+			}
+			// HTML redirect for regular admin pages
 			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 			return
 		}
 		// Check if user has admin role
 		if !hasRole(r, "admin") {
+			// Check if this is an API endpoint
+			if strings.HasPrefix(r.URL.Path, "/admin/api/") || strings.HasPrefix(r.URL.Path, "/api/") {
+				// Return JSON error for API endpoints
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]string{"error": "forbidden", "message": "Admin role required"})
+				return
+			}
+			// HTML error for regular pages
 			http.Error(w, "Access denied: Admin role required", http.StatusForbidden)
 			return
 		}
@@ -1778,6 +1796,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 			sessionMutex.Lock()
 			adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
+			sessionRoles[sessionID] = []string{"admin", "user"} // Grant admin role for password login
 			activeSessions.Inc()
 			sessionMutex.Unlock()
 
@@ -1986,6 +2005,47 @@ func proxySensitiveDelete(w http.ResponseWriter, r *http.Request) {
 	go loadSensitiveTerms()
 }
 
+func proxyOrgSettingsList(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get(fmt.Sprintf("%s/org-settings/list", adServiceURL))
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func proxyOrgSettingsUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	resp, err := http.Post(fmt.Sprintf("%s/org-settings/update", adServiceURL), "application/json", r.Body)
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func proxyOrgSettingsPublic(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get(fmt.Sprintf("%s/org-settings/public", adServiceURL))
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
 func adminADHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		r.ParseForm()
@@ -2137,6 +2197,9 @@ func main() {
 	http.HandleFunc("/admin/api/sensitive/list", adminRequired(proxySensitiveList))
 	http.HandleFunc("/admin/api/sensitive/add", adminRequired(proxySensitiveAdd))
 	http.HandleFunc("/admin/api/sensitive/delete", adminRequired(proxySensitiveDelete))
+	http.HandleFunc("/admin/api/org-settings/list", adminRequired(proxyOrgSettingsList))
+	http.HandleFunc("/admin/api/org-settings/update", adminRequired(proxyOrgSettingsUpdate))
+	http.HandleFunc("/api/org-settings/public", proxyOrgSettingsPublic) // No auth required - public endpoint
 
 	// Debug route
 	http.HandleFunc("/debug", debugHandler)
