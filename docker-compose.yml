@@ -19,7 +19,7 @@ services:
     restart: unless-stopped
 
   yossarian-db-service:
-    image: yossarian-go-db-service:latest
+    image: yossarian-go/yossarian-go-db-service:latest
     ports:
       - "8081:8081"
     volumes:
