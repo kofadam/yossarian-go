@@ -1,0 +1,189 @@
+# Default values for yossarian-go
+# This is a YAML-formatted file for development/test environments
+# Override with values-prod.yaml for production
+
+## Global settings
+global:
+  namespace: yossarian-go
+  environment: development
+
+## Image configuration
+image:
+  app:
+    repository: ghcr.io/kofadam/yossarian-go
+    tag: v0.10.0
+    pullPolicy: IfNotPresent
+  dbService:
+    repository: ghcr.io/kofadam/yossarian-go-db-service
+    tag: v0.10.0
+    pullPolicy: IfNotPresent
+
+## Replica counts
+replicaCount:
+  app: 2
+  dbService: 1
+
+## Service configuration
+service:
+  app:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+  dbService:
+    type: ClusterIP
+    port: 8081
+    targetPort: 8081
+
+## Ingress configuration (Contour HTTPProxy)
+ingress:
+  enabled: true
+  className: contour
+  fqdn: yossarian-go.mydomain.local
+  tls:
+    enabled: true
+    secretName: yossarian-go-tls
+    certManager:
+      enabled: true
+      issuerName: my-cluster-issuer
+      issuerKind: ClusterIssuer
+  timeouts:
+    response: 60s
+    idle: 60s
+  sessionAffinity:
+    enabled: true
+    strategy: Cookie
+
+## Storage configuration
+storage:
+  # SQLite database storage
+  database:
+    enabled: true
+    storageClass: default
+    size: 5Gi  # Increased from 1Gi to accommodate batch jobs metadata
+    accessMode: ReadWriteOnce
+  
+  # Batch jobs storage (NEW for v0.10.0)
+  batchJobs:
+    enabled: true
+    storageClass: default
+    size: 100Gi
+    accessMode: ReadWriteOnce
+
+## Application configuration
+config:
+  # Port configuration
+  port: "8080"
+  
+  # File upload limits
+  maxTotalUploadSizeMB: "100"
+  maxFileSizeMB: "50"
+  maxZipFileSizeMB: "10"
+  maxFileCount: "10"
+  
+  # OIDC/SSO configuration
+  oidc:
+    enabled: true
+    issuerUrl: "https://keycloak.company.com/auth/realms/yossarian"
+    clientId: "yossarian-go"
+    redirectUrl: "https://yossarian.company.com/auth/oidc/callback"
+    logoutUrl: "https://keycloak.company.com/auth/realms/yossarian/protocol/openid-connect/logout"
+    autoSso: true
+  
+  # LDAP configuration
+  ldap:
+    server: "ldaps://dc.yourdomain.com:636"
+    bindDn: "CN=ldap-reader,OU=Service Accounts,DC=yourdomain,DC=com"
+    searchBase: "DC=yourdomain,DC=com"
+    syncSchedule: "0 1 * * *"  # Daily at 01:00
+  
+  # Domain configuration
+  domain:
+    netbios: "YOURDOMAIN"
+    fqdn: "yourdomain.local"
+  
+  # Sensitive terms (organization-wide)
+  sensitiveTerms: "ProjectApollo,ClientMegaCorp,confidential,classified,restricted,internal-only"
+  
+  # Service URLs
+  adServiceUrl: "http://yossarian-db-service:8081"
+
+## Secrets configuration
+# Note: Actual values should be in a separate sealed-secrets or external secrets
+secrets:
+  # Admin password for fallback authentication
+  adminPassword: "change-me-in-production"
+  
+  # OIDC client secret
+  oidcClientSecret: "your-oidc-client-secret"
+  
+  # LDAP bind password
+  ldapBindPassword: "your-ldap-bind-password"
+
+## Custom CA certificates
+customCA:
+  enabled: false
+  # If enabled, provide the CA certificate content
+  certificate: |
+    # -----BEGIN CERTIFICATE-----
+    # Your Keycloak or internal CA certificate
+    # -----END CERTIFICATE-----
+
+## Resource limits
+resources:
+  app:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"  # Increased for batch processing
+      cpu: "1000m"
+  dbService:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "200m"
+
+## Health checks
+healthChecks:
+  app:
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      path: /health
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      path: /health
+  dbService:
+    liveness:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      path: /health
+
+## CronJobs
+cronjobs:
+  adSync:
+    enabled: true
+    schedule: "0 1 * * *"
+    image: curlimages/curl:latest
+
+## Monitoring (optional)
+monitoring:
+  prometheus:
+    enabled: true
+    port: 8080
+    path: /metrics
+
+## Pod annotations
+podAnnotations: {}
+
+## Node selector
+nodeSelector: {}
+
+## Tolerations
+tolerations: []
+
+## Affinity
+affinity: {}

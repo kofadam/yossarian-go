@@ -1,0 +1,76 @@
+# Production values for yossarian-go
+# Override default values.yaml settings for production environment
+
+global:
+  environment: production
+
+## Production image pull policy
+image:
+  app:
+    pullPolicy: Always
+  dbService:
+    pullPolicy: Always
+
+## Production replica counts
+replicaCount:
+  app: 3  # More replicas for HA
+  dbService: 1  # Keep 1 for SQLite
+
+## Production ingress
+ingress:
+  fqdn: yossarian.company.com  # Production domain
+
+## Production storage
+storage:
+  database:
+    size: 10Gi  # Larger for production
+  batchJobs:
+    size: 200Gi  # More space for production workloads
+
+## Production OIDC
+config:
+  oidc:
+    issuerUrl: "https://keycloak-prod.company.com/auth/realms/company"
+    redirectUrl: "https://yossarian.company.com/auth/oidc/callback"
+    logoutUrl: "https://keycloak-prod.company.com/auth/realms/company/protocol/openid-connect/logout"
+
+## Production LDAP
+  ldap:
+    server: "ldaps://dc-prod.company.com:636"
+
+## Production resources (higher limits)
+resources:
+  app:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  dbService:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+## Production pod annotations (for monitoring)
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+## Production affinity (spread across nodes)
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - yossarian-go
+          topologyKey: kubernetes.io/hostname

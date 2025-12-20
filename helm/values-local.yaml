@@ -1,0 +1,70 @@
+# Example values for local/testing deployment
+# Copy this to values-local.yaml and customize
+
+global:
+  namespace: yossarian-go
+  environment: local-dev
+
+image:
+  app:
+    repository: yossarian-go/yossarian-go  # Local image
+    tag: latest
+    pullPolicy: IfNotPresent
+  dbService:
+    repository: yossarian-go-db-service  # Local image
+    tag: latest
+    pullPolicy: IfNotPresent
+
+replicaCount:
+  app: 1  # Single replica for local dev
+  dbService: 1
+
+storage:
+  database:
+    size: 1Gi  # Smaller for local
+  batchJobs:
+    size: 10Gi  # Smaller for local
+
+config:
+  oidc:
+    enabled: false  # Disable OIDC for local testing
+    issuerUrl: ""
+    clientId: ""
+    redirectUrl: ""
+    autoSso: false
+  
+  ldap:
+    server: ""  # Leave empty to disable LDAP
+    bindDn: ""
+    searchBase: ""
+
+secrets:
+  adminPassword: "admin123"  # Simple password for local
+  oidcClientSecret: "not-used"
+  ldapBindPassword: "not-used"
+
+ingress:
+  enabled: false  # Use port-forward for local access
+
+resources:
+  app:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  dbService:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+
+cronjobs:
+  adSync:
+    enabled: false  # Disable cron for local
+
+customCA:
+  enabled: false

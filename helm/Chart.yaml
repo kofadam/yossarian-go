@@ -1,0 +1,14 @@
+apiVersion: v2
+name: yossarian-go
+description: Enterprise-grade log sanitization system with batch processing
+type: application
+version: 0.10.0
+appVersion: "0.10.0"
+keywords:
+  - log-sanitization
+  - security
+  - enterprise
+  - batch-processing
+maintainers:
+  - name: Yossarian Team
+    email: admin@company.com
