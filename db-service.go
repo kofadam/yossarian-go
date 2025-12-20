@@ -57,7 +57,22 @@ func initDB() error {
 		value TEXT,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_by TEXT
-	);`
+	);
+	CREATE TABLE IF NOT EXISTS batch_jobs (
+		job_id TEXT PRIMARY KEY,
+		username TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'queued',
+		total_files INTEGER DEFAULT 0,
+		processed_files INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		started_at DATETIME,
+		completed_at DATETIME,
+		input_path TEXT,
+		output_path TEXT,
+		error_message TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_batch_jobs_username ON batch_jobs(username);
+	CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status);`
 
 	_, err = db.Exec(createTableSQL)
 	if err != nil {
@@ -662,6 +677,197 @@ func orgSettingsListHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Batch job handlers
+func jobCreateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		JobID      string `json:"job_id"`
+		Username   string `json:"username"`
+		InputPath  string `json:"input_path"`
+		OutputPath string `json:"output_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.JobID == "" || req.Username == "" {
+		http.Error(w, "job_id and username are required", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec(`INSERT INTO batch_jobs 
+		(job_id, username, status, input_path, output_path) 
+		VALUES (?, ?, 'queued', ?, ?)`,
+		req.JobID, req.Username, req.InputPath, req.OutputPath)
+
+	if err != nil {
+		log.Printf("Failed to create job: %v", err)
+		http.Error(w, "Failed to create job", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[BATCH] Job created: %s for user %s", req.JobID, req.Username)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "success",
+		"job_id": req.JobID,
+	})
+}
+
+func jobStatusHandler(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimPrefix(r.URL.Path, "/jobs/status/")
+	if jobID == "" {
+		http.Error(w, "job_id required", http.StatusBadRequest)
+		return
+	}
+
+	var job struct {
+		JobID          string  `json:"job_id"`
+		Username       string  `json:"username"`
+		Status         string  `json:"status"`
+		TotalFiles     int     `json:"total_files"`
+		ProcessedFiles int     `json:"processed_files"`
+		CreatedAt      string  `json:"created_at"`
+		StartedAt      *string `json:"started_at"`
+		CompletedAt    *string `json:"completed_at"`
+		ErrorMessage   *string `json:"error_message"`
+		OutputPath     *string `json:"output_path"`
+	}
+
+	err := db.QueryRow(`SELECT job_id, username, status, total_files, processed_files, 
+		created_at, started_at, completed_at, error_message, output_path 
+		FROM batch_jobs WHERE job_id = ?`, jobID).Scan(
+		&job.JobID, &job.Username, &job.Status, &job.TotalFiles, &job.ProcessedFiles,
+		&job.CreatedAt, &job.StartedAt, &job.CompletedAt, &job.ErrorMessage, &job.OutputPath)
+
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(job)
+}
+
+func jobListHandler(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimPrefix(r.URL.Path, "/jobs/list/")
+	if username == "" {
+		http.Error(w, "username required", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := db.Query(`SELECT job_id, status, total_files, processed_files, 
+		created_at, completed_at FROM batch_jobs 
+		WHERE username = ? ORDER BY created_at DESC LIMIT 50`, username)
+	if err != nil {
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	jobs := []map[string]interface{}{}
+	for rows.Next() {
+		var jobID, status, createdAt string
+		var totalFiles, processedFiles int
+		var completedAt *string
+
+		if err := rows.Scan(&jobID, &status, &totalFiles, &processedFiles, &createdAt, &completedAt); err != nil {
+			continue
+		}
+
+		jobs = append(jobs, map[string]interface{}{
+			"job_id":          jobID,
+			"status":          status,
+			"total_files":     totalFiles,
+			"processed_files": processedFiles,
+			"created_at":      createdAt,
+			"completed_at":    completedAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jobs":  jobs,
+		"total": len(jobs),
+	})
+}
+
+func jobUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		JobID          string  `json:"job_id"`
+		Status         *string `json:"status"`
+		TotalFiles     *int    `json:"total_files"`
+		ProcessedFiles *int    `json:"processed_files"`
+		ErrorMessage   *string `json:"error_message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.JobID == "" {
+		http.Error(w, "job_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Build dynamic UPDATE query
+	updates := []string{}
+	args := []interface{}{}
+
+	if req.Status != nil {
+		updates = append(updates, "status = ?")
+		args = append(args, *req.Status)
+
+		// Set timestamps based on status
+		if *req.Status == "processing" {
+			updates = append(updates, "started_at = CURRENT_TIMESTAMP")
+		} else if *req.Status == "completed" || *req.Status == "failed" {
+			updates = append(updates, "completed_at = CURRENT_TIMESTAMP")
+		}
+	}
+	if req.TotalFiles != nil {
+		updates = append(updates, "total_files = ?")
+		args = append(args, *req.TotalFiles)
+	}
+	if req.ProcessedFiles != nil {
+		updates = append(updates, "processed_files = ?")
+		args = append(args, *req.ProcessedFiles)
+	}
+	if req.ErrorMessage != nil {
+		updates = append(updates, "error_message = ?")
+		args = append(args, *req.ErrorMessage)
+	}
+
+	if len(updates) == 0 {
+		http.Error(w, "No fields to update", http.StatusBadRequest)
+		return
+	}
+
+	args = append(args, req.JobID)
+	query := fmt.Sprintf("UPDATE batch_jobs SET %s WHERE job_id = ?", strings.Join(updates, ", "))
+
+	_, err := db.Exec(query, args...)
+	if err != nil {
+		log.Printf("Failed to update job: %v", err)
+		http.Error(w, "Failed to update job", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
 func main() {
 	// Load LDAP configuration
 	ldapServer = os.Getenv("LDAP_SERVER")
@@ -707,6 +913,12 @@ func main() {
 	http.HandleFunc("/org-settings/list", orgSettingsListHandler)
 	http.HandleFunc("/org-settings/update", orgSettingsUpdateHandler)
 	http.HandleFunc("/org-settings/public", orgSettingsPublicHandler)
+
+	// Batch job endpoints
+	http.HandleFunc("/jobs/create", jobCreateHandler)
+	http.HandleFunc("/jobs/status/", jobStatusHandler)
+	http.HandleFunc("/jobs/list/", jobListHandler)
+	http.HandleFunc("/jobs/update", jobUpdateHandler)
 
 	log.Printf("Database service starting on port 8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
