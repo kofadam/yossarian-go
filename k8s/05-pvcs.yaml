@@ -1,0 +1,37 @@
+---
+# Database PVC (SQLite storage)
+# FIXED: Increased from 1Gi to 5Gi for batch job metadata
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: yossarian-db-pvc
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+    component: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: default
+
+---
+# Batch Jobs PVC (NEW for v0.10.0)
+# Stores uploaded ZIPs and sanitized outputs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: yossarian-batch-pvc
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+    component: batch-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi  # Adjust based on expected workload
+  storageClassName: default

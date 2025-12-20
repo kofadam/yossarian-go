@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: yossarian-go
+  labels:
+    kubernetes.io/metadata.name: yossarian-go
+    pod-security.kubernetes.io/enforce: privileged

@@ -1,0 +1,36 @@
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: yossarian-go-httpproxy
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+spec:
+  virtualhost:
+    fqdn: yossarian-go.mydomain.local  # CHANGE THIS to your domain
+    tls:
+      secretName: yossarian-go-tls
+  
+  routes:
+    - conditions:
+        - prefix: /
+      services:
+        # FIXED: Correct service name
+        - name: yossarian-go-service
+          port: 80
+      
+      # Longer timeouts for batch processing
+      timeoutPolicy:
+        response: "60s"
+        idle: "60s"
+      
+      # Session affinity for batch job consistency
+      loadBalancerPolicy:
+        strategy: Cookie
+      
+      cookieRewritePolicies:
+        - name: "X-Contour-Session-Affinity"
+          pathRewrite:
+            value: "/"
+          sameSite: Lax
+          secure: true
