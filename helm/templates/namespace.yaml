@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.global.namespace }}
+  labels:
+    kubernetes.io/metadata.name: {{ .Values.global.namespace }}
+    pod-security.kubernetes.io/enforce: privileged
+    {{- include "yossarian-go.labels" . | nindent 4 }}

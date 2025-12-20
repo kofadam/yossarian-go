@@ -1,0 +1,88 @@
+🎉 Yossarian Go {{ .Chart.AppVersion }} has been deployed!
+
+📋 Release Information:
+  - Name: {{ .Release.Name }}
+  - Namespace: {{ .Values.global.namespace }}
+  - Environment: {{ .Values.global.environment }}
+
+🌐 Access Information:
+{{- if .Values.ingress.enabled }}
+  URL: https://{{ .Values.ingress.fqdn }}
+{{- else }}
+  Service: {{ include "yossarian-go.appServiceName" . }}:{{ .Values.service.app.port }}
+{{- end }}
+
+📊 Deployment Status:
+  Main App Replicas: {{ .Values.replicaCount.app }}
+  DB Service Replicas: {{ .Values.replicaCount.dbService }}
+
+💾 Storage:
+{{- if .Values.storage.database.enabled }}
+  Database PVC: {{ include "yossarian-go.dbPvcName" . }} ({{ .Values.storage.database.size }})
+{{- end }}
+{{- if .Values.storage.batchJobs.enabled }}
+  Batch Jobs PVC: {{ include "yossarian-go.batchPvcName" . }} ({{ .Values.storage.batchJobs.size }})
+{{- end }}
+
+🔧 Useful Commands:
+
+  # Check deployment status:
+  kubectl get all -n {{ .Values.global.namespace }}
+
+  # View app logs:
+  kubectl logs -n {{ .Values.global.namespace }} -l app.kubernetes.io/name={{ include "yossarian-go.name" . }} --tail=100 -f
+
+  # View DB service logs:
+  kubectl logs -n {{ .Values.global.namespace }} -l app.kubernetes.io/component=database --tail=100 -f
+
+  # Check PVC status:
+  kubectl get pvc -n {{ .Values.global.namespace }}
+
+  # Port-forward for local access:
+  kubectl port-forward -n {{ .Values.global.namespace }} svc/{{ include "yossarian-go.appServiceName" . }} 8080:{{ .Values.service.app.port }}
+
+  # Trigger manual AD sync:
+  kubectl exec -n {{ .Values.global.namespace }} deployment/{{ include "yossarian-go.fullname" . }}-db -- curl -X POST http://localhost:8081/ldap/sync-full
+
+  # Check batch jobs on PVC:
+  kubectl exec -n {{ .Values.global.namespace }} deployment/{{ include "yossarian-go.fullname" . }} -- ls -la /data/jobs
+
+📖 Next Steps:
+{{- if eq .Values.global.environment "development" }}
+  
+  ⚠️  DEVELOPMENT ENVIRONMENT DETECTED
+  
+  1. Update secrets in values.yaml or use external secret management
+  2. Configure your custom CA certificate if needed
+  3. Test batch processing with a sample ZIP file
+  4. Review logs for any startup issues
+  
+{{- else }}
+
+  ✅ PRODUCTION DEPLOYMENT
+  
+  1. Verify OIDC authentication is working
+  2. Test LDAP connectivity: kubectl exec ... curl http://localhost:8081/ldap/test
+  3. Monitor resource usage and adjust limits if needed
+  4. Set up monitoring dashboards (Prometheus metrics on /metrics)
+  5. Configure backup strategy for PVCs
+  
+{{- end }}
+
+🔒 Security Reminders:
+  - Default admin password is set - CHANGE IT IN PRODUCTION!
+  - Secrets should be managed via external secret stores (Vault, Sealed Secrets, etc.)
+  - Review RBAC policies if needed
+  - Ensure TLS certificates are valid
+
+📚 Documentation:
+  - GitHub: https://github.com/kofadam/yossarian-go
+  - Helm Chart: ./README.md
+
+💡 Tips:
+  - Batch processing: Upload ZIP files > 10MB for automatic batch mode
+  - My Jobs page: https://{{ .Values.ingress.fqdn }}/jobs/my-jobs
+  - Prometheus metrics: https://{{ .Values.ingress.fqdn }}/metrics
+  - Admin panel: https://{{ .Values.ingress.fqdn }}/admin
+
+Happy sanitizing! 🛡️

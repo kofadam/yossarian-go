@@ -1,0 +1,37 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yossarian-go.appServiceName" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  type: {{ .Values.service.app.type }}
+  selector:
+    {{- include "yossarian-go.selectorLabels" . | nindent 4 }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.service.app.port }}
+      targetPort: {{ .Values.service.app.targetPort }}
+      name: http
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yossarian-go.dbServiceName" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  type: {{ .Values.service.dbService.type }}
+  selector:
+    {{- include "yossarian-go.dbSelectorLabels" . | nindent 4 }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.service.dbService.port }}
+      targetPort: {{ .Values.service.dbService.targetPort }}
+      name: http

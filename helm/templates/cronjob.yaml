@@ -1,0 +1,29 @@
+{{- if .Values.cronjobs.adSync.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}-ad-sync
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cronjob
+spec:
+  schedule: {{ .Values.cronjobs.adSync.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "yossarian-go.labels" . | nindent 12 }}
+            app.kubernetes.io/component: cronjob
+        spec:
+          containers:
+          - name: curl
+            image: {{ .Values.cronjobs.adSync.image }}
+            command:
+            - /bin/sh
+            - -c
+            - curl -X POST http://{{ include "yossarian-go.dbServiceName" . }}:{{ .Values.service.dbService.port }}/ldap/sync-full
+          restartPolicy: OnFailure
+{{- end }}

@@ -1,0 +1,41 @@
+{{- if .Values.storage.database.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "yossarian-go.dbPvcName" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  accessModes:
+    - {{ .Values.storage.database.accessMode }}
+  {{- if .Values.storage.database.storageClass }}
+  storageClassName: {{ .Values.storage.database.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.database.size }}
+{{- end }}
+
+{{- if .Values.storage.batchJobs.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "yossarian-go.batchPvcName" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: batch-storage
+spec:
+  accessModes:
+    - {{ .Values.storage.batchJobs.accessMode }}
+  {{- if .Values.storage.batchJobs.storageClass }}
+  storageClassName: {{ .Values.storage.batchJobs.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.batchJobs.size }}
+{{- end }}

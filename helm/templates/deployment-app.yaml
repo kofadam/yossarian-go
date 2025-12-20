@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  replicas: {{ .Values.replicaCount.app }}
+  selector:
+    matchLabels:
+      {{- include "yossarian-go.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "yossarian-go.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+      {{- if .Values.storage.batchJobs.enabled }}
+      - name: batch-storage
+        persistentVolumeClaim:
+          claimName: {{ include "yossarian-go.batchPvcName" . }}
+      {{- end }}
+      {{- if .Values.customCA.enabled }}
+      - name: custom-ca
+        configMap:
+          name: {{ include "yossarian-go.fullname" . }}-ca
+          optional: true
+      {{- end }}
+      containers:
+      - name: yossarian-go
+        image: "{{ .Values.image.app.repository }}:{{ .Values.image.app.tag }}"
+        imagePullPolicy: {{ .Values.image.app.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.config.port }}
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: {{ include "yossarian-go.fullname" . }}-config
+        - secretRef:
+            name: {{ include "yossarian-go.fullname" . }}-secrets
+        {{- if .Values.customCA.enabled }}
+        env:
+        - name: CA_CERT_PATH
+          value: "/etc/ssl/certs/custom-ca.crt"
+        {{- end }}
+        volumeMounts:
+        {{- if .Values.storage.batchJobs.enabled }}
+        - name: batch-storage
+          mountPath: /data
+        {{- end }}
+        {{- if .Values.customCA.enabled }}
+        - name: custom-ca
+          mountPath: /etc/ssl/certs/custom-ca.crt
+          subPath: ca-bundle.crt
+          readOnly: true
+        {{- end }}
+        resources:
+          {{- toYaml .Values.resources.app | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.healthChecks.app.liveness.path }}
+            port: http
+          initialDelaySeconds: {{ .Values.healthChecks.app.liveness.initialDelaySeconds }}
+          periodSeconds: {{ .Values.healthChecks.app.liveness.periodSeconds }}
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.healthChecks.app.readiness.path }}
+            port: http
+          initialDelaySeconds: {{ .Values.healthChecks.app.readiness.initialDelaySeconds }}
+          periodSeconds: {{ .Values.healthChecks.app.readiness.periodSeconds }}

@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.config.port | quote }}
+  
+  # OIDC Configuration
+  OIDC_ENABLED: {{ .Values.config.oidc.enabled | quote }}
+  OIDC_ISSUER_URL: {{ .Values.config.oidc.issuerUrl | quote }}
+  OIDC_CLIENT_ID: {{ .Values.config.oidc.clientId | quote }}
+  OIDC_REDIRECT_URL: {{ .Values.config.oidc.redirectUrl | quote }}
+  OIDC_LOGOUT_URL: {{ .Values.config.oidc.logoutUrl | quote }}
+  AUTO_SSO_ENABLED: {{ .Values.config.oidc.autoSso | quote }}
+  
+  # LDAP Configuration
+  LDAP_SERVER: {{ .Values.config.ldap.server | quote }}
+  LDAP_BIND_DN: {{ .Values.config.ldap.bindDn | quote }}
+  LDAP_SEARCH_BASE: {{ .Values.config.ldap.searchBase | quote }}
+  
+  # Domain Configuration
+  DOMAIN_NETBIOS: {{ .Values.config.domain.netbios | quote }}
+  DOMAIN_FQDN: {{ .Values.config.domain.fqdn | quote }}
+  
+  # File Upload Limits
+  MAX_TOTAL_UPLOAD_SIZE_MB: {{ .Values.config.maxTotalUploadSizeMB | quote }}
+  MAX_FILE_SIZE_MB: {{ .Values.config.maxFileSizeMB | quote }}
+  MAX_ZIP_FILE_SIZE_MB: {{ .Values.config.maxZipFileSizeMB | quote }}
+  MAX_FILE_COUNT: {{ .Values.config.maxFileCount | quote }}
+  
+  # Service URLs
+  AD_SERVICE_URL: "http://{{ include "yossarian-go.dbServiceName" . }}:{{ .Values.service.dbService.port }}"
+  
+  # Database Path
+  DB_PATH: "/data/yossarian.db"
+  
+  # Sensitive Terms
+  SENSITIVE_TERMS: {{ .Values.config.sensitiveTerms | quote }}
