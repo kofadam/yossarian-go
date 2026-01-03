@@ -3,25 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Yossarian Go - Log Sanitization</title>
+    <title>Yossarian Go - Secure Log Sanitization</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
     <style>
-        /* Material Design CSS - Air-gap ready */
+        /* Material Design 3 - Air-gap Ready */
+        @import url('data:font/woff2;base64,d09GMgABAAAAAAc4AA0AAAAAD...');
+        
         :root {
+            /* Material Design 3 Color System */
             --md-primary: #1976d2;
-            --md-primary-dark: #1565c0;
-            --md-primary-light: #42a5f5;
-            --md-secondary: #dc004e;
-            --md-surface: #ffffff;
-            --md-surface-variant: #f5f5f5;
-            --md-on-surface: #1c1b1f;
-            --md-on-surface-variant: #49454f;
-            --md-outline: #79747e;
+            --md-primary-container: #d3e4f7;
+            --md-on-primary: #ffffff;
+            --md-on-primary-container: #001d36;
+            
+            --md-secondary: #535f70;
+            --md-secondary-container: #d7e3f7;
+            
+            --md-surface: #fdfbff;
+            --md-surface-1: #f4f8fd;
+            --md-surface-2: #eff3f9;
+            --md-surface-3: #eaeef4;
+            --md-surface-4: #e8ecf2;
+            --md-surface-5: #e5e9ef;
+            
+            --md-on-surface: #1a1c1e;
+            --md-on-surface-variant: #42474e;
+            
+            --md-outline: #72777f;
+            --md-outline-variant: #c2c7cf;
+            
             --md-success: #2e7d32;
             --md-warning: #f57c00;
-            --md-error: #d32f2f;
-            --md-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            --md-shadow-elevated: 0 4px 8px rgba(0,0,0,0.15);
+            --md-error: #ba1a1a;
+            
+            /* Elevation Shadows */
+            --md-elevation-1: 0 1px 2px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.1);
+            --md-elevation-2: 0 1px 3px rgba(0,0,0,0.05), 0 2px 6px rgba(0,0,0,0.1);
+            --md-elevation-3: 0 4px 8px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06);
+            
+            /* Typography Scale */
+            --md-display-large: 57px;
+            --md-headline-large: 32px;
+            --md-headline-medium: 28px;
+            --md-title-large: 22px;
+            --md-title-medium: 16px;
+            --md-body-large: 16px;
+            --md-body-medium: 14px;
+            --md-label-large: 14px;
         }
 
         * {
@@ -31,239 +59,248 @@
         }
 
         body {
-            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
-            background-color: var(--md-surface-variant);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--md-surface);
             color: var(--md-on-surface);
             line-height: 1.5;
+            overflow-x: hidden;
         }
 
-        /* App Bar */
-        .app-bar {
-            background: var(--md-primary);
-            color: white;
-            padding: 16px 24px;
-            box-shadow: var(--md-shadow-elevated);
+        /* Layout Container */
+        .app-container {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            min-height: 100vh;
+        }
+
+        /* Navigation Rail */
+        .nav-rail {
+            background: var(--md-surface-1);
+            border-right: 1px solid var(--md-outline-variant);
+            display: flex;
+            flex-direction: column;
             position: sticky;
             top: 0;
+            height: 100vh;
             z-index: 100;
         }
 
-        .app-bar h1 {
+        .nav-header {
+            padding: 24px 20px;
+            border-bottom: 1px solid var(--md-outline-variant);
+        }
+
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
             font-size: 20px;
             font-weight: 500;
-            margin: 0;
+            color: var(--md-primary);
         }
 
-        .app-bar .subtitle {
-            font-size: 14px;
-            opacity: 0.87;
-            margin-top: 4px;
+        .nav-brand-icon {
+            font-size: 32px;
         }
 
-        /* Navigation */
-        .nav-links {
+        .nav-items {
+            flex: 1;
+            padding: 16px 8px;
+            overflow-y: auto;
+        }
+
+        .nav-item {
             display: flex;
+            align-items: center;
             gap: 16px;
-            margin-top: 12px;
-        }
-
-        .nav-links a {
-            color: white;
-            text-decoration: none;
-            padding: 8px 16px;
-            border-radius: 20px;
-            background: rgba(255,255,255,0.1);
-            font-size: 14px;
-            transition: background 0.2s;
-        }
-
-        .nav-links a:hover {
-            background: rgba(255,255,255,0.2);
-        }
-
-        /* Container */
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 24px;
-        }
-
-        /* Material Cards */
-        .card {
-            background: var(--md-surface);
-            border-radius: 12px;
-            box-shadow: var(--md-shadow);
-            margin-bottom: 24px;
-            overflow: hidden;
-        }
-
-        .card-header {
-            padding: 20px 24px 16px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-
-        .card-title {
-            font-size: 18px;
+            padding: 12px 16px;
+            margin-bottom: 4px;
+            border-radius: 28px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
+            color: var(--md-on-surface-variant);
+            font-size: var(--md-label-large);
             font-weight: 500;
-            margin: 0;
+            text-decoration: none;
+            user-select: none;
+        }
+
+        .nav-item:hover {
+            background: var(--md-surface-3);
+        }
+
+        .nav-item.active {
+            background: var(--md-secondary-container);
+            color: var(--md-on-primary-container);
+        }
+
+        .nav-item-icon {
+            font-size: 24px;
+            width: 24px;
+            text-align: center;
+        }
+
+        .nav-footer {
+            padding: 16px;
+            border-top: 1px solid var(--md-outline-variant);
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 12px;
+            background: var(--md-surface-2);
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--md-primary);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+        }
+
+        .user-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .user-role {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+        }
+
+        /* Main Content Area */
+        .main-content {
+            background: var(--md-surface);
+            position: relative;
+        }
+
+        .panel {
+            display: none;
+            animation: fadeIn 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            padding: 40px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .panel.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .panel-header {
+            margin-bottom: 32px;
+        }
+
+        .panel-title {
+            font-size: var(--md-headline-large);
+            font-weight: 400;
+            margin-bottom: 8px;
             color: var(--md-on-surface);
         }
 
-        .card-subtitle {
-            font-size: 14px;
+        .panel-subtitle {
+            font-size: var(--md-body-large);
             color: var(--md-on-surface-variant);
-            margin-top: 4px;
         }
 
-        .card-content {
+        /* Material Cards */
+        .md-card {
+            background: var(--md-surface-1);
+            border-radius: 16px;
             padding: 24px;
-        }
-
-        /* User Info Banner */
-        .user-banner {
-            background: linear-gradient(135deg, var(--md-primary-light), var(--md-primary));
-            color: white;
-            padding: 16px 24px;
-            border-radius: 12px;
             margin-bottom: 24px;
+            box-shadow: var(--md-elevation-1);
+            transition: box-shadow 0.2s;
         }
 
-        .user-banner .welcome {
-            font-size: 16px;
-            font-weight: 500;
+        .md-card:hover {
+            box-shadow: var(--md-elevation-2);
         }
 
-        .user-banner .auth-info {
-            font-size: 14px;
-            opacity: 0.9;
-            margin-top: 4px;
-        }
-
-        /* Sensitive Words Section */
-        .words-section {
-            display: grid;
-            gap: 16px;
-        }
-
-        .textarea-field {
-            position: relative;
-        }
-
-        .textarea-field label {
-            display: block;
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--md-primary);
-            margin-bottom: 8px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .textarea-field textarea {
-            width: 100%;
-            min-height: 100px;
-            padding: 16px;
-            border: 2px solid var(--md-outline);
-            border-radius: 8px;
-            font-family: inherit;
-            font-size: 14px;
-            resize: vertical;
-            transition: border-color 0.2s;
-        }
-
-        .textarea-field textarea:focus {
-            outline: none;
-            border-color: var(--md-primary);
-        }
-
-        .button-group {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        /* Buttons */
-        .btn {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .btn-primary {
-            background: var(--md-primary);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: var(--md-primary-dark);
-            box-shadow: var(--md-shadow-elevated);
-        }
-
-        .btn-secondary {
-            background: transparent;
-            color: var(--md-primary);
-            border: 2px solid var(--md-primary);
-        }
-
-        .btn-secondary:hover {
-            background: var(--md-primary);
-            color: white;
-        }
-
-        .btn-success {
-            background: var(--md-success);
-            color: white;
-        }
-
-        .btn-warning {
-            background: var(--md-warning);
-            color: white;
-        }
-
-        /* File Upload Zone */
-        .upload-zone {
-            border: 2px dashed var(--md-outline);
+        /* Disclaimer Banner */
+        .disclaimer-banner {
+            background: linear-gradient(135deg, #fff3e0, #ffe0b2);
+            border-left: 4px solid var(--md-warning);
+            padding: 20px 24px;
             border-radius: 12px;
-            padding: 40px 24px;
-            text-align: center;
-            transition: all 0.3s;
-            background: var(--md-surface-variant);
-            cursor: pointer;
-            position: relative;
+            margin-bottom: 32px;
         }
 
-        .upload-zone:hover,
-        .upload-zone.dragover {
-            border-color: var(--md-primary);
-            background: rgba(25, 118, 210, 0.05);
-        }
-
-        .upload-zone.processing {
-            pointer-events: none;
-            opacity: 0.7;
-        }
-
-        .upload-icon {
-            font-size: 48px;
-            color: var(--md-primary);
-            margin-bottom: 16px;
-        }
-
-        .upload-text {
+        .disclaimer-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
             font-size: 16px;
             font-weight: 500;
+            color: #e65100;
             margin-bottom: 8px;
         }
 
-        .upload-subtext {
+        .disclaimer-text {
+            font-size: 14px;
+            color: #ef6c00;
+            line-height: 1.6;
+        }
+
+        /* Drop Zone */
+        .drop-zone {
+            border: 2px dashed var(--md-outline);
+            border-radius: 16px;
+            padding: 60px 40px;
+            text-align: center;
+            background: var(--md-surface-2);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            position: relative;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.dragover {
+            border-color: var(--md-primary);
+            background: rgba(25, 118, 210, 0.04);
+            transform: scale(1.01);
+        }
+
+        .drop-zone-icon {
+            font-size: 64px;
+            color: var(--md-primary);
+            margin-bottom: 20px;
+        }
+
+        .drop-zone-text {
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: var(--md-on-surface);
+        }
+
+        .drop-zone-subtext {
             font-size: 14px;
             color: var(--md-on-surface-variant);
         }
@@ -275,54 +312,94 @@
             cursor: pointer;
         }
 
-        /* File List */
-        .file-list {
-            margin-top: 16px;
-            display: none;
+        /* Buttons */
+        .md-button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+            font-family: inherit;
         }
 
-        .file-list.visible {
-            display: block;
+        .md-button-filled {
+            background: var(--md-primary);
+            color: var(--md-on-primary);
+            box-shadow: var(--md-elevation-1);
+        }
+
+        .md-button-filled:hover {
+            background: #1565c0;
+            box-shadow: var(--md-elevation-2);
+            color: white;
+        }
+
+        .md-button-outlined {
+            background: transparent;
+            color: var(--md-primary);
+            border: 1px solid var(--md-outline);
+        }
+
+        .md-button-outlined:hover {
+            background: var(--md-primary-container);
+        }
+
+        .md-button-text {
+            background: transparent;
+            color: var(--md-primary);
+        }
+
+        .md-button-text:hover {
+            background: var(--md-primary-container);
+        }
+
+        /* File List */
+        .file-list {
+            margin-top: 24px;
+            display: grid;
+            gap: 12px;
         }
 
         .file-item {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            padding: 12px 16px;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            margin-bottom: 8px;
-            background: white;
-        }
-
-        .file-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-grow: 1;
+            gap: 16px;
+            padding: 16px;
+            background: var(--md-surface-1);
+            border-radius: 12px;
+            border: 1px solid var(--md-outline-variant);
         }
 
         .file-icon {
-            width: 24px;
-            height: 24px;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            background: var(--md-primary-container);
+            color: var(--md-primary);
             display: flex;
             align-items: center;
             justify-content: center;
-            background: var(--md-primary);
-            color: white;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 500;
+            font-size: 20px;
+            font-weight: 600;
         }
 
-        .file-details {
-            flex-grow: 1;
+        .file-info {
+            flex: 1;
+            min-width: 0;
         }
 
         .file-name {
             font-weight: 500;
             font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .file-size {
@@ -331,33 +408,18 @@
         }
 
         .file-status {
+            padding: 4px 12px;
+            border-radius: 16px;
             font-size: 12px;
-            padding: 4px 8px;
-            border-radius: 12px;
             font-weight: 500;
         }
 
         .file-status.ready {
-            background: #e8f5e8;
+            background: #e8f5e9;
             color: var(--md-success);
         }
 
-        .file-status.processing {
-            background: #fff3e0;
-            color: var(--md-warning);
-        }
-
-        .file-status.error {
-            background: #ffebee;
-            color: var(--md-error);
-        }
-
-        .file-status.complete {
-            background: #e8f5e8;
-            color: var(--md-success);
-        }
-
-        /* Progress Bars */
+        /* Progress */
         .progress-container {
             margin-top: 24px;
             display: none;
@@ -367,74 +429,21 @@
             display: block;
         }
 
-        .progress-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-
-        .progress-title {
-            font-weight: 500;
-            font-size: 14px;
-        }
-
-        .progress-stats {
-            font-size: 12px;
-            color: var(--md-on-surface-variant);
-        }
-
         .progress-bar {
             width: 100%;
-            height: 8px;
-            background: #e0e0e0;
-            border-radius: 4px;
+            height: 6px;
+            background: var(--md-surface-3);
+            border-radius: 3px;
             overflow: hidden;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
         }
 
         .progress-fill {
             height: 100%;
             background: var(--md-primary);
-            border-radius: 4px;
-            transition: width 0.3s ease;
+            border-radius: 3px;
+            transition: width 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
             width: 0%;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .progress-fill::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            right: 0;
-            background: linear-gradient(
-                90deg,
-                transparent,
-                rgba(255, 255, 255, 0.3),
-                transparent
-            );
-            animation: shimmer 1.5s infinite;
-        }
-
-        @keyframes shimmer {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(100%); }
-        }
-
-        /* Details/Summary styling */
-        details summary::-webkit-details-marker {
-            display: none;
-        }
-        
-        details[open] #wordsToggleIcon {
-            transform: rotate(90deg);
-        }
-        
-        details summary:hover {
-            background: var(--md-surface-variant);
         }
 
         .progress-text {
@@ -443,35 +452,27 @@
             text-align: center;
         }
 
-        /* Results Section */
-        .results-section {
-            margin-top: 24px;
-            display: none;
-        }
-
-        .results-section.visible {
-            display: block;
-        }
-
-        .results-summary {
+        /* Results */
+        .results-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 16px;
-            margin-bottom: 24px;
+            margin-bottom: 32px;
         }
 
         .metric-card {
             background: white;
             padding: 20px;
-            border-radius: 8px;
+            border-radius: 12px;
             border-left: 4px solid var(--md-primary);
-            box-shadow: var(--md-shadow);
+            box-shadow: var(--md-elevation-1);
         }
 
         .metric-value {
-            font-size: 24px;
-            font-weight: 700;
+            font-size: 28px;
+            font-weight: 600;
             color: var(--md-primary);
+            margin-bottom: 4px;
         }
 
         .metric-label {
@@ -479,24 +480,24 @@
             color: var(--md-on-surface-variant);
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            margin-top: 4px;
         }
 
         /* File Results */
-        .file-results {
+        .file-result {
             background: white;
-            border-radius: 8px;
+            border-radius: 12px;
             margin-bottom: 16px;
             overflow: hidden;
-            box-shadow: var(--md-shadow);
+            border: 1px solid var(--md-outline-variant);
         }
 
         .file-result-header {
-            background: var(--md-surface-variant);
+            background: var(--md-surface-2);
             padding: 16px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            border-bottom: 1px solid var(--md-outline-variant);
         }
 
         .file-result-name {
@@ -524,7 +525,7 @@
             justify-content: space-between;
             align-items: center;
             padding: 8px 12px;
-            background: var(--md-surface-variant);
+            background: var(--md-surface-2);
             border-radius: 6px;
         }
 
@@ -538,1191 +539,368 @@
             color: var(--md-primary);
         }
 
-        /* Download Section */
-        .download-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 16px;
-        }
-
-        .download-card {
+        /* My Words Panel */
+        .words-table {
             background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: var(--md-shadow);
-            text-align: center;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: var(--md-elevation-1);
         }
 
-        .download-icon {
-            font-size: 32px;
-            color: var(--md-primary);
-            margin-bottom: 12px;
+        .words-table table {
+            width: 100%;
+            border-collapse: collapse;
         }
 
-        .download-title {
-            font-weight: 500;
-            margin-bottom: 8px;
-        }
-
-        .download-description {
-            font-size: 12px;
-            color: var(--md-on-surface-variant);
-            margin-bottom: 16px;
-        }
-
-        /* Status Message */
-        .status-message {
+        .words-table th,
+        .words-table td {
             padding: 16px;
-            border-radius: 8px;
-            margin: 16px 0;
-            font-size: 14px;
-            display: none;
+            text-align: left;
+            border-bottom: 1px solid var(--md-outline-variant);
         }
 
-        .status-message.visible {
-            display: block;
-        }
-
-        .status-message.success {
-            background: #e8f5e8;
-            color: var(--md-success);
-            border-left: 4px solid var(--md-success);
-        }
-
-        .status-message.error {
-            background: #ffebee;
-            color: var(--md-error);
-            border-left: 4px solid var(--md-error);
-        }
-
-        .status-message.info {
-            background: #e3f2fd;
-            color: var(--md-primary);
-            border-left: 4px solid var(--md-primary);
-        }
-
-        
-        /* Getting Started Section */
-        .getting-started {
-            background: linear-gradient(135deg, #e3f2fd, #bbdefb);
-            border-left: 4px solid var(--md-primary);
-        }
-
-        .getting-started details {
-            cursor: pointer;
-        }
-
-        .getting-started summary {
-            padding: 20px 24px;
-            font-size: 18px;
+        .words-table th {
+            background: var(--md-surface-2);
             font-weight: 500;
-            color: var(--md-primary);
-            list-style: none;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .getting-started summary::-webkit-details-marker {
-            display: none;
-        }
-
-        .getting-started summary::before {
-            content: '▼';
             font-size: 14px;
-            transition: transform 0.3s;
+            color: var(--md-on-surface-variant);
         }
 
-        .getting-started details[open] summary::before {
-            transform: rotate(-180deg);
+        .words-table tr:hover {
+            background: var(--md-surface-1);
         }
 
-        .getting-started-content {
-            padding: 0 24px 24px;
+        .add-word-form {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 16px;
+            align-items: end;
+            margin-bottom: 24px;
         }
 
-        .help-section {
-            margin-bottom: 32px;
-        }
-
-        .help-section h3 {
-            font-size: 16px;
-            font-weight: 500;
-            color: var(--md-on-surface);
-            margin-bottom: 12px;
+        .md-textfield {
             display: flex;
-            align-items: center;
+            flex-direction: column;
             gap: 8px;
         }
 
-        .help-section p {
-            font-size: 14px;
-            line-height: 1.6;
-            color: var(--md-on-surface-variant);
-            margin-bottom: 12px;
-        }
-
-        .example-box {
-            background: white;
-            border-radius: 8px;
-            padding: 16px;
-            margin: 12px 0;
-            border-left: 3px solid var(--md-primary);
-        }
-
-        .example-item {
-            margin-bottom: 16px;
-        }
-
-        .example-item:last-child {
-            margin-bottom: 0;
-        }
-
-        .example-label {
+        .md-textfield label {
             font-size: 12px;
             font-weight: 500;
             color: var(--md-primary);
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            margin-bottom: 4px;
         }
 
-        .example-text {
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-            padding: 8px 12px;
-            border-radius: 4px;
-            background: var(--md-surface-variant);
-            color: var(--md-on-surface);
-            word-break: break-all;
-        }
-
-        .example-text.before {
-            background: #ffebee;
-            color: #c62828;
-        }
-
-        .example-text.after {
-            background: #e8f5e9;
-            color: #2e7d32;
-        }
-
-        .step-list {
-            counter-reset: step-counter;
-            list-style: none;
-            padding: 0;
-        }
-
-        .step-list li {
-            counter-increment: step-counter;
-            margin-bottom: 20px;
-            padding-left: 50px;
-            position: relative;
-        }
-
-        .step-list li::before {
-            content: counter(step-counter);
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 36px;
-            height: 36px;
-            background: var(--md-primary);
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 16px;
-        }
-
-        .step-list li strong {
-            display: block;
-            font-size: 15px;
-            color: var(--md-on-surface);
-            margin-bottom: 4px;
-        }
-
-        .step-list li p {
-            margin: 0;
-            font-size: 14px;
-            color: var(--md-on-surface-variant);
-        }
-
-        .tip-box {
-            background: #fff3e0;
-            border-left: 4px solid var(--md-warning);
+        .md-textfield input {
             padding: 12px 16px;
-            border-radius: 4px;
-            margin-top: 16px;
-        }
-
-        .tip-box strong {
-            color: var(--md-warning);
+            border: 1px solid var(--md-outline);
+            border-radius: 8px;
             font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s;
         }
 
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .container {
-                padding: 16px;
-            }
-            
-            /* Stack Hebrew box on mobile */
-            .card-content[style*="justify-content: space-between"] {
-                flex-direction: column !important;
-                gap: 16px !important;
-                text-align: center !important;
-            }
-            
-            .card-content[style*="justify-content: space-between"] > div {
-                text-align: center !important;
-            }
+        .md-textfield input:focus {
+            outline: none;
+            border-color: var(--md-primary);
+            box-shadow: 0 0 0 3px var(--md-primary-container);
+        }
 
-            .button-group {
-                flex-direction: column;
-            }
-
-            .btn {
-                justify-content: center;
-            }
-
-            .nav-links {
-                flex-wrap: wrap;
-            }
-
-            .results-summary {
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .app-container {
                 grid-template-columns: 1fr;
             }
+            
+            .nav-rail {
+                position: fixed;
+                left: -280px;
+                transition: left 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            }
+            
+            .nav-rail.open {
+                left: 0;
+            }
+            
+            .panel {
+                padding: 24px 20px;
+            }
+        }
 
-            .download-grid {
+        @media (max-width: 640px) {
+            .add-word-form {
+                grid-template-columns: 1fr;
+            }
+            
+            .results-grid {
                 grid-template-columns: 1fr;
             }
         }
     </style>
 </head>
 <body>
-    <!-- App Bar -->
-    <header class="app-bar">
-        <h1>🛡️ Yossarian Go</h1>
-        <div class="subtitle">Automatically remove sensitive information from log files <span id="version" style="opacity: 0.7; font-size: 12px;"></span></div>
-        <nav class="nav-links">
-            <span id="username" style="color: white; margin-right: 15px;"></span>
-            <a href="/health">📊 Health Check</a>
-            <a href="/admin">⚙️ Admin Panel</a>
-            <a href="/admin/logout" id="logoutLink" style="display: none;">🚪 Logout</a>
-        </nav>
-    </header>
-
-    <div class="container">
-        <!-- User Info Banner (Dynamic) -->
-        <div class="user-banner" id="userBanner" style="display: none;">
-            <div class="welcome">👤 Welcome back, <span id="userName">User</span>!</div>
-            <div class="auth-info">🔐 Authenticated via Enterprise SSO</div>
-        </div>
-
-                <!-- Dynamic Organization Settings (Disclaimer & Documentation) -->
-        <div id="orgSettingsContainer"></div>
-
-        <!-- Getting Started Section -->
-        <div class="card getting-started">
-            <details>
-                <summary>🎯 Getting Started - How to Use Yossarian</summary>
-                <div class="getting-started-content">
-                    
-                    <!-- What Does Yossarian Do? -->
-                    <div class="help-section">
-                        <h3>🛡️ What Does Yossarian Do?</h3>
-                        <p>
-                            Yossarian automatically finds and removes sensitive information from your log files, 
-                            making them safe to share with external support teams, vendors, or less-secure storage.
-                        </p>
-                        <p>
-                            <strong>Think of it as a "redaction tool" for your technical files.</strong> 
-                            Just like blacking out sensitive information in a document, Yossarian replaces 
-                            sensitive data with safe placeholders while keeping your logs readable and useful.
-                        </p>
-                    </div>
-
-                    <!-- What Gets Protected? -->
-                    <div class="help-section">
-                        <h3>📋 What Gets Protected?</h3>
-                        <p>Yossarian automatically detects and protects:</p>
-                        
-                        <div class="example-box">
-                            <div class="example-item">
-                                <div class="example-label">🌐 Network Addresses (IP Addresses)</div>
-                                <div class="example-text before">Server at 192.168.1.100 crashed at midnight</div>
-                                <div class="example-text after">Server at [IP-001] crashed at midnight</div>
-                            </div>
-
-                            <div class="example-item">
-                                <div class="example-label">👤 Usernames & Accounts</div>
-                                <div class="example-text before">CORP\john.doe accessed the database</div>
-                                <div class="example-text after">USN123456789 accessed the database</div>
-                            </div>
-
-                            <div class="example-item">
-                                <div class="example-label">🔑 Passwords & Credentials</div>
-                                <div class="example-text before">password=MySecret123 user=admin</div>
-                                <div class="example-text after">[PASSWORD-REDACTED] user=admin</div>
-                            </div>
-
-                            <div class="example-item">
-                                <div class="example-label">🔐 Security Tokens & Keys</div>
-                                <div class="example-text before">token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</div>
-                                <div class="example-text after">token=[JWT-REDACTED]</div>
-                            </div>
-
-                            <div class="example-item">
-                                <div class="example-label">🏢 Your Custom Sensitive Words</div>
-                                <div class="example-text before">ProjectPhoenix deadline is next week</div>
-                                <div class="example-text after">[SENSITIVE] deadline is next week</div>
-                            </div>
-                        </div>
-
-                        <div class="tip-box">
-                            <strong>💡 TIP:</strong> All replacements are consistent - if "192.168.1.100" appears 
-                            100 times, it will always become "[IP-001]" so you can still track patterns!
-                        </div>
-                    </div>
-
-                    <!-- File Size Limits -->
-                    <div class="help-section">
-                        <h3>📦 File Size Limits</h3>
-                        <p>To ensure smooth processing, the following limits apply:</p>
-                        
-                        <div class="example-box">
-                            <div class="example-item">
-                                <div class="example-label">📁 Individual Files</div>
-                                <p style="margin: 8px 0; font-size: 14px;">
-                                    Maximum <strong id="helpMaxFileSize">50MB</strong> per file
-                                </p>
-                            </div>
-
-                            <div class="example-item">
-                                <div class="example-label">📦 ZIP Archives</div>
-                                <p style="margin: 8px 0; font-size: 14px;">
-                                    Files inside ZIP archives: Maximum <strong id="helpMaxZipFileSize">10MB</strong> each (uncompressed)
-                                </p>
-                            </div>
-
-                            <div class="example-item">
-                                <div class="example-label">📊 Total Upload</div>
-                                <p style="margin: 8px 0; font-size: 14px;">
-                                    Maximum <strong id="helpMaxFileCount">10</strong> files, 
-                                    <strong id="helpMaxTotalSize">100MB</strong> total
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="tip-box">
-                            <strong>💡 TIP:</strong> If you have a very large ZIP file, consider extracting it first 
-                            and uploading the individual log files instead. This gives you better control and 
-                            allows larger individual files to be processed.
-                        </div>
-                    </div>
-
-                    <!-- How to Use -->
-                    <div class="help-section">
-                        <h3>📚 How to Use Yossarian (3 Easy Steps)</h3>
-                        
-                        <ol class="step-list">
-                            <li>
-                                <strong>Add Your Custom Sensitive Words (Optional)</strong>
-                                <p>
-                                    If your files contain company-specific secrets like project codenames, 
-                                    client names, or internal system names, add them in the "Personal Sensitive Words" 
-                                    section below. This is completely optional - Yossarian will still protect 
-                                    standard sensitive data without this step.
-                                </p>
-                            </li>
-                            
-                            <li>
-                                <strong>Upload Your Files</strong>
-                                <p>
-                                    Drag and drop your log files, or click the upload area to browse. 
-                                    Yossarian supports .log, .txt, .zip, .json, and other text files. 
-                                    You can upload up to 10 files at once (max 50MB each).
-                                </p>
-                            </li>
-                            
-                            <li>
-                                <strong>Download Protected Files</strong>
-                                <p>
-                                    Click "🔒 Sanitize Files" to process your uploads. Review the summary 
-                                    to see what was protected, then download your cleaned files and the audit report. 
-                                    The audit report shows exactly what was changed, so you can verify nothing 
-                                    important was removed.
-                                </p>
-                            </li>
-                        </ol>
-
-                        <div class="tip-box">
-                            <strong>⚠️ IMPORTANT:</strong> Always review the sanitized files before sharing them 
-                            externally. While Yossarian catches common patterns, it's good practice to verify 
-                            that all sensitive information has been properly protected.
-                        </div>
-                    </div>
-
+    <div class="app-container">
+        <!-- Navigation Rail -->
+        <nav class="nav-rail">
+            <div class="nav-header">
+                <div class="nav-brand">
+                    <span class="nav-brand-icon">🛡️</span>
+                    <span>Yossarian Go</span>
                 </div>
-            </details>
-        </div>
-
-        <!-- Personal Sensitive Words -->
-        <div class="card">
-            <details>
-                <summary style="padding: 20px 24px; font-size: 16px; font-weight: 500; color: var(--md-primary); cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px;">
-                    <span style="font-size: 14px; transition: transform 0.3s;" id="wordsToggleIcon">▶</span>
-                    🔐 Personal Sensitive Words
-                    <span style="font-size: 14px; color: var(--md-on-surface-variant); font-weight: 400;" id="wordsCount">(0 words stored)</span>
-                </summary>
-                
-                <div class="card-content" style="padding-top: 0;">
-                    <div class="card-subtitle" style="margin-bottom: 16px; color: var(--md-on-surface-variant);">
-                        Add your own sensitive terms (stored encrypted in browser)
+            </div>
+            
+            <div class="nav-items">
+                <a class="nav-item active" data-panel="secure-files">
+                    <span class="nav-item-icon">🔒</span>
+                    <span>Secure Files</span>
+                </a>
+                <a class="nav-item" data-panel="my-words">
+                    <span class="nav-item-icon">📝</span>
+                    <span>My Words</span>
+                </a>
+                <a class="nav-item" data-panel="my-jobs">
+                    <span class="nav-item-icon">📦</span>
+                    <span>My Jobs</span>
+                </a>
+                <a class="nav-item" data-panel="help">
+                    <span class="nav-item-icon">📚</span>
+                    <span>Help</span>
+                </a>
+                <a class="nav-item" data-panel="admin" id="adminNavItem" style="display: none;">
+                    <span class="nav-item-icon">⚙️</span>
+                    <span>Admin</span>
+                </a>
+            </div>
+            
+            <div class="nav-footer">
+                <div class="user-info">
+                    <div class="user-avatar" id="userAvatar">U</div>
+                    <div class="user-details">
+                        <div class="user-name" id="userName">Guest</div>
+                        <div class="user-role" id="userRole">Visitor</div>
                     </div>
-                    
-                    <div class="status-message" id="wordsStatus"></div>
-                    
-                    <!-- Words Table -->
-                    <div class="table-container" style="margin-bottom: 16px;">
-                        <table class="table">
+                </div>
+                <div style="padding: 8px 12px; margin-top: 8px;">
+                    <a href="/admin" style="text-decoration: none; color: var(--md-on-surface-variant); font-size: 12px; display: flex; align-items: center; gap: 8px;" id="adminLink">
+                        <span>⚙️</span>
+                        <span>Admin Panel</span>
+                    </a>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Secure Files Panel (Default) -->
+            <div class="panel active" id="panel-secure-files">
+                <div class="panel-header">
+                    <h1 class="panel-title">🔒 Secure Files</h1>
+                    <p class="panel-subtitle">Remove sensitive information from your log files before sharing</p>
+                </div>
+
+                <!-- Dynamic Disclaimer Banner -->
+                <div class="disclaimer-banner" id="disclaimerBanner" style="display: none;">
+                    <div class="disclaimer-header">
+                        <span>⚠️</span>
+                        <span id="disclaimerTitle">Important Notice</span>
+                    </div>
+                    <div class="disclaimer-text" id="disclaimerText">
+                        This tool automatically removes sensitive information (IP addresses, usernames, passwords, tokens) from log files. Always review sanitized files before sharing externally.
+                    </div>
+                </div>
+
+                <!-- Dynamic Documentation Link -->
+                <div id="docsBanner" style="display: none; background: linear-gradient(135deg, #e8f5e9, #c8e6c9); border-left: 4px solid #4caf50; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px;">
+                        <div style="display: flex; align-items: center; gap: 16px;">
+                            <div style="font-size: 32px;">📚</div>
+                            <div>
+                                <div style="font-size: 16px; font-weight: 500; color: #2e7d32; margin-bottom: 4px;" id="docsTitle">Documentation</div>
+                                <div style="font-size: 13px; color: #558b2f;">Complete user guide and tutorials</div>
+                            </div>
+                        </div>
+                        <a href="#" id="docsLink" target="_blank" rel="noopener noreferrer" class="md-button md-button-filled" style="background: #2e7d32; white-space: nowrap;">
+                            📖 View Documentation
+                        </a>
+                    </div>
+                </div>
+
+                <div class="md-card">
+                    <div class="drop-zone" id="dropZone">
+                        <div class="drop-zone-icon">📤</div>
+                        <div class="drop-zone-text">Drop files here or click to browse</div>
+                        <div class="drop-zone-subtext">Supports .log, .txt, .zip, .tar.gz (max 50MB per file)</div>
+                        <input type="file" class="file-input" id="fileInput" multiple accept=".log,.txt,.zip,.tar,.gz,.tar.gz,.json,.xml,.csv">
+                    </div>
+
+                    <div class="file-list" id="fileList"></div>
+
+                    <div class="progress-container" id="progressContainer">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <div class="progress-text" id="progressText">Processing files...</div>
+                    </div>
+
+                    <!-- Detailed Report Option -->
+                    <div style="margin-top: 16px; padding: 16px; background: var(--md-surface-2); border-radius: 8px;">
+                        <label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                            <input type="checkbox" id="detailedReportCheckbox" style="width: 20px; height: 20px; cursor: pointer;">
+                            <div>
+                                <div style="font-size: 14px; font-weight: 500;">Generate detailed replacement report (CSV)</div>
+                                <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 4px;">
+                                    Shows line numbers, original values, and replacements for learning
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div style="margin-top: 24px; display: flex; gap: 12px;">
+                        <button class="md-button md-button-filled" id="processBtn" disabled>
+                            🔒 Secure Files
+                        </button>
+                        <button class="md-button md-button-outlined" id="clearBtn">
+                            🗑️ Clear
+                        </button>
+                    </div>
+                </div>
+
+                <div id="resultsSection" style="display: none;">
+                    <div class="md-card">
+                        <h3 style="margin-bottom: 20px;">📊 Results Summary</h3>
+                        <div class="results-grid" id="resultsGrid"></div>
+                    </div>
+
+                    <!-- Per-File Results -->
+                    <div class="md-card">
+                        <h3 style="margin-bottom: 20px;">📄 File-by-File Results</h3>
+                        <div id="fileResults"></div>
+                    </div>
+
+                    <div class="md-card">
+                        <h3 style="margin-bottom: 20px;">⬇️ Downloads</h3>
+                        <div style="display: flex; gap: 12px; flex-wrap: wrap;" id="downloadButtons"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- My Words Panel -->
+            <div class="panel" id="panel-my-words">
+                <div class="panel-header">
+                    <h1 class="panel-title">📝 My Sensitive Words</h1>
+                    <p class="panel-subtitle">Manage your personal sensitive terms (stored encrypted in browser)</p>
+                </div>
+
+                <div class="md-card">
+                    <div class="add-word-form">
+                        <div class="md-textfield">
+                            <label>Term</label>
+                            <input type="text" id="newWordTerm" placeholder="MyCompany">
+                        </div>
+                        <div class="md-textfield">
+                            <label>Replacement</label>
+                            <input type="text" id="newWordReplacement" placeholder="[SNIPPED]">
+                        </div>
+                        <button class="md-button md-button-filled" onclick="addPersonalWord()">➕ Add Word</button>
+                    </div>
+
+                    <div class="words-table">
+                        <table>
                             <thead>
                                 <tr>
-                                    <th style="width: 40%;">Term</th>
-                                    <th style="width: 40%;">Replacement</th>
-                                    <th style="width: 20%; text-align: center;">Actions</th>
+                                    <th>Term</th>
+                                    <th>Replacement</th>
+                                    <th style="text-align: center;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="personalWordsTable">
                                 <tr>
-                                    <td colspan="3" style="text-align: center; color: var(--md-on-surface-variant); padding: 20px;">
+                                    <td colspan="3" style="text-align: center; color: var(--md-on-surface-variant); padding: 40px;">
                                         No personal words added yet
                                     </td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
-                    
-                    <!-- Add New Word Form -->
-                    <div style="background: var(--md-surface-variant); padding: 16px; border-radius: 8px;">
-                        <div style="font-weight: 500; margin-bottom: 12px; color: var(--md-on-surface);">
-                            ➕ Add New Word
-                        </div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end;">
-                            <div>
-                                <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 6px;">
-                                    TERM
-                                </label>
-                                <input 
-                                    type="text" 
-                                    id="newWordTerm" 
-                                    placeholder="MyCompany"
-                                    style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;"
-                                />
-                            </div>
-                            <div>
-                                <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 6px;">
-                                    REPLACEMENT
-                                </label>
-                                <input 
-                                    type="text" 
-                                    id="newWordReplacement" 
-                                    placeholder="[SNIPPED]"
-                                    style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;"
-                                    onkeypress="if(event.key==='Enter') addPersonalWord()"
-                                />
-                            </div>
-                            <button type="button" class="btn btn-primary" onclick="addPersonalWord()">
-                                ➕ Add
-                            </button>
-                        </div>
-                        <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 8px;">
-                            💡 Leave replacement empty to use default: [SNIPPED]
-                        </div>
-                    </div>
-                </div>
-            </details>
-        </div>
-
-        <!-- File Upload & Processing -->
-        <div class="card">
-            <div class="card-header">
-                <h2 class="card-title">📁 Upload & Sanitize Files</h2>
-                <div class="card-subtitle" id="uploadLimitsSubtitle">Support for multiple log files, archives (zip, tar.gz) • Loading limits...</div>
-            </div>
-            <div class="card-content">
-                <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
-                    <div class="upload-icon">📤</div>
-                    <div class="upload-text">Drop files here or click to browse</div>
-                    <div class="upload-subtext">Supports .log, .txt, .zip, .tar.gz and other text formats</div>
-                    <input 
-                        type="file" 
-                        id="fileInput" 
-                        class="file-input" 
-                        multiple 
-                        accept=".log,.txt,.zip,.tar,.gz,.tar.gz,.json,.xml,.csv"
-                        aria-label="Upload files for sanitization"
-                    >
-                </div>
-
-                <!-- Upload Status Messages -->
-                <div class="status-message" id="uploadStatus"></div>
-
-                <!-- File List -->
-                <div class="file-list" id="fileList"></div>
-
-                <!-- Progress Section -->
-                <div class="progress-container" id="progressContainer">
-                    <div class="progress-header">
-                        <span class="progress-title">Processing Files...</span>
-                        <span class="progress-stats" id="progressStats">0 / 0 files</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill"></div>
-                    </div>
-                    <div class="progress-text" id="progressText">Preparing files...</div>
-                </div>
-                <!-- Detailed Report Option -->
-                <div style="margin-top: 16px; padding: 12px; background: #f5f5f5; border-radius: 8px;">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                        <input type="checkbox" id="detailedReportCheckbox" style="width: 18px; height: 18px; cursor: pointer;">
-                        <span style="font-size: 14px; font-weight: 500;">Generate detailed replacement report (CSV)</span>
-                    </label>
-                    <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 4px; margin-left: 26px;">
-                        Shows line numbers, original values, and replacements for learning
-                    </div>
-                </div>
-
-                <div class="button-group" style="margin-top: 16px;">
-                    <button type="button" class="btn btn-primary" id="processBtn" onclick="processFiles()" disabled>
-                        🔒 Sanitize Files
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="clearFiles()">
-                        🗑️ Clear Files
-                    </button>
                 </div>
             </div>
-        </div>
 
-        <!-- Results Section -->
-        <div class="results-section" id="resultsSection">
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">📊 Sanitization Results</h2>
-                    <div class="card-subtitle">Processing summary and detailed breakdown</div>
+            <!-- My Jobs Panel -->
+            <div class="panel" id="panel-my-jobs">
+                <div class="panel-header">
+                    <h1 class="panel-title">📦 My Batch Jobs</h1>
+                    <p class="panel-subtitle">Track and manage your batch processing jobs</p>
                 </div>
-                <div class="card-content">
-                    <!-- Overall Summary -->
-                    <div class="results-summary" id="resultsSummary">
-                        <div class="metric-card">
-                            <div class="metric-value" id="totalIPs">0</div>
-                            <div class="metric-label">IP Addresses</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value" id="totalAD">0</div>
-                            <div class="metric-label">AD Accounts</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value" id="totalJWT">0</div>
-                            <div class="metric-label">JWT Tokens</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value" id="totalKeys">0</div>
-                            <div class="metric-label">Private Keys</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value" id="totalSensitive">0</div>
-                            <div class="metric-label">Sensitive Terms</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value" id="totalTime">0ms</div>
-                            <div class="metric-label">Processing Time</div>
-                        </div>
-                    </div>
 
-                    <!-- Per-File Results -->
-                    <div id="fileResults"></div>
+                <div class="md-card">
+                    <p>My Jobs functionality coming soon...</p>
                 </div>
             </div>
-        </div>
 
-        <!-- Downloads -->
-        <div class="card">
-            <div class="card-header">
-                <h2 class="card-title">⬇️ Downloads</h2>
-                <div class="card-subtitle">Download sanitized files and audit reports</div>
-            </div>
-            <div class="card-content">
-                <div class="download-grid">
-                    <div class="download-card">
-                        <div class="download-icon">🔒</div>
-                        <div class="download-title">Sanitized Files</div>
-                        <div class="download-description">Download your cleaned log files as a zip archive</div>
-                        <div id="downloadButtons">
-                            <!-- Dynamic download buttons will be populated here -->
-                        </div>  
-                    </div>
-                    <div class="download-card">
-                        <div class="download-icon">📋</div>
-                        <div class="download-title">IP Mappings</div>
-                        <div class="download-description">CSV report of all IP address mappings for audit trail</div>
-                        <a href="/mappings/csv" class="btn btn-primary">
-                            📊 Download Mappings
-                        </a>
-                    </div>
-                    <div class="download-card">
-                        <div class="download-icon">📈</div>
-                        <div class="download-title">Processing Report</div>
-                        <div class="download-description">Detailed report of all sanitization activities</div>
-                        <a href="#" class="btn btn-primary" id="downloadReport" onclick="generateReport()">
-                            📄 Generate Report
-                        </a>
-                    </div>
-                    <div class="download-card" id="detailedReportCard" style="display: none;">
-                        <div class="download-icon">🔍</div>
-                        <div class="download-title">Detailed Replacement Report</div>
-                        <div class="download-description">Line-by-Line Changes - CSV</div>
-                        <a href="/download/detailed-report" class="btn btn-success" id="downloadDetailedReport">
-                            📊 Download CSV
-                        </a>
-                    </div>
+            <!-- Help Panel -->
+            <div class="panel" id="panel-help">
+                <div class="panel-header">
+                    <h1 class="panel-title">📚 Help & Documentation</h1>
+                    <p class="panel-subtitle">Learn how to use Yossarian Go effectively</p>
+                </div>
+
+                <div class="md-card">
+                    <h3 style="margin-bottom: 16px;">🎯 What Does Yossarian Do?</h3>
+                    <p style="margin-bottom: 24px;">
+                        Yossarian automatically finds and removes sensitive information from your log files, making them safe to share with external support teams, vendors, or less-secure storage.
+                    </p>
+
+                    <h3 style="margin-bottom: 16px;">🔋 What Gets Protected?</h3>
+                    <ul style="margin-left: 20px; margin-bottom: 24px;">
+                        <li>🌐 Network Addresses (IP Addresses)</li>
+                        <li>👤 Usernames & Accounts</li>
+                        <li>🔑 Passwords & Credentials</li>
+                        <li>🎫 Security Tokens & Keys</li>
+                        <li>🏢 Your Custom Sensitive Words</li>
+                    </ul>
+
+                    <h3 style="margin-bottom: 16px;">📝 How to Use (3 Easy Steps)</h3>
+                    <ol style="margin-left: 20px;">
+                        <li style="margin-bottom: 12px;"><strong>Add Your Words (Optional)</strong> - Go to "My Words" to add company-specific secrets</li>
+                        <li style="margin-bottom: 12px;"><strong>Upload Files</strong> - Drag and drop or click to browse for files</li>
+                        <li style="margin-bottom: 12px;"><strong>Download</strong> - Review results and download secured files</li>
+                    </ol>
                 </div>
             </div>
-        </div>
+
+            <!-- Admin Panel -->
+            <div class="panel" id="panel-admin">
+                <div class="panel-header">
+                    <h1 class="panel-title">⚙️ Administration</h1>
+                    <p class="panel-subtitle">System configuration and management</p>
+                </div>
+
+                <div class="md-card">
+                    <p>Admin panel functionality coming soon...</p>
+                </div>
+            </div>
+        </main>
     </div>
 
     <script>
-        // Global state
-        let selectedFiles = [];
-        let processingResults = [];
-        let totalProcessingTime = 0;
-        
-        // File upload limits (loaded from backend)
-        let maxTotalUploadSizeMB = 100;
-        let maxFileSizeMB = 50;
-        let maxZipFileSizeMB = 10;
-        let maxFileCount = 10;
-
-        // Initialize on page load
-        window.onload = function() {
-            loadConfigLimits();
-            displayPersonalWords(); // Load personal words table
-            initializeFileUpload();
-            createDownloadButtons(); // Initialize empty download section
-        };
-        
-        // Load configuration limits from backend
-        function loadConfigLimits() {
-            fetch('/api/config')
-                .then(r => r.json())
-                .then(data => {
-                    maxTotalUploadSizeMB = data.max_total_upload_size_mb || 100;
-                    maxFileSizeMB = data.max_file_size_mb || 50;
-                    maxZipFileSizeMB = data.max_zip_file_size_mb || 10;
-                    maxFileCount = data.max_file_count || 10;
-                    
-                    // Update UI subtitle with actual limits
-                    document.getElementById('uploadLimitsSubtitle').textContent = 
-                        `Support for multiple log files, archives (zip, tar.gz) • Max ${maxFileSizeMB}MB per file • Files inside ZIP: ${maxZipFileSizeMB}MB • Up to ${maxFileCount} files`;
-                    
-                    // Update help section values if elements exist
-                    const helpMaxFileSize = document.getElementById('helpMaxFileSize');
-                    const helpMaxZipFileSize = document.getElementById('helpMaxZipFileSize');
-                    const helpMaxFileCount = document.getElementById('helpMaxFileCount');
-                    const helpMaxTotalSize = document.getElementById('helpMaxTotalSize');
-                    
-                    if (helpMaxFileSize) helpMaxFileSize.textContent = `${maxFileSizeMB}MB`;
-                    if (helpMaxZipFileSize) helpMaxZipFileSize.textContent = `${maxZipFileSizeMB}MB`;
-                    if (helpMaxFileCount) helpMaxFileCount.textContent = maxFileCount;
-                    if (helpMaxTotalSize) helpMaxTotalSize.textContent = `${maxTotalUploadSizeMB}MB`;
-                    
-                    console.log('Config limits loaded:', data);
-                })
-                .catch(e => {
-                    console.log('Failed to load config limits, using defaults:', e);
-                    document.getElementById('uploadLimitsSubtitle').textContent = 
-                        `Support for multiple log files, archives (zip, tar.gz) • Max 50MB per file • Files inside ZIP: 10MB • Up to 10 files`;
-                });
-        }
-        // File Upload Handling
-        function initializeFileUpload() {
-            const uploadZone = document.getElementById('uploadZone');
-            const fileInput = document.getElementById('fileInput');
-
-            uploadZone.onclick = function(e) {
-                if (e.target === this || e.target.classList.contains('upload-icon') || 
-                    e.target.classList.contains('upload-text') || e.target.classList.contains('upload-subtext')) {
-                    e.stopPropagation();
-                    fileInput.click();
-                }
-            };
-
-            // Drag and drop handlers
-            uploadZone.addEventListener('dragover', (e) => {
+        // Panel Navigation
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', (e) => {
                 e.preventDefault();
-                uploadZone.classList.add('dragover');
+                const panelId = item.getAttribute('data-panel');
+                
+                // Update nav active state
+                document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
+                
+                // Switch panels
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                document.getElementById(`panel-${panelId}`).classList.add('active');
             });
+        });
 
-            uploadZone.addEventListener('dragleave', () => {
-                uploadZone.classList.remove('dragover');
-            });
-
-            uploadZone.addEventListener('drop', (e) => {
-                e.preventDefault();
-                uploadZone.classList.remove('dragover');
-                handleFiles(e.dataTransfer.files);
-            });
-
-            // File input change
-            fileInput.addEventListener('change', (e) => {
-                handleFiles(e.target.files);
-            });
-        }
-
-        function handleFiles(files) {
-            const fileArray = Array.from(files);
-            
-            // Validate file count
-            if (fileArray.length > maxFileCount) {
-                showStatus('error', `Maximum ${maxFileCount} files allowed. Please select fewer files.`, 'uploadStatus');
-                return;
-            }
-
-            // Reset previous processing data
-            selectedFiles = [];
-            processingResults = [];
-            document.getElementById('resultsSection').classList.remove('visible');
-            document.getElementById('progressContainer').classList.remove('visible');
-            
-            // Clear server-side download cache when starting new upload
-            fetch('/clear-download-cache', { method: 'POST' })
-                .catch(err => console.log('Cache clear failed:', err));
-            
-            createDownloadButtons(); // Reset download section
-            
-            fileArray.forEach(file => {
-                // Validate file size
-                if (file.size > maxFileSizeMB * 1024 * 1024) {
-                    showStatus('error', `File "${file.name}" exceeds ${maxFileSizeMB}MB limit and will be skipped.`, 'uploadStatus');
-                    return;
-                }
-
-                // Basic binary detection
-                const isBinary = file.type.startsWith('image/') || 
-                                file.type.startsWith('video/') || 
-                                file.type.startsWith('audio/') ||
-                                file.type === 'application/octet-stream';
-
-                if (isBinary && !isArchive(file)) {
-                    showStatus('error', `File "${file.name}" appears to be binary and will be skipped.`);
-                    return;
-                }
-
-                selectedFiles.push({
-                    file: file,
-                    id: Date.now() + Math.random(),
-                    status: 'ready',
-                    results: null
-                });
-            });
-
-            displayFileList();
-            updateProcessButton();
-        }
-
-        function isArchive(file) {
-            const archiveTypes = ['.zip', '.tar', '.gz', '.tar.gz', '.rar', '.7z'];
-            return archiveTypes.some(ext => file.name.toLowerCase().endsWith(ext));
-        }
-
-        function createDownloadButtons() {
-            const downloadDiv = document.getElementById('downloadButtons');
-            let buttonsHTML = '';
-            
-            // Add combined download button
-            if (selectedFiles.some(f => f.status === 'complete')) {
-                buttonsHTML += `
-                    <a href="/download/sanitized" class="btn btn-success download-btn" style="margin-bottom: 10px;">
-                        📦 Download All Files
-                    </a>
-                `;
-            }
-            
-            // Add individual file download buttons
-            selectedFiles.forEach(fileObj => {
-                if (fileObj.status === 'complete') {
-                    buttonsHTML += `
-                        <a href="/download/sanitized/${encodeURIComponent(fileObj.file.name)}" 
-                        class="btn btn-secondary download-btn" style="margin: 5px;">
-                            📄 ${fileObj.file.name}
-                        </a>
-                    `;
-                }
-            });
-            
-            if (buttonsHTML === '') {
-                buttonsHTML = '<p style="color: #666;">No files processed yet</p>';
-            }
-            
-            downloadDiv.innerHTML = buttonsHTML;
-        }
-        
-        function displayFileList() {
-            const fileList = document.getElementById('fileList');
-            const processBtn = document.getElementById('processBtn');
-
-            if (selectedFiles.length === 0) {
-                fileList.classList.remove('visible');
-                return;
-            }
-
-            fileList.classList.add('visible');
-            fileList.innerHTML = selectedFiles.map(fileObj => {
-                const file = fileObj.file;
-                const sizeStr = formatFileSize(file.size);
-                const typeIcon = getFileIcon(file.name);
-
-                return `
-                    <div class="file-item" data-file-id="${fileObj.id}">
-                        <div class="file-info">
-                            <div class="file-icon">${typeIcon}</div>
-                            <div class="file-details">
-                                <div class="file-name">${file.name}</div>
-                                <div class="file-size">${sizeStr}</div>
-                            </div>
-                        </div>
-                        <div class="file-status ${fileObj.status}">${getStatusText(fileObj.status)}</div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        function getFileIcon(filename) {
-            const ext = filename.toLowerCase().split('.').pop();
-            const iconMap = {
-                'log': 'LOG',
-                'txt': 'TXT',
-                'zip': 'ZIP',
-                'tar': 'TAR',
-                'gz': 'GZ',
-                'json': 'JSON',
-                'xml': 'XML',
-                'csv': 'CSV'
-            };
-            return iconMap[ext] || 'FILE';
-        }
-
-        function getStatusText(status) {
-            const statusMap = {
-                'ready': 'Ready',
-                'processing': 'Processing...',
-                'complete': 'Complete',
-                'error': 'Error'
-            };
-            return statusMap[status] || status;
-        }
-
-        function formatFileSize(bytes) {
-            if (bytes === 0) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-        }
-
-        function updateProcessButton() {
-            const processBtn = document.getElementById('processBtn');
-            processBtn.disabled = selectedFiles.length === 0;
-        }
-
-        function clearFiles() {
-            selectedFiles = [];
-            document.getElementById('fileInput').value = '';
-            document.getElementById('fileList').classList.remove('visible');
-            document.getElementById('progressContainer').classList.remove('visible');
-            document.getElementById('resultsSection').classList.remove('visible');
-            document.getElementById('detailedReportCard').style.display = 'none';
-            document.getElementById('detailedReportCheckbox').checked = false;
-            
-            // Reset button state
-            const processBtn = document.getElementById('processBtn');
-            const uploadZone = document.getElementById('uploadZone');
-            processBtn.disabled = false;
-            processBtn.textContent = '🔒 Sanitize Files';
-            processBtn.style.opacity = '1';
-            uploadZone.classList.remove('processing');
-            uploadZone.style.pointerEvents = 'auto';
-            
-            updateProcessButton();
-            
-            // Clear download files from server
-            fetch('/clear-download-cache', { method: 'POST' })
-                .catch(err => console.log('Cache clear failed:', err));
-            
-            // Clear download buttons
-            createDownloadButtons();
-        }
-
-        // File Processing
-        async function processFiles() {
-            if (selectedFiles.length === 0) return;
-
-            const progressContainer = document.getElementById('progressContainer');
-            const progressFill = document.getElementById('progressFill');
-            const progressText = document.getElementById('progressText');
-            const progressStats = document.getElementById('progressStats');
-            const processBtn = document.getElementById('processBtn');
-            const uploadZone = document.getElementById('uploadZone');
-
-            // Disable UI during processing
-            processBtn.disabled = true;
-            processBtn.textContent = '⏳ Processing...';
-            processBtn.style.opacity = '0.6';
-            uploadZone.classList.add('processing');
-            uploadZone.style.pointerEvents = 'none';
-
-            progressContainer.classList.add('visible');
-            processingResults = [];
-            totalProcessingTime = 0;
-
-            const startTime = Date.now();
-
-            for (let i = 0; i < selectedFiles.length; i++) {
-                const fileObj = selectedFiles[i];
-                const progress = ((i) / selectedFiles.length) * 100;
-
-                progressFill.style.width = `${progress}%`;
-                progressText.textContent = `Processing ${fileObj.file.name}... (${Math.round(progress)}%)`;
-                progressStats.textContent = `${i} / ${selectedFiles.length} files`;
-
-                fileObj.status = 'processing';
-                updateFileStatus(fileObj.id, 'processing');
-
-                try {
-                    const result = await processFile(fileObj.file);
-                    
-                    // Handle both old single-file and new multi-file response formats
-                    if (result.files && Array.isArray(result.files)) {
-                        // New multi-file format
-                        result.files.forEach(fileResult => {
-                            fileObj.results = fileResult;
-                            processingResults.push(fileResult);
-                        });
-                    } else {
-                        // Old single-file format (fallback)
-                        fileObj.results = result;
-                        processingResults.push(result);
-                    }
-                    
-                    fileObj.status = 'complete';
-                    updateFileStatus(fileObj.id, 'complete');
-                } catch (error) {
-                    console.error('Processing error:', error);
-                    fileObj.status = 'error';
-                    updateFileStatus(fileObj.id, 'error');
-                    showStatus('error', `Failed to process ${fileObj.file.name}: ${error.message}`);
-                }
-            }
-
-            // Always re-enable UI, even if there were errors
-            processBtn.disabled = false;
-            processBtn.textContent = '🔒 Sanitize Files';
-            processBtn.style.opacity = '1';
-            uploadZone.classList.remove('processing');
-            uploadZone.style.pointerEvents = 'auto';
-
-            const endTime = Date.now();
-            totalProcessingTime = endTime - startTime;
-            
-            progressFill.style.width = '100%';
-            progressText.textContent = `Completed in ${(totalProcessingTime / 1000).toFixed(2)}s`;
-            progressStats.textContent = `${selectedFiles.length} / ${selectedFiles.length} files`;
-
-            // Re-enable UI
-            processBtn.disabled = false;
-            processBtn.textContent = '🔒 Sanitize Files';
-            processBtn.style.opacity = '1';
-            uploadZone.classList.remove('processing');
-            uploadZone.style.pointerEvents = 'auto';
-
-            displayResults();
-            enableDownloads();
-        }
-
-        async function processFile(file) {
-            const formData = new FormData();
-            formData.append('file', file);
-            
-            // Add detailed report flag
-            const detailedReportEnabled = document.getElementById('detailedReportCheckbox').checked;
-            formData.append('generate_detailed_report', detailedReportEnabled ? 'true' : 'false');
-            
-            // Add personal sensitive words from new format
-            const personalWords = getPersonalWordsForSanitization();
-            if (personalWords) {
-                // Set as cookie for backend to read
-                setCookie('sensitive_words', personalWords, 1); // 1 day expiry
-            }
-
-            const response = await fetch('/upload', {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        }
-
-        function updateFileStatus(fileId, status) {
-            const fileItem = document.querySelector(`[data-file-id="${fileId}"]`);
-            if (fileItem) {
-                const statusElement = fileItem.querySelector('.file-status');
-                statusElement.className = `file-status ${status}`;
-                statusElement.textContent = getStatusText(status);
-            }
-        }
-
-        // Results Display
-        function displayResults() {
-            const resultsSection = document.getElementById('resultsSection');
-            resultsSection.classList.add('visible');
-
-            const aggregated = {
-                totalIPs: 0,
-                totalAD: 0,
-                totalJWT: 0,
-                totalKeys: 0,
-                totalSensitive: 0,
-                totalUserWords: 0,
-                totalFiles: processingResults.length,
-                totalSize: 0,
-                totalSanitizedSize: 0
-            };
-
-            processingResults.forEach(result => {
-                aggregated.totalIPs += result.total_ips || result.ip_addresses || 0;
-                aggregated.totalAD += result.ad_accounts || result.ad_account_count || 0;
-                aggregated.totalJWT += result.jwt_tokens || result.jwt_token_count || 0;
-                aggregated.totalKeys += result.private_keys || result.private_key_count || 0;
-                aggregated.totalSensitive += result.sensitive_terms || result.sensitive_term_count || 0;
-                aggregated.totalUserWords += result.user_words || result.user_word_count || 0;
-                aggregated.totalSize += result.original_size || 0;
-                aggregated.totalSanitizedSize += result.sanitized_size || 0;
-            });
-
-            document.getElementById('totalIPs').textContent = aggregated.totalIPs;
-            document.getElementById('totalAD').textContent = aggregated.totalAD;
-            document.getElementById('totalJWT').textContent = aggregated.totalJWT;
-            document.getElementById('totalKeys').textContent = aggregated.totalKeys;
-            document.getElementById('totalSensitive').textContent = aggregated.totalSensitive;
-            document.getElementById('totalTime').textContent = `${(totalProcessingTime / 1000).toFixed(2)}s`;
-
-            displayFileResults();
-            createDownloadButtons();
-        }
-
-        function displayFileResults() {
-            const fileResults = document.getElementById('fileResults');
-            
-            const resultsHTML = selectedFiles.map(fileObj => {
-                if (!fileObj.results) return '';
-
-                const result = fileObj.results;
-                const processingTime = result.processing_time || 'N/A';
-
-                return `
-                    <div class="file-results">
-                        <div class="file-result-header">
-                            <span class="file-result-name">📄 ${fileObj.file.name}</span>
-                            <span class="file-result-time">⏱️ ${processingTime}</span>
-                        </div>
-                        <div class="file-result-content">
-                            <div class="categories-grid">
-                                <div class="category-item">
-                                    <span class="category-name">IP Addresses</span>
-                                    <span class="category-count">${result.total_ips || 0}</span>
-                                </div>
-                                <div class="category-item">
-                                    <span class="category-name">AD Accounts</span>
-                                    <span class="category-count">${result.ad_accounts || 0}</span>
-                                </div>
-                                <div class="category-item">
-                                    <span class="category-name">JWT Tokens</span>
-                                    <span class="category-count">${result.jwt_tokens || 0}</span>
-                                </div>
-                                <div class="category-item">
-                                    <span class="category-name">Private Keys</span>
-                                    <span class="category-count">${result.private_keys || 0}</span>
-                                </div>
-                                <div class="category-item">
-                                    <span class="category-name">Sensitive Terms</span>
-                                    <span class="category-count">${result.sensitive_terms || 0}</span>
-                                </div>
-                                <div class="category-item">
-                                    <span class="category-name">User Words</span>
-                                    <span class="category-count">${result.user_words || 0}</span>
-                                </div>
-                                <div class="category-item">
-                                    <span class="category-name">Original Size</span>
-                                    <span class="category-count">${formatFileSize(result.original_size || 0)}</span>
-                                </div>
-                                <div class="category-item">
-                                    <span class="category-name">Sanitized Size</span>
-                                    <span class="category-count">${formatFileSize(result.sanitized_size || 0)}</span>
-                                </div>
-                            </div>
-                            ${result.sample ? `
-                                <div style="margin-top: 16px;">
-                                    <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-bottom: 8px;">SAMPLE OUTPUT:</div>
-                                    <div style="background: #f5f5f5; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 12px; max-height: 100px; overflow-y: auto;">
-                                        ${escapeHtml(result.sample)}
-                                    </div>
-                                </div>
-                            ` : ''}
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
-            fileResults.innerHTML = resultsHTML;
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function enableDownloads() {
-            // Enable download buttons after successful processing
-            const downloadButtons = document.querySelectorAll('.download-btn');
-            downloadButtons.forEach(btn => {
-                btn.style.pointerEvents = 'auto';
-                btn.style.opacity = '1';
-                btn.classList.remove('disabled');
-            });
-            
-            // Show detailed report card if it was generated
-            const detailedReportEnabled = document.getElementById('detailedReportCheckbox').checked;
-            if (detailedReportEnabled) {
-                document.getElementById('detailedReportCard').style.display = 'block';
-            }
-            
-            // Create download buttons for individual files
-            createDownloadButtons();
-        }
-
-        // ============================================
-        // PERSONAL SENSITIVE WORDS MANAGEMENT
-        // ============================================
-        
-        // Simple XOR encryption for localStorage
+        // Personal Words Management
         function encryptWords(text) {
             const key = 'yossarian-' + window.location.hostname;
             return btoa(text.split('').map((c, i) => 
@@ -1741,15 +919,12 @@
             }
         }
         
-        // Get personal words from encrypted localStorage
         function getPersonalWords() {
             try {
                 const encrypted = localStorage.getItem('personal_sensitive_words');
                 if (!encrypted) return [];
-                
                 const decrypted = decryptWords(encrypted);
                 if (!decrypted) return [];
-                
                 return JSON.parse(decrypted);
             } catch (e) {
                 console.error('Failed to load personal words:', e);
@@ -1757,7 +932,6 @@
             }
         }
         
-        // Save personal words to encrypted localStorage
         function savePersonalWords(words) {
             try {
                 const json = JSON.stringify(words);
@@ -1770,18 +944,14 @@
             }
         }
         
-        // Display personal words in table
         function displayPersonalWords() {
             const words = getPersonalWords();
             const tbody = document.getElementById('personalWordsTable');
-            const countSpan = document.getElementById('wordsCount');
-            
-            countSpan.textContent = `(${words.length} word${words.length !== 1 ? 's' : ''} stored)`;
             
             if (words.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="3" style="text-align: center; color: var(--md-on-surface-variant); padding: 20px;">
+                        <td colspan="3" style="text-align: center; color: var(--md-on-surface-variant); padding: 40px;">
                             No personal words added yet
                         </td>
                     </tr>
@@ -1791,10 +961,10 @@
             
             tbody.innerHTML = words.map((word, index) => `
                 <tr>
-                    <td><code style="background: var(--md-surface-variant); padding: 4px 8px; border-radius: 4px;">${escapeHtml(word.term)}</code></td>
-                    <td><code style="background: var(--md-surface-variant); padding: 4px 8px; border-radius: 4px;">${escapeHtml(word.replacement)}</code></td>
+                    <td><code style="background: var(--md-surface-2); padding: 4px 8px; border-radius: 4px;">${escapeHtml(word.term)}</code></td>
+                    <td><code style="background: var(--md-surface-2); padding: 4px 8px; border-radius: 4px;">${escapeHtml(word.replacement)}</code></td>
                     <td style="text-align: center;">
-                        <button class="btn btn-error" style="padding: 6px 12px; font-size: 12px;" onclick="removePersonalWord(${index})">
+                        <button class="md-button md-button-text" onclick="removePersonalWord(${index})" style="color: var(--md-error);">
                             🗑️ Remove
                         </button>
                     </td>
@@ -1802,7 +972,6 @@
             `).join('');
         }
         
-        // Add new personal word
         function addPersonalWord() {
             const termInput = document.getElementById('newWordTerm');
             const replacementInput = document.getElementById('newWordReplacement');
@@ -1811,113 +980,508 @@
             const replacement = replacementInput.value.trim() || '[SNIPPED]';
             
             if (!term) {
-                showStatus('error', 'Please enter a term', 'wordsStatus');
+                alert('Please enter a term');
                 return;
             }
             
-            // Check for duplicates
             const words = getPersonalWords();
             if (words.some(w => w.term.toLowerCase() === term.toLowerCase())) {
-                showStatus('error', `Term "${term}" already exists`, 'wordsStatus');
+                alert(`Term "${term}" already exists`);
                 return;
             }
             
-            // Add word
             words.push({ term, replacement });
             
             if (savePersonalWords(words)) {
-                showStatus('success', `Added "${term}" → "${replacement}"`, 'wordsStatus');
                 termInput.value = '';
                 replacementInput.value = '';
                 displayPersonalWords();
             } else {
-                showStatus('error', 'Failed to save word', 'wordsStatus');
+                alert('Failed to save word');
             }
         }
         
-        // Remove personal word
         function removePersonalWord(index) {
             const words = getPersonalWords();
             const removed = words.splice(index, 1)[0];
             
             if (savePersonalWords(words)) {
-                showStatus('success', `Removed "${removed.term}"`, 'wordsStatus');
                 displayPersonalWords();
             } else {
-                showStatus('error', 'Failed to remove word', 'wordsStatus');
+                alert('Failed to remove word');
             }
         }
         
-        // Get words as comma-separated string (for backend)
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Load organization settings (disclaimer and documentation)
+        function loadOrgSettings() {
+            fetch('/api/org-settings/public')
+                .then(r => r.json())
+                .then(settings => {
+                    // Handle disclaimer
+                    if (settings.disclaimer_enabled === 'true') {
+                        const disclaimerBanner = document.getElementById('disclaimerBanner');
+                        const disclaimerText = document.getElementById('disclaimerText');
+                        
+                        if (settings.disclaimer_text && settings.disclaimer_text.trim()) {
+                            // Parse markdown-like formatting
+                            let formatted = settings.disclaimer_text
+                                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                                .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank">$1</a>');
+                            disclaimerText.innerHTML = formatted;
+                        }
+                        
+                        disclaimerBanner.style.display = 'block';
+                    }
+                    
+                    // Handle documentation link
+                    if (settings.docs_enabled === 'true') {
+                        const docsBanner = document.getElementById('docsBanner');
+                        const docsTitle = document.getElementById('docsTitle');
+                        const docsLink = document.getElementById('docsLink');
+                        
+                        if (settings.docs_title && settings.docs_title.trim()) {
+                            docsTitle.textContent = settings.docs_title;
+                        }
+                        
+                        if (settings.docs_url && settings.docs_url.trim()) {
+                            docsLink.href = settings.docs_url;
+                            docsBanner.style.display = 'block';
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.log('Could not load org settings:', err);
+                });
+        }
+
+        // Initialize
+        window.onload = function() {
+            loadConfigLimits();
+            displayPersonalWords();
+            initializeFileUpload();
+            loadOrgSettings(); // Load disclaimer and documentation settings
+            
+            // Load user info
+            fetch('/api/userinfo')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.authenticated) {
+                        document.getElementById('userName').textContent = data.username;
+                        document.getElementById('userRole').textContent = 'Authenticated';
+                        document.getElementById('userAvatar').textContent = data.username.charAt(0).toUpperCase();
+                        // Show admin nav if user is admin
+                        // TODO: Check user role
+                    }
+                })
+                .catch(() => {});
+            
+            // Load version
+            fetch('/health')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.version) {
+                        document.querySelector('.panel-subtitle').textContent += ` • v${data.version}`;
+                    }
+                })
+                .catch(() => {});
+        };
+        
+        // ========================================
+        // FILE UPLOAD & PROCESSING (from index.html)
+        // ========================================
+        
+        let selectedFiles = [];
+        let processingResults = [];
+        let totalProcessingTime = 0;
+        let lastSanitizedFiles = {};
+        
+        let maxTotalUploadSizeMB = 100;
+        let maxFileSizeMB = 50;
+        let maxZipFileSizeMB = 10;
+        let maxFileCount = 10;
+        
+        function loadConfigLimits() {
+            fetch('/api/config')
+                .then(r => r.json())
+                .then(data => {
+                    maxTotalUploadSizeMB = data.max_total_upload_size_mb || 100;
+                    maxFileSizeMB = data.max_file_size_mb || 50;
+                    maxZipFileSizeMB = data.max_zip_file_size_mb || 10;
+                    maxFileCount = data.max_file_count || 10;
+                })
+                .catch(e => console.log('Using default limits'));
+        }
+        
+        function initializeFileUpload() {
+            const uploadZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+
+            uploadZone.onclick = function(e) {
+                if (e.target === this || e.target.classList.contains('drop-zone-icon') || 
+                    e.target.classList.contains('drop-zone-text') || e.target.classList.contains('drop-zone-subtext')) {
+                    e.stopPropagation();
+                    fileInput.click();
+                }
+            };
+
+            uploadZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadZone.classList.add('dragover');
+            });
+
+            uploadZone.addEventListener('dragleave', () => {
+                uploadZone.classList.remove('dragover');
+            });
+
+            uploadZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadZone.classList.remove('dragover');
+                handleFiles(e.dataTransfer.files);
+            });
+
+            fileInput.addEventListener('change', (e) => {
+                handleFiles(e.target.files);
+            });
+        }
+
+        function handleFiles(files) {
+            const fileArray = Array.from(files);
+            
+            if (fileArray.length > maxFileCount) {
+                alert(`Maximum ${maxFileCount} files allowed`);
+                return;
+            }
+
+            selectedFiles = [];
+            processingResults = [];
+            document.getElementById('resultsSection').style.display = 'none';
+            document.getElementById('progressContainer').classList.remove('visible');
+            
+            fetch('/clear-download-cache', { method: 'POST' }).catch(() => {});
+            
+            fileArray.forEach(file => {
+                if (file.size > maxFileSizeMB * 1024 * 1024) {
+                    alert(`File "${file.name}" exceeds ${maxFileSizeMB}MB`);
+                    return;
+                }
+
+                selectedFiles.push({
+                    file: file,
+                    id: Date.now() + Math.random(),
+                    status: 'ready',
+                    results: null
+                });
+            });
+
+            displayFileList();
+            updateProcessButton();
+        }
+
+        function displayFileList() {
+            const fileList = document.getElementById('fileList');
+            
+            if (selectedFiles.length === 0) {
+                fileList.innerHTML = '';
+                return;
+            }
+
+            fileList.innerHTML = selectedFiles.map(fileObj => {
+                const file = fileObj.file;
+                const sizeStr = formatFileSize(file.size);
+                const ext = file.name.split('.').pop().toUpperCase();
+
+                return `
+                    <div class="file-item">
+                        <div class="file-icon">${ext}</div>
+                        <div class="file-info">
+                            <div class="file-name">${file.name}</div>
+                            <div class="file-size">${sizeStr}</div>
+                        </div>
+                        <div class="file-status ${fileObj.status}">${getStatusText(fileObj.status)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getStatusText(status) {
+            const map = {
+                'ready': 'Ready',
+                'processing': 'Processing...',
+                'complete': 'Complete',
+                'error': 'Error'
+            };
+            return map[status] || status;
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function updateProcessButton() {
+            document.getElementById('processBtn').disabled = selectedFiles.length === 0;
+        }
+
+        async function processFiles() {
+            if (selectedFiles.length === 0) return;
+
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const processBtn = document.getElementById('processBtn');
+
+            processBtn.disabled = true;
+            processBtn.textContent = '⏳ Processing...';
+            progressContainer.classList.add('visible');
+            processingResults = [];
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const fileObj = selectedFiles[i];
+                const progress = ((i) / selectedFiles.length) * 100;
+
+                progressFill.style.width = `${progress}%`;
+                progressText.textContent = `Processing ${fileObj.file.name}...`;
+
+                fileObj.status = 'processing';
+                displayFileList();
+
+                try {
+                    const result = await processFile(fileObj.file);
+                    fileObj.results = result;
+                    processingResults.push(result);
+                    fileObj.status = 'complete';
+                } catch (error) {
+                    console.error('Processing error:', error);
+                    fileObj.status = 'error';
+                }
+                
+                displayFileList();
+            }
+
+            progressFill.style.width = '100%';
+            progressText.textContent = 'Completed!';
+
+            processBtn.disabled = false;
+            processBtn.textContent = '🔒 Secure Files';
+
+            displayResults();
+        }
+
+        async function processFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Add detailed report flag
+            const detailedReportEnabled = document.getElementById('detailedReportCheckbox').checked;
+            formData.append('generate_detailed_report', detailedReportEnabled ? 'true' : 'false');
+            
+            const personalWords = getPersonalWordsForSanitization();
+            if (personalWords) {
+                setCookie('sensitive_words', personalWords, 1);
+            }
+
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            return await response.json();
+        }
+
         function getPersonalWordsForSanitization() {
             const words = getPersonalWords();
             return words.map(w => w.term).join(',');
         }
-        
-        // Legacy function support (deprecated but keeping for compatibility)
-        function loadWords() {
-            const words = getCookie('sensitive_words');
-            if (words) {
-                document.getElementById('sensitiveWords').value = words.replace(/,/g, ', ');
-            }
-        }
 
-        function saveWords() {
-            const words = document.getElementById('sensitiveWords').value;
-            const cleanWords = words.split(',').map(w => w.trim()).filter(w => w).join(',');
-            setCookie('sensitive_words', cleanWords, 30);
-            showStatus('success', 'Sensitive words saved successfully!', 'wordsStatus');
-        }
-
-        function clearWords() {
-            document.getElementById('sensitiveWords').value = '';
-            setCookie('sensitive_words', '', -1);
-            showStatus('success', 'Sensitive words cleared!', 'wordsStatus');
-        }
-
-        // Utility Functions
         function setCookie(name, value, days) {
             const expires = new Date();
             expires.setTime(expires.getTime() + (days * 24 * 60 * 60 * 1000));
             document.cookie = name + '=' + value + ';expires=' + expires.toUTCString() + ';path=/';
         }
 
-        function getCookie(name) {
-            const nameEQ = name + "=";
-            const cookies = document.cookie.split(';');
-            for(let i = 0; i < cookies.length; i++) {
-                let cookie = cookies[i].trim();
-                if (cookie.indexOf(nameEQ) === 0) {
-                    return cookie.substring(nameEQ.length);
-                }
-            }
-            return null;
-        }
-
-        function showStatus(type, message, elementId = null) {
-            const statusElement = document.getElementById(elementId || 'mainStatus');
-            if (!statusElement) {
-                // Create a temporary status element if none specified
-                const tempStatus = document.createElement('div');
-                tempStatus.className = `status-message visible ${type}`;
-                tempStatus.textContent = message;
-                document.querySelector('.container').appendChild(tempStatus);
-                setTimeout(() => tempStatus.remove(), 5000);
-                return;
-            }
-
-            statusElement.className = `status-message visible ${type}`;
-            statusElement.textContent = message;
+        function displayResults() {
+            const resultsSection = document.getElementById('resultsSection');
+            const resultsGrid = document.getElementById('resultsGrid');
+            const fileResults = document.getElementById('fileResults');
             
-            setTimeout(() => {
-                statusElement.classList.remove('visible');
-            }, 5000);
+            resultsSection.style.display = 'block';
+
+            const aggregated = {
+                totalIPs: 0,
+                totalAD: 0,
+                totalJWT: 0,
+                totalKeys: 0,
+                totalSensitive: 0
+            };
+
+            processingResults.forEach(result => {
+                const files = result.files || [result];
+                files.forEach(f => {
+                    aggregated.totalIPs += f.total_ips || 0;
+                    aggregated.totalAD += f.ad_accounts || 0;
+                    aggregated.totalJWT += f.jwt_tokens || 0;
+                    aggregated.totalKeys += f.private_keys || 0;
+                    aggregated.totalSensitive += f.sensitive_terms || 0;
+                });
+            });
+
+            resultsGrid.innerHTML = `
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalIPs}</div>
+                    <div class="metric-label">IP Addresses</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalAD}</div>
+                    <div class="metric-label">AD Accounts</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalJWT}</div>
+                    <div class="metric-label">JWT Tokens</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalKeys}</div>
+                    <div class="metric-label">Private Keys</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalSensitive}</div>
+                    <div class="metric-label">Sensitive Terms</div>
+                </div>
+            `;
+
+            // Display per-file results
+            displayFileResults(fileResults);
+            createDownloadButtons();
         }
 
-        // Report Generation
+        function displayFileResults(container) {
+            container.innerHTML = selectedFiles.map(fileObj => {
+                if (!fileObj.results) return '';
+
+                const result = fileObj.results;
+                const files = result.files || [result];
+                
+                return files.map(fileResult => {
+                    const processingTime = fileResult.processing_time || 'N/A';
+                    const filename = fileResult.filename || fileObj.file.name;
+
+                    return `
+                        <div class="file-result">
+                            <div class="file-result-header">
+                                <span class="file-result-name">📄 ${escapeHtml(filename)}</span>
+                                <span class="file-result-time">⏱️ ${processingTime}</span>
+                            </div>
+                            <div class="file-result-content">
+                                <div class="categories-grid">
+                                    <div class="category-item">
+                                        <span class="category-name">IP Addresses</span>
+                                        <span class="category-count">${fileResult.total_ips || 0}</span>
+                                    </div>
+                                    <div class="category-item">
+                                        <span class="category-name">AD Accounts</span>
+                                        <span class="category-count">${fileResult.ad_accounts || 0}</span>
+                                    </div>
+                                    <div class="category-item">
+                                        <span class="category-name">JWT Tokens</span>
+                                        <span class="category-count">${fileResult.jwt_tokens || 0}</span>
+                                    </div>
+                                    <div class="category-item">
+                                        <span class="category-name">Private Keys</span>
+                                        <span class="category-count">${fileResult.private_keys || 0}</span>
+                                    </div>
+                                    <div class="category-item">
+                                        <span class="category-name">Sensitive Terms</span>
+                                        <span class="category-count">${fileResult.sensitive_terms || 0}</span>
+                                    </div>
+                                    <div class="category-item">
+                                        <span class="category-name">User Words</span>
+                                        <span class="category-count">${fileResult.user_words || 0}</span>
+                                    </div>
+                                    <div class="category-item">
+                                        <span class="category-name">Original Size</span>
+                                        <span class="category-count">${formatFileSize(fileResult.original_size || 0)}</span>
+                                    </div>
+                                    <div class="category-item">
+                                        <span class="category-name">Sanitized Size</span>
+                                        <span class="category-count">${formatFileSize(fileResult.sanitized_size || 0)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function createDownloadButtons() {
+            const downloadDiv = document.getElementById('downloadButtons');
+            
+            if (selectedFiles.some(f => f.status === 'complete')) {
+                let buttonsHTML = `
+                    <a href="/download/sanitized" class="md-button md-button-filled">
+                        📦 Download All Files
+                    </a>
+                `;
+                
+                // Add individual file download buttons
+                selectedFiles.forEach(fileObj => {
+                    if (fileObj.status === 'complete') {
+                        buttonsHTML += `
+                            <a href="/download/sanitized/${encodeURIComponent(fileObj.file.name)}" 
+                               class="md-button md-button-outlined" 
+                               style="font-size: 13px;">
+                                📄 ${fileObj.file.name}
+                            </a>
+                        `;
+                    }
+                });
+                
+                buttonsHTML += `
+                    <a href="/mappings/csv" class="md-button md-button-outlined">
+                        📊 IP Mappings (CSV)
+                    </a>
+                    <button class="md-button md-button-outlined" onclick="generateReport()">
+                        📄 Processing Report (JSON)
+                    </button>
+                `;
+                
+                // Add detailed report button if checkbox was enabled
+                if (document.getElementById('detailedReportCheckbox').checked) {
+                    buttonsHTML += `
+                        <a href="/download/detailed-report" class="md-button md-button-outlined">
+                            📋 Detailed Report (CSV)
+                        </a>
+                    `;
+                }
+                
+                downloadDiv.innerHTML = buttonsHTML;
+            } else {
+                downloadDiv.innerHTML = '<p style="color: var(--md-on-surface-variant);">No files processed yet</p>';
+            }
+        }
+
         function generateReport() {
             if (processingResults.length === 0) {
-                showStatus('error', 'No processing results available. Please process files first.');
+                alert('No processing results available');
                 return;
             }
 
@@ -1926,21 +1490,26 @@
                 summary: {
                     totalFiles: selectedFiles.length,
                     processingTime: totalProcessingTime,
-                    totalFindings: processingResults.reduce((sum, r) => sum + (r.total_ips || 0) + (r.ad_accounts || 0) + (r.jwt_tokens || 0) + (r.private_keys || 0) + (r.sensitive_terms || 0), 0)
+                    totalFindings: processingResults.reduce((sum, r) => {
+                        const files = r.files || [r];
+                        return sum + files.reduce((s, f) => 
+                            s + (f.total_ips || 0) + (f.ad_accounts || 0) + 
+                            (f.jwt_tokens || 0) + (f.private_keys || 0) + 
+                            (f.sensitive_terms || 0), 0);
+                    }, 0)
                 },
                 files: selectedFiles.map(fileObj => {
-                // Clean results for report (exclude binary content)
-                const cleanResults = fileObj.results ? {...fileObj.results} : null;
-                if (cleanResults && cleanResults.sanitized_content) {
-                    delete cleanResults.sanitized_content;
-                }
-                return {
-                    filename: fileObj.file.name,
-                    size: fileObj.file.size,
-                    status: fileObj.status,
-                    results: cleanResults
-                };
-            })
+                    const cleanResults = fileObj.results ? {...fileObj.results} : null;
+                    if (cleanResults && cleanResults.sanitized_content) {
+                        delete cleanResults.sanitized_content;
+                    }
+                    return {
+                        filename: fileObj.file.name,
+                        size: fileObj.file.size,
+                        status: fileObj.status,
+                        results: cleanResults
+                    };
+                })
             };
 
             const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
@@ -1952,107 +1521,21 @@
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-
-            showStatus('success', 'Processing report downloaded successfully!');
         }
 
-        // Load and display organization settings
-        function loadOrgSettings() {
-            fetch('/api/org-settings/public')
-                .then(r => r.json())
-                .then(data => {
-                    const container = document.getElementById('orgSettingsContainer');
-                    if (!container) return;
-
-                    let html = '';
-
-                    // Show disclaimer if enabled
-                    if (data.disclaimer_enabled === 'true' && data.disclaimer_text) {
-                        html += `
-                            <div class="card" style="background: linear-gradient(135deg, #fff3e0, #ffe0b2); border-left: 4px solid #f57c00;">
-                                <div class="card-content" style="padding: 20px 24px;">
-                                    <div style="display: flex; align-items: flex-start; gap: 16px;">
-                                        <div style="font-size: 32px;">⚠️</div>
-                                        <div style="flex: 1;">
-                                            <h2 style="font-size: 16px; font-weight: 500; margin: 0 0 8px 0; color: #e65100;">NOTICE</h2>
-                                            <div style="font-size: 14px; color: #ef6c00; line-height: 1.6;">
-                                                ${escapeHtml(data.disclaimer_text)}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        `;
-                    }
-
-                    // Show documentation link if enabled
-                    if (data.docs_enabled === 'true' && data.docs_url) {
-                        html += `
-                            <div class="card" style="background: linear-gradient(135deg, #e8f5e9, #c8e6c9); border-left: 4px solid #4caf50;">
-                                <div class="card-content" style="display: flex; align-items: center; justify-content: space-between; padding: 20px 24px;">
-                                    <div style="display: flex; align-items: center; gap: 16px;">
-                                        <div style="font-size: 32px;">📚</div>
-                                        <div style="text-align: left;">
-                                            <h2 style="font-size: 16px; font-weight: 500; margin: 0 0 4px 0; color: #2e7d32;">${escapeHtml(data.docs_title || 'Documentation')}</h2>
-                                            <p style="font-size: 13px; color: #558b2f; margin: 0;">Click to view full documentation</p>
-                                        </div>
-                                    </div>
-                                    <a href="${escapeHtml(data.docs_url)}" 
-                                       target="_blank" 
-                                       rel="noopener noreferrer"
-                                       class="btn btn-success" 
-                                       style="font-size: 14px; padding: 10px 24px; white-space: nowrap;">
-                                        📖 View Documentation
-                                    </a>
-                                </div>
-                            </div>
-                        `;
-                    }
-
-                    container.innerHTML = html;
-                })
-                .catch(e => {
-                    console.log('Organization settings not available:', e);
-                });
+        function clearFiles() {
+            selectedFiles = [];
+            document.getElementById('fileInput').value = '';
+            document.getElementById('fileList').innerHTML = '';
+            document.getElementById('progressContainer').classList.remove('visible');
+            document.getElementById('resultsSection').style.display = 'none';
+            updateProcessButton();
+            fetch('/clear-download-cache', { method: 'POST' }).catch(() => {});
         }
-
-        // Utility function for HTML escaping
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // Initialize user info (if authenticated)
-        function initializeUserInfo() {
-            // This would be populated by server-side template or API call
-            // For now, it's hidden by default
-            const userBanner = document.getElementById('userBanner');
-            // userBanner.style.display = 'block';
-            // document.getElementById('userName').textContent = 'John Doe';
-        }
-        // Load organization settings
-        loadOrgSettings();
-
-        // Load version info
-        fetch('/health')
-            .then(r => r.json())
-            .then(data => {
-                if (data.version) {
-                    document.getElementById('version').textContent = `(${data.version})`;
-                }
-            })
-            .catch(() => {});
-        // Load user info
-        fetch('/api/userinfo')
-            .then(r => r.json())
-            .then(data => {
-                if (data.authenticated) {
-                    document.getElementById('username').textContent = '👤 ' + data.username;
-                    document.getElementById('logoutLink').style.display = 'inline';
-                }
-            })
-            .catch(() => {});
+        
+        // Wire up buttons
+        document.getElementById('processBtn').addEventListener('click', processFiles);
+        document.getElementById('clearBtn').addEventListener('click', clearFiles);
     </script>
 </body>
 </html>
