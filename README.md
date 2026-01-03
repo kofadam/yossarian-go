@@ -16,7 +16,9 @@ Enterprise-grade log sanitization system built in Go, designed for air-gapped en
 **Named after the Catch-22 character who censored letters** - Yossarian Go sanitizes your logs so you can safely share them with external support teams, vendors, or less-secure storage.
 
 ***User Interface***
-<img width="1717" height="1004" alt="image" src="https://github.com/user-attachments/assets/f86af307-f3a4-4661-9c53-02f2a507a275" />
+<img width="1799" height="973" alt="image" src="https://github.com/user-attachments/assets/ee2a3bc4-f713-4398-b1bc-7a69c80429ef" />
+<img width="1799" height="973" alt="image" src="https://github.com/user-attachments/assets/0a18972a-9bf8-4284-978c-a7de4e8683f6" />
+
 
 ***Admin Panel***
 <img width="1717" height="1004" alt="image" src="https://github.com/user-attachments/assets/911a3421-ca6c-49c7-9592-6cc789c4602e" />
