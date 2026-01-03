@@ -696,7 +696,7 @@
             <div class="panel active" id="panel-secure-files">
                 <div class="panel-header">
                     <h1 class="panel-title">🔒 Secure Files</h1>
-                    <p class="panel-subtitle">Remove sensitive information from your log files before sharing</p>
+                    <p class="panel-subtitle">Remove sensitive information from your log files before sharing <span id="versionInfo" style="opacity: 0.7;"></span></p>
                 </div>
 
                 <!-- Dynamic Disclaimer Banner -->
@@ -1087,7 +1087,7 @@
                 .then(r => r.json())
                 .then(data => {
                     if (data.version) {
-                        document.querySelector('.panel-subtitle').textContent += ` • v${data.version}`;
+                        document.getElementById('versionInfo').textContent = ` • ${data.version}`;
                     }
                 })
                 .catch(() => {});
@@ -1294,6 +1294,14 @@
                 method: 'POST',
                 body: formData
             });
+
+            if (response.status === 401) {
+                // Session expired - redirect to login
+                const data = await response.json();
+                alert(data.message || 'Your session has expired. Please log in again.');
+                window.location.href = '/auth/oidc/login';
+                throw new Error('Session expired');
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);

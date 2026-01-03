@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	// ✅ ADD: Prometheus client libraries
+	// âœ… ADD: Prometheus client libraries
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -82,12 +82,6 @@ var (
 	cacheMutex    sync.RWMutex
 )
 
-// Batch processing storage
-var (
-	batchJobsBasePath = "/data/jobs" // PVC mount path for batch jobs
-	batchJobsMutex    sync.Mutex
-)
-
 func recordReplacement(category, filename string, lineNum int, original, sanitized string) {
 	replacementMutex.Lock()
 	defer replacementMutex.Unlock()
@@ -106,12 +100,12 @@ func lookupADAccountCached(account string) string {
 	cacheMutex.RLock()
 	if cached, exists := adLookupCache[account]; exists {
 		cacheMutex.RUnlock()
-		adCacheHits.Inc() // ✅ ADD: Record cache hit
+		adCacheHits.Inc() // âœ… ADD: Record cache hit
 		return cached
 	}
 	cacheMutex.RUnlock()
 
-	adCacheMisses.Inc() // ✅ ADD: Record cache miss
+	adCacheMisses.Inc() // âœ… ADD: Record cache miss
 
 	// Not in cache, do lookup
 	usn := lookupADAccount(account)
@@ -159,7 +153,7 @@ var (
 	autoSSOEnabled bool
 )
 
-// ✅ ADD: Prometheus metrics
+// âœ… ADD: Prometheus metrics
 var (
 	// HTTP request metrics
 	httpRequestsTotal = promauto.NewCounterVec(
@@ -573,100 +567,6 @@ func generateSessionID() string {
 	return hex.EncodeToString(bytes)
 }
 
-// Batch job helper functions
-func generateJobID(username string) string {
-	timestamp := time.Now().Format("20060102-150405")
-	return fmt.Sprintf("batch-%s-%s", username, timestamp)
-}
-
-func createBatchJob(username string, zipContent []byte, zipFilename string) (string, error) {
-	jobID := generateJobID(username)
-
-	// Create job directory structure
-	jobPath := filepath.Join(batchJobsBasePath, username, jobID)
-	inputPath := filepath.Join(jobPath, "input.zip")
-	outputPath := filepath.Join(jobPath, "output")
-
-	batchJobsMutex.Lock()
-	defer batchJobsMutex.Unlock()
-
-	// Create directories
-	if err := os.MkdirAll(jobPath, 0755); err != nil {
-		return "", fmt.Errorf("failed to create job directory: %v", err)
-	}
-	if err := os.MkdirAll(outputPath, 0755); err != nil {
-		return "", fmt.Errorf("failed to create output directory: %v", err)
-	}
-
-	// Write ZIP file to disk
-	if err := os.WriteFile(inputPath, zipContent, 0644); err != nil {
-		return "", fmt.Errorf("failed to write input file: %v", err)
-	}
-
-	// Register job in database
-	client := &http.Client{Timeout: 5 * time.Second}
-	jobData := map[string]string{
-		"job_id":      jobID,
-		"username":    username,
-		"input_path":  inputPath,
-		"output_path": outputPath,
-	}
-
-	jsonData, _ := json.Marshal(jobData)
-	resp, err := client.Post(
-		fmt.Sprintf("%s/jobs/create", adServiceURL),
-		"application/json",
-		bytes.NewBuffer(jsonData),
-	)
-
-	if err != nil {
-		return "", fmt.Errorf("failed to register job: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("job registration failed with status %d", resp.StatusCode)
-	}
-
-	log.Printf("[BATCH] Job created: %s for user %s, file: %s (%.2f MB)",
-		jobID, username, zipFilename, float64(len(zipContent))/1024/1024)
-
-	return jobID, nil
-}
-
-func updateJobStatus(jobID, status string, totalFiles, processedFiles int, errorMsg string) error {
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	updateData := map[string]interface{}{
-		"job_id":          jobID,
-		"status":          status,
-		"total_files":     totalFiles,
-		"processed_files": processedFiles,
-	}
-
-	if errorMsg != "" {
-		updateData["error_message"] = errorMsg
-	}
-
-	jsonData, _ := json.Marshal(updateData)
-	resp, err := client.Post(
-		fmt.Sprintf("%s/jobs/update", adServiceURL),
-		"application/json",
-		bytes.NewBuffer(jsonData),
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to update job status: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("job update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
 func isValidAdminSession(r *http.Request) bool {
 	cookie, err := r.Cookie("admin_session")
 	if err != nil {
@@ -772,7 +672,7 @@ func showAccessDenied(w http.ResponseWriter, r *http.Request) {
 	</head>
 	<body>
 		<div class="container">
-			<div class="error-icon">🚫</div>
+			<div class="error-icon">ðŸš«</div>
 			<h1>Access Denied</h1>
 			<p>You don't have the required permissions to access Yossarian Go.</p>
 			<p>Please contact your administrator to request <strong>admin</strong> or <strong>user</strong> role access.</p>
@@ -935,7 +835,7 @@ func sanitizeText(text string, userWords []string, trackReplacements bool, filen
 		if inCache {
 			stats["ad_cache_hits"]++
 			adCacheHits.Inc()
-			adCacheHits.Inc() // ✅ ADD: Record to Prometheus
+			adCacheHits.Inc() // âœ… ADD: Record to Prometheus
 			if cached != "" {
 				stats["ad_accounts"]++
 				return cached
@@ -1159,6 +1059,17 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SECURITY: Require valid session when Auto SSO enabled
+	if autoSSOEnabled && !isValidAdminSession(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "session_expired",
+			"message": "Your session has expired. Please log in again.",
+		})
+		return
+	}
+
 	// Get username for audit logging
 	username := "anonymous"
 	if cookie, err := r.Cookie("admin_session"); err == nil {
@@ -1224,54 +1135,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, fileHeader := range files {
-		// Check if this is a ZIP file - route to batch processing
-		if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
-			log.Printf("[BATCH] ZIP file detected: %s (%.2f MB) - routing to batch processing",
-				fileHeader.Filename, float64(fileHeader.Size)/1024/1024)
-
-			// Read ZIP content
-			file, err := fileHeader.Open()
-			if err != nil {
-				log.Printf("[ERROR] Failed to open ZIP file %s: %v", fileHeader.Filename, err)
-				http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
-				return
-			}
-
-			zipContent, err := io.ReadAll(file)
-			file.Close()
-			if err != nil {
-				log.Printf("[ERROR] Failed to read ZIP file %s: %v", fileHeader.Filename, err)
-				http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
-				return
-			}
-
-			// Create batch job
-			jobID, err := createBatchJob(username, zipContent, fileHeader.Filename)
-			if err != nil {
-				log.Printf("[ERROR] Failed to create batch job: %v", err)
-				http.Error(w, fmt.Sprintf("Failed to create batch job: %v", err), http.StatusInternalServerError)
-				return
-			}
-
-			// Return job ID to user
-			w.Header().Set("Content-Type", "application/json")
-			response := map[string]interface{}{
-				"status":     "batch_queued",
-				"job_id":     jobID,
-				"message":    "ZIP file queued for batch processing",
-				"filename":   fileHeader.Filename,
-				"size_mb":    float64(fileHeader.Size) / 1024 / 1024,
-				"username":   username,
-				"jobs_url":   "/jobs/my-jobs",
-				"status_url": fmt.Sprintf("/api/jobs/status/%s", jobID),
-			}
-			json.NewEncoder(w).Encode(response)
-
-			log.Printf("[BATCH] Job %s queued successfully for user %s", jobID, username)
-			return
-		}
-
-		// Check file size (for non-ZIP files)
+		// Check file size
 		if fileHeader.Size > int64(maxFileSizeMB)*1024*1024 {
 			log.Printf("[ERROR] File rejected: %s exceeds %dMB limit (%d bytes)",
 				fileHeader.Filename, maxFileSizeMB, fileHeader.Size)
@@ -1419,7 +1283,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 			log.Printf("[INFO] ZIP processing summary: %s", fileHeader.Filename)
 			log.Printf("[INFO]   Files: %d processed", len(extractedFiles))
-			log.Printf("[INFO]   Size: %.2f MB → %.2f MB (%.1f%% reduction)",
+			log.Printf("[INFO]   Size: %.2f MB â†’ %.2f MB (%.1f%% reduction)",
 				float64(totalZipOriginalSize)/1024/1024,
 				float64(totalZipSanitizedSize)/1024/1024,
 				(1.0-float64(totalZipSanitizedSize)/float64(totalZipOriginalSize))*100)
@@ -1498,7 +1362,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			sanitizeStats["sensitive_terms"],
 			sanitizeStats["user_words"],
 			totalPatterns)
-		// ✅ ADD: Record metrics to Prometheus
+		// âœ… ADD: Record metrics to Prometheus
 		fileExt := filepath.Ext(fileHeader.Filename)
 		uploadSize.WithLabelValues(fileExt).Observe(float64(len(content)))
 		processingDuration.WithLabelValues("upload").Observe(processingTime.Seconds())
@@ -1579,7 +1443,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[INFO] ========== Upload Processing Complete ==========")
 	log.Printf("[INFO] User: %s", username)
 	log.Printf("[INFO] Files Processed: %d", len(results))
-	log.Printf("[INFO] Total Size: %.2f MB → %.2f MB (%.1f%% reduction)",
+	log.Printf("[INFO] Total Size: %.2f MB â†’ %.2f MB (%.1f%% reduction)",
 		float64(totalOriginalSize)/1024/1024,
 		float64(totalSanitizedSize)/1024/1024,
 		(1.0-float64(totalSanitizedSize)/float64(totalOriginalSize))*100)
@@ -1796,6 +1660,12 @@ func escapeCSV(field string) string {
 }
 
 func downloadAllZipHandler(w http.ResponseWriter, r *http.Request) {
+	// SECURITY: Require valid session when Auto SSO enabled
+	if autoSSOEnabled && !isValidAdminSession(r) {
+		http.Error(w, "Session expired. Please log in again.", http.StatusUnauthorized)
+		return
+	}
+
 	// Get username for audit logging
 	username := "anonymous"
 	if cookie, err := r.Cookie("admin_session"); err == nil {
@@ -1855,6 +1725,12 @@ func individualFileHandler(w http.ResponseWriter, r *http.Request) {
 	filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
 	filename, _ = url.QueryUnescape(filename)
 
+	// SECURITY: Require valid session when Auto SSO enabled
+	if autoSSOEnabled && !isValidAdminSession(r) {
+		http.Error(w, "Session expired. Please log in again.", http.StatusUnauthorized)
+		return
+	}
+
 	// Get username for audit logging
 	username := "anonymous"
 	if cookie, err := r.Cookie("admin_session"); err == nil {
@@ -1909,7 +1785,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 		if oidcEnabled {
 			ssoButton = `<p style="text-align: center; margin: 20px 0;">
 				<a href="/auth/oidc/login" style="display: inline-block; padding: 10px 20px; background: #1976d2; color: white; text-decoration: none; border-radius: 4px;">
-					🔐 Login with SSO
+					ðŸ” Login with SSO
 				</a>
 			</p>
 			<p style="text-align: center;">OR</p>`
@@ -2234,7 +2110,7 @@ func adminADHandler(w http.ResponseWriter, r *http.Request) {
 		<button type="submit">Add Account</button>
 	</form>
 	
-	<p><a href="/admin">← Back to Dashboard</a></p>
+	<p><a href="/admin">â† Back to Dashboard</a></p>
 	`, accountsList)
 }
 
@@ -2299,426 +2175,6 @@ func clearDownloadCacheHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"status": "cleared"}`)
 }
 
-// Batch job API handlers
-func jobStatusAPIHandler(w http.ResponseWriter, r *http.Request) {
-	jobID := strings.TrimPrefix(r.URL.Path, "/api/jobs/status/")
-	if jobID == "" {
-		http.Error(w, "job_id required", http.StatusBadRequest)
-		return
-	}
-
-	// Proxy to db-service
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
-	if err != nil {
-		http.Error(w, "Failed to get job status", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	io.Copy(w, resp.Body)
-}
-
-func jobListAPIHandler(w http.ResponseWriter, r *http.Request) {
-	// Get username from session
-	username := "anonymous"
-	if cookie, err := r.Cookie("admin_session"); err == nil {
-		sessionMutex.Lock()
-		if user, exists := sessionUsers[cookie.Value]; exists {
-			username = user
-		}
-		sessionMutex.Unlock()
-	}
-
-	// Proxy to db-service
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/jobs/list/%s", adServiceURL, username))
-	if err != nil {
-		http.Error(w, "Failed to get job list", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	io.Copy(w, resp.Body)
-}
-
-func myJobsPageHandler(w http.ResponseWriter, r *http.Request) {
-	// Get username from session
-	username := "anonymous"
-	authenticated := false
-	if cookie, err := r.Cookie("admin_session"); err == nil {
-		sessionMutex.Lock()
-		if user, exists := sessionUsers[cookie.Value]; exists {
-			username = user
-			authenticated = true
-		}
-		sessionMutex.Unlock()
-	}
-
-	if !authenticated {
-		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
-		return
-	}
-
-	// Simple HTML page for job listing
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>My Batch Jobs - Yossarian Go</title>
-	<style>
-		body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
-		h1 { color: #1976d2; }
-		.job-card { 
-			border: 1px solid #ddd; 
-			border-radius: 8px; 
-			padding: 16px; 
-			margin: 16px 0; 
-			background: #f9f9f9;
-		}
-		.job-id { font-weight: bold; color: #333; }
-		.status { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
-		.status.queued { background: #fff3e0; color: #f57c00; }
-		.status.processing { background: #e3f2fd; color: #1976d2; }
-		.status.completed { background: #e8f5e9; color: #2e7d32; }
-		.status.failed { background: #ffebee; color: #d32f2f; }
-		.progress { margin: 8px 0; }
-		.btn { 
-			padding: 8px 16px; 
-			background: #1976d2; 
-			color: white; 
-			text-decoration: none; 
-			border-radius: 4px;
-			display: inline-block;
-			margin-right: 8px;
-		}
-		.btn:hover { background: #1565c0; }
-		.back-link { margin-bottom: 20px; }
-	</style>
-</head>
-<body>
-	<div class="back-link">
-		<a href="/" class="btn">← Back to Main App</a>
-	</div>
-	<h1>📋 My Batch Jobs</h1>
-	<p>User: <strong>%s</strong></p>
-	<div id="jobs-container">Loading jobs...</div>
-
-	<script>
-		async function loadJobs() {
-			try {
-				const response = await fetch('/api/jobs/list');
-				const data = await response.json();
-				
-				const container = document.getElementById('jobs-container');
-				
-				if (!data.jobs || data.jobs.length === 0) {
-					container.innerHTML = '<p>No batch jobs found. Upload a ZIP file to create one!</p>';
-					return;
-				}
-				
-				container.innerHTML = data.jobs.map(job => {
-					const progress = job.total_files > 0 
-						? Math.round((job.processed_files / job.total_files) * 100) 
-						: 0;
-					
-					const createdDate = new Date(job.created_at).toLocaleString();
-					const completedDate = job.completed_at 
-						? new Date(job.completed_at).toLocaleString() 
-						: 'In progress';
-					
-					let actions = '';
-					if (job.status === 'completed') {
-						actions = '<a href="/jobs/download/' + job.job_id + '" class="btn">📥 Download Results</a>';
-					} else if (job.status === 'processing' || job.status === 'queued') {
-						actions = '<button class="btn" onclick="refreshStatus(\'' + job.job_id + '\')">🔄 Refresh</button>';
-					}
-					
-					return '<div class="job-card">' +
-						'<div class="job-id">Job: ' + job.job_id + '</div>' +
-						'<div>Status: <span class="status ' + job.status + '">' + job.status.toUpperCase() + '</span></div>' +
-						'<div class="progress">Progress: ' + job.processed_files + ' / ' + job.total_files + ' files (' + progress + '%)</div>' +
-						'<div>Created: ' + createdDate + '</div>' +
-						'<div>Completed: ' + completedDate + '</div>' +
-						'<div style="margin-top: 12px;">' + actions + '</div>' +
-					'</div>';
-				}).join('');
-				
-			} catch (error) {
-				document.getElementById('jobs-container').innerHTML = 
-					'<p style="color: red;">Error loading jobs: ' + error.message + '</p>';
-			}
-		}
-		
-		function refreshStatus(jobId) {
-			loadJobs();
-		}
-		
-		// Load jobs on page load
-		loadJobs();
-		
-		// Auto-refresh every 10 seconds
-		setInterval(loadJobs, 10000);
-	</script>
-</body>
-</html>
-	`, username)
-}
-
-func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
-	jobID := strings.TrimPrefix(r.URL.Path, "/jobs/download/")
-	if jobID == "" {
-		http.Error(w, "job_id required", http.StatusBadRequest)
-		return
-	}
-
-	// Get job info to find output path
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
-	if err != nil {
-		http.Error(w, "Failed to get job status", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	var jobInfo struct {
-		JobID      string  `json:"job_id"`
-		Username   string  `json:"username"`
-		Status     string  `json:"status"`
-		OutputPath *string `json:"output_path"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
-		http.Error(w, "Failed to parse job info", http.StatusInternalServerError)
-		return
-	}
-
-	if jobInfo.Status != "completed" {
-		http.Error(w, "Job not completed yet", http.StatusBadRequest)
-		return
-	}
-
-	if jobInfo.OutputPath == nil {
-		http.Error(w, "Output path not available", http.StatusNotFound)
-		return
-	}
-
-	// Read sanitized ZIP file
-	outputZipPath := filepath.Join(*jobInfo.OutputPath, "sanitized.zip")
-	zipData, err := os.ReadFile(outputZipPath)
-	if err != nil {
-		log.Printf("[ERROR] Failed to read output file: %v", err)
-		http.Error(w, "Output file not found", http.StatusNotFound)
-		return
-	}
-
-	// Send file to user
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized-%s.zip\"", jobID))
-	w.Write(zipData)
-
-	log.Printf("[BATCH] Job %s downloaded by user %s (%.2f MB)",
-		jobID, jobInfo.Username, float64(len(zipData))/1024/1024)
-}
-
-// Background batch job processor
-func batchJobProcessor() {
-	log.Printf("[BATCH] Background processor started")
-
-	// Track jobs currently being processed to avoid duplicates
-	processingJobs := make(map[string]bool)
-	var processingMutex sync.Mutex
-
-	for {
-		// Get all jobs for all users (we need a simple query endpoint)
-		// For now, we'll use a workaround: check filesystem for queued jobs
-
-		// Scan jobs directory for queued jobs
-		if _, err := os.Stat(batchJobsBasePath); os.IsNotExist(err) {
-			// Jobs directory doesn't exist yet, create it
-			os.MkdirAll(batchJobsBasePath, 0755)
-			time.Sleep(10 * time.Second)
-			continue
-		}
-
-		// Walk through user directories
-		userDirs, err := os.ReadDir(batchJobsBasePath)
-		if err != nil {
-			log.Printf("[BATCH] Failed to read jobs directory: %v", err)
-			time.Sleep(10 * time.Second)
-			continue
-		}
-
-		foundJob := false
-		for _, userDir := range userDirs {
-			if !userDir.IsDir() {
-				continue
-			}
-
-			username := userDir.Name()
-			userPath := filepath.Join(batchJobsBasePath, username)
-
-			jobDirs, err := os.ReadDir(userPath)
-			if err != nil {
-				continue
-			}
-
-			for _, jobDir := range jobDirs {
-				if !jobDir.IsDir() {
-					continue
-				}
-
-				jobID := jobDir.Name()
-
-				// Check if already processing
-				processingMutex.Lock()
-				if processingJobs[jobID] {
-					processingMutex.Unlock()
-					continue
-				}
-				processingMutex.Unlock()
-
-				// Check job status in database
-				client := &http.Client{Timeout: 5 * time.Second}
-				resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
-				if err != nil {
-					continue
-				}
-
-				var jobInfo struct {
-					Status     string  `json:"status"`
-					InputPath  *string `json:"input_path"`
-					OutputPath *string `json:"output_path"`
-				}
-
-				json.NewDecoder(resp.Body).Decode(&jobInfo)
-				resp.Body.Close()
-
-				// Only process queued jobs
-				if jobInfo.Status == "queued" && jobInfo.InputPath != nil && jobInfo.OutputPath != nil {
-					foundJob = true
-
-					// Mark as processing
-					processingMutex.Lock()
-					processingJobs[jobID] = true
-					processingMutex.Unlock()
-
-					// Process in goroutine (allows parallel processing)
-					go func(jid, uname, inPath, outPath string) {
-						defer func() {
-							processingMutex.Lock()
-							delete(processingJobs, jid)
-							processingMutex.Unlock()
-						}()
-
-						processBatchJob(jid, uname, inPath, outPath)
-					}(jobID, username, *jobInfo.InputPath, *jobInfo.OutputPath)
-
-					// Only process one job per cycle to avoid overwhelming system
-					break
-				}
-			}
-
-			if foundJob {
-				break
-			}
-		}
-
-		// Sleep before next check
-		if foundJob {
-			time.Sleep(5 * time.Second) // Quick check if we found work
-		} else {
-			time.Sleep(10 * time.Second) // Longer sleep if idle
-		}
-	}
-}
-
-func processBatchJob(jobID, username, inputPath, outputPath string) {
-	log.Printf("[BATCH] Processing job %s for user %s", jobID, username)
-
-	// Update status to processing
-	updateJobStatus(jobID, "processing", 0, 0, "")
-
-	// Read ZIP file
-	zipContent, err := os.ReadFile(inputPath)
-	if err != nil {
-		log.Printf("[BATCH] Failed to read input file: %v", err)
-		updateJobStatus(jobID, "failed", 0, 0, fmt.Sprintf("Failed to read input: %v", err))
-		return
-	}
-
-	// Extract files from ZIP
-	extractedFiles := extractZipContent(zipContent)
-	totalFiles := len(extractedFiles)
-
-	if totalFiles == 0 {
-		log.Printf("[BATCH] No files extracted from ZIP")
-		updateJobStatus(jobID, "failed", 0, 0, "No valid files in ZIP")
-		return
-	}
-
-	// Update total file count
-	updateJobStatus(jobID, "processing", totalFiles, 0, "")
-
-	log.Printf("[BATCH] Job %s: extracted %d files, starting sanitization", jobID, totalFiles)
-
-	// Get user words (empty for batch jobs - could enhance later)
-	userWords := []string{}
-
-	// Process each file
-	var sanitizedFiles []ExtractedFile
-	for i, extracted := range extractedFiles {
-		// Sanitize file
-		sanitized, _ := sanitizeText(extracted.Content, userWords, false, extracted.Name)
-
-		sanitizedFiles = append(sanitizedFiles, ExtractedFile{
-			Name:    extracted.Name,
-			Content: sanitized,
-			Mode:    extracted.Mode,
-			ModTime: extracted.ModTime,
-		})
-
-		// Update progress every 10 files or on last file
-		if (i+1)%10 == 0 || i == totalFiles-1 {
-			updateJobStatus(jobID, "processing", totalFiles, i+1, "")
-			log.Printf("[BATCH] Job %s: progress %d/%d files", jobID, i+1, totalFiles)
-		}
-
-		// Small sleep to avoid CPU spike
-		if i%10 == 0 && i > 0 {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	// Create output ZIP
-	log.Printf("[BATCH] Job %s: creating output ZIP", jobID)
-	sanitizedZipData, err := createZipArchive(sanitizedFiles)
-	if err != nil {
-		log.Printf("[BATCH] Failed to create output ZIP: %v", err)
-		updateJobStatus(jobID, "failed", totalFiles, totalFiles, fmt.Sprintf("Failed to create output: %v", err))
-		return
-	}
-
-	// Write output ZIP
-	outputZipPath := filepath.Join(outputPath, "sanitized.zip")
-	if err := os.WriteFile(outputZipPath, sanitizedZipData, 0644); err != nil {
-		log.Printf("[BATCH] Failed to write output file: %v", err)
-		updateJobStatus(jobID, "failed", totalFiles, totalFiles, fmt.Sprintf("Failed to write output: %v", err))
-		return
-	}
-
-	// Mark as completed
-	updateJobStatus(jobID, "completed", totalFiles, totalFiles, "")
-
-	log.Printf("[BATCH] Job %s completed: %d files processed, output: %.2f MB",
-		jobID, totalFiles, float64(len(sanitizedZipData))/1024/1024)
-}
-
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -2733,10 +2189,6 @@ func main() {
 	// Initialize templates
 	initTemplates()
 
-	// Start background batch job processor
-	go batchJobProcessor()
-	log.Printf("[BATCH] Background processor initialized")
-
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/health", mainHealthHandler)
 	http.HandleFunc("/api/userinfo", userInfoHandler)
@@ -2748,12 +2200,6 @@ func main() {
 	http.HandleFunc("/download/sanitized/", individualFileHandler)
 	http.HandleFunc("/download/detailed-report", downloadDetailedReportHandler)
 	http.HandleFunc("/clear-download-cache", clearDownloadCacheHandler)
-
-	// Batch job routes
-	http.HandleFunc("/api/jobs/status/", jobStatusAPIHandler)
-	http.HandleFunc("/api/jobs/list", jobListAPIHandler)
-	http.HandleFunc("/jobs/my-jobs", myJobsPageHandler)
-	http.HandleFunc("/jobs/download/", jobDownloadHandler)
 
 	// Admin routes
 	http.HandleFunc("/admin/login", adminLoginHandler)
@@ -2781,7 +2227,7 @@ func main() {
 	// Debug route
 	http.HandleFunc("/debug", debugHandler)
 
-	// ✅ ADD: Prometheus metrics endpoint
+	// âœ… ADD: Prometheus metrics endpoint
 	http.Handle("/metrics", promhttp.Handler())
 
 	log.Printf("Server starting on port %s with /metrics endpoint", port)
