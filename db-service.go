@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 	_ "github.com/mattn/go-sqlite3"
@@ -736,15 +737,16 @@ func jobStatusHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedAt      string  `json:"created_at"`
 		StartedAt      *string `json:"started_at"`
 		CompletedAt    *string `json:"completed_at"`
-		ErrorMessage   *string `json:"error_message"`
+		InputPath      *string `json:"input_path"`
 		OutputPath     *string `json:"output_path"`
+		ErrorMessage   *string `json:"error_message"`
 	}
 
 	err := db.QueryRow(`SELECT job_id, username, status, total_files, processed_files, 
-		created_at, started_at, completed_at, error_message, output_path 
+		created_at, started_at, completed_at, input_path, output_path, error_message 
 		FROM batch_jobs WHERE job_id = ?`, jobID).Scan(
 		&job.JobID, &job.Username, &job.Status, &job.TotalFiles, &job.ProcessedFiles,
-		&job.CreatedAt, &job.StartedAt, &job.CompletedAt, &job.ErrorMessage, &job.OutputPath)
+		&job.CreatedAt, &job.StartedAt, &job.CompletedAt, &job.InputPath, &job.OutputPath, &job.ErrorMessage)
 
 	if err != nil {
 		http.NotFound(w, r)
@@ -867,6 +869,122 @@ func jobUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
+func jobDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	jobID := strings.TrimPrefix(r.URL.Path, "/jobs/delete/")
+	if jobID == "" {
+		http.Error(w, "job_id required", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec("DELETE FROM batch_jobs WHERE job_id = ?", jobID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete job %s from database: %v", jobID, err)
+		http.Error(w, "Failed to delete job", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[BATCH] Job deleted from database: %s", jobID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "job_id": jobID})
+}
+func jobCleanupListHandler(w http.ResponseWriter, r *http.Request) {
+	// Get cutoff time from query parameter
+	beforeStr := r.URL.Query().Get("before")
+	if beforeStr == "" {
+		http.Error(w, "before parameter required (RFC3339 format)", http.StatusBadRequest)
+		return
+	}
+
+	beforeTime, err := time.Parse(time.RFC3339, beforeStr)
+	if err != nil {
+		http.Error(w, "Invalid before time format (use RFC3339)", http.StatusBadRequest)
+		return
+	}
+
+	// Query jobs older than cutoff time
+	rows, err := db.Query(`
+		SELECT job_id, username 
+		FROM batch_jobs 
+		WHERE created_at < ? 
+		ORDER BY created_at ASC
+	`, beforeTime.Format("2006-01-02 15:04:05"))
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to query old jobs: %v", err)
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type JobInfo struct {
+		JobID    string `json:"job_id"`
+		Username string `json:"username"`
+	}
+
+	var jobs []JobInfo
+	for rows.Next() {
+		var job JobInfo
+		if err := rows.Scan(&job.JobID, &job.Username); err != nil {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+
+	log.Printf("[CLEANUP] Found %d jobs older than %s", len(jobs), beforeTime.Format("2006-01-02 15:04:05"))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jobs":  jobs,
+		"count": len(jobs),
+	})
+}
+
+func jobQueuedHandler(w http.ResponseWriter, r *http.Request) {
+	// Get all queued jobs
+	rows, err := db.Query(`
+		SELECT job_id, username, total_files, created_at, input_path, output_path 
+		FROM batch_jobs 
+		WHERE status = 'queued' 
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		log.Printf("[ERROR] Failed to query queued jobs: %v", err)
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type QueuedJob struct {
+		JobID      string  `json:"job_id"`
+		Username   string  `json:"username"`
+		TotalFiles int     `json:"total_files"`
+		CreatedAt  string  `json:"created_at"`
+		InputPath  *string `json:"input_path"`
+		OutputPath *string `json:"output_path"`
+	}
+
+	var jobs []QueuedJob
+	for rows.Next() {
+		var job QueuedJob
+		if err := rows.Scan(&job.JobID, &job.Username, &job.TotalFiles, &job.CreatedAt, &job.InputPath, &job.OutputPath); err != nil {
+			log.Printf("[ERROR] Failed to scan queued job: %v", err)
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jobs":  jobs,
+		"count": len(jobs),
+	})
+}
 
 func main() {
 	// Load LDAP configuration
@@ -919,6 +1037,9 @@ func main() {
 	http.HandleFunc("/jobs/status/", jobStatusHandler)
 	http.HandleFunc("/jobs/list/", jobListHandler)
 	http.HandleFunc("/jobs/update", jobUpdateHandler)
+	http.HandleFunc("/jobs/queued", jobQueuedHandler)
+	http.HandleFunc("/jobs/delete/", jobDeleteHandler)
+	http.HandleFunc("/jobs/cleanup", jobCleanupListHandler)
 
 	log.Printf("Database service starting on port 8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))

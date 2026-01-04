@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	// âœ… ADD: Prometheus client libraries
+	// ✅ ADD: Prometheus client libraries
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -44,7 +44,7 @@ type UserInfo struct {
 
 // Version information - set during build
 var (
-	Version   = "v0.7.0"
+	Version   = "v0.12.3"
 	BuildTime = "unknown"
 	GitCommit = "unknown"
 )
@@ -82,6 +82,12 @@ var (
 	cacheMutex    sync.RWMutex
 )
 
+// Batch processing storage
+var (
+	batchJobsBasePath = "/data/jobs" // PVC mount path for batch jobs
+	batchJobsMutex    sync.Mutex
+)
+
 func recordReplacement(category, filename string, lineNum int, original, sanitized string) {
 	replacementMutex.Lock()
 	defer replacementMutex.Unlock()
@@ -100,12 +106,12 @@ func lookupADAccountCached(account string) string {
 	cacheMutex.RLock()
 	if cached, exists := adLookupCache[account]; exists {
 		cacheMutex.RUnlock()
-		adCacheHits.Inc() // âœ… ADD: Record cache hit
+		adCacheHits.Inc() // ✅ ADD: Record cache hit
 		return cached
 	}
 	cacheMutex.RUnlock()
 
-	adCacheMisses.Inc() // âœ… ADD: Record cache miss
+	adCacheMisses.Inc() // ✅ ADD: Record cache miss
 
 	// Not in cache, do lookup
 	usn := lookupADAccount(account)
@@ -153,7 +159,7 @@ var (
 	autoSSOEnabled bool
 )
 
-// âœ… ADD: Prometheus metrics
+// ✅ ADD: Prometheus metrics
 var (
 	// HTTP request metrics
 	httpRequestsTotal = promauto.NewCounterVec(
@@ -567,6 +573,100 @@ func generateSessionID() string {
 	return hex.EncodeToString(bytes)
 }
 
+// Batch job helper functions
+func generateJobID(username string) string {
+	timestamp := time.Now().Format("20060102-150405")
+	return fmt.Sprintf("batch-%s-%s", username, timestamp)
+}
+
+func createBatchJob(username string, zipContent []byte, zipFilename string) (string, error) {
+	jobID := generateJobID(username)
+
+	// Create job directory structure
+	jobPath := filepath.Join(batchJobsBasePath, username, jobID)
+	inputPath := filepath.Join(jobPath, "input.zip")
+	outputPath := filepath.Join(jobPath, "output")
+
+	batchJobsMutex.Lock()
+	defer batchJobsMutex.Unlock()
+
+	// Create directories
+	if err := os.MkdirAll(jobPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to create job directory: %v", err)
+	}
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to create output directory: %v", err)
+	}
+
+	// Write ZIP file to disk
+	if err := os.WriteFile(inputPath, zipContent, 0644); err != nil {
+		return "", fmt.Errorf("failed to write input file: %v", err)
+	}
+
+	// Register job in database
+	client := &http.Client{Timeout: 5 * time.Second}
+	jobData := map[string]string{
+		"job_id":      jobID,
+		"username":    username,
+		"input_path":  inputPath,
+		"output_path": outputPath,
+	}
+
+	jsonData, _ := json.Marshal(jobData)
+	resp, err := client.Post(
+		fmt.Sprintf("%s/jobs/create", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to register job: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("job registration failed with status %d", resp.StatusCode)
+	}
+
+	log.Printf("[BATCH] Job created: %s for user %s, file: %s (%.2f MB)",
+		jobID, username, zipFilename, float64(len(zipContent))/1024/1024)
+
+	return jobID, nil
+}
+
+func updateJobStatus(jobID, status string, totalFiles, processedFiles int, errorMsg string) error {
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	updateData := map[string]interface{}{
+		"job_id":          jobID,
+		"status":          status,
+		"total_files":     totalFiles,
+		"processed_files": processedFiles,
+	}
+
+	if errorMsg != "" {
+		updateData["error_message"] = errorMsg
+	}
+
+	jsonData, _ := json.Marshal(updateData)
+	resp, err := client.Post(
+		fmt.Sprintf("%s/jobs/update", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update job status: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("job update failed with status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 func isValidAdminSession(r *http.Request) bool {
 	cookie, err := r.Cookie("admin_session")
 	if err != nil {
@@ -672,7 +772,7 @@ func showAccessDenied(w http.ResponseWriter, r *http.Request) {
 	</head>
 	<body>
 		<div class="container">
-			<div class="error-icon">ðŸš«</div>
+			<div class="error-icon">🚫</div>
 			<h1>Access Denied</h1>
 			<p>You don't have the required permissions to access Yossarian Go.</p>
 			<p>Please contact your administrator to request <strong>admin</strong> or <strong>user</strong> role access.</p>
@@ -835,7 +935,7 @@ func sanitizeText(text string, userWords []string, trackReplacements bool, filen
 		if inCache {
 			stats["ad_cache_hits"]++
 			adCacheHits.Inc()
-			adCacheHits.Inc() // âœ… ADD: Record to Prometheus
+			adCacheHits.Inc() // ✅ ADD: Record to Prometheus
 			if cached != "" {
 				stats["ad_accounts"]++
 				return cached
@@ -984,12 +1084,16 @@ func isBinaryContent(content []byte) bool {
 		checkLen = len(content)
 	}
 
+	// Count null bytes - if more than 1% are nulls, it's binary
+	nullCount := 0
 	for i := 0; i < checkLen; i++ {
 		if content[i] == 0 {
-			return true
+			nullCount++
 		}
 	}
-	return false
+
+	// If more than 1% null bytes, consider it binary
+	return float64(nullCount)/float64(checkLen) > 0.01
 }
 
 func isArchiveFile(filename string) bool {
@@ -1059,17 +1163,6 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SECURITY: Require valid session when Auto SSO enabled
-	if autoSSOEnabled && !isValidAdminSession(r) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "session_expired",
-			"message": "Your session has expired. Please log in again.",
-		})
-		return
-	}
-
 	// Get username for audit logging
 	username := "anonymous"
 	if cookie, err := r.Cookie("admin_session"); err == nil {
@@ -1104,8 +1197,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[INFO] File upload started: user=%s, files=%d", username, len(files))
 
 	// Check if detailed report was requested
-	generateDetailedReport := r.FormValue("generate_detailed_report") == "true"
-	if generateDetailedReport {
+	shouldGenerateDetailedReport := r.FormValue("generate_detailed_report") == "true"
+	if shouldGenerateDetailedReport {
 		// Clear previous detailed replacements
 		replacementMutex.Lock()
 		detailedReplacements = []Replacement{}
@@ -1135,7 +1228,54 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, fileHeader := range files {
-		// Check file size
+		// Check if this is a ZIP file - route to batch processing
+		if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
+			log.Printf("[BATCH] ZIP file detected: %s (%.2f MB) - routing to batch processing",
+				fileHeader.Filename, float64(fileHeader.Size)/1024/1024)
+
+			// Read ZIP content
+			file, err := fileHeader.Open()
+			if err != nil {
+				log.Printf("[ERROR] Failed to open ZIP file %s: %v", fileHeader.Filename, err)
+				http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
+				return
+			}
+
+			zipContent, err := io.ReadAll(file)
+			file.Close()
+			if err != nil {
+				log.Printf("[ERROR] Failed to read ZIP file %s: %v", fileHeader.Filename, err)
+				http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
+				return
+			}
+
+			// Create batch job
+			jobID, err := createBatchJob(username, zipContent, fileHeader.Filename)
+			if err != nil {
+				log.Printf("[ERROR] Failed to create batch job: %v", err)
+				http.Error(w, fmt.Sprintf("Failed to create batch job: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			// Return job ID to user
+			w.Header().Set("Content-Type", "application/json")
+			response := map[string]interface{}{
+				"status":     "batch_queued",
+				"job_id":     jobID,
+				"message":    "ZIP file queued for batch processing",
+				"filename":   fileHeader.Filename,
+				"size_mb":    float64(fileHeader.Size) / 1024 / 1024,
+				"username":   username,
+				"jobs_url":   "/jobs/my-jobs",
+				"status_url": fmt.Sprintf("/api/jobs/status/%s", jobID),
+			}
+			json.NewEncoder(w).Encode(response)
+
+			log.Printf("[BATCH] Job %s queued successfully for user %s", jobID, username)
+			return
+		}
+
+		// Check file size (for non-ZIP files)
 		if fileHeader.Size > int64(maxFileSizeMB)*1024*1024 {
 			log.Printf("[ERROR] File rejected: %s exceeds %dMB limit (%d bytes)",
 				fileHeader.Filename, maxFileSizeMB, fileHeader.Size)
@@ -1208,7 +1348,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 				fileStartTime := time.Now()
 				fullFilename := fmt.Sprintf("%s:%s", fileHeader.Filename, extracted.Name)
-				sanitized, fileStats := sanitizeText(extracted.Content, userWords, generateDetailedReport, fullFilename)
+				sanitized, fileStats := sanitizeText(extracted.Content, userWords, shouldGenerateDetailedReport, fullFilename)
 				processingTime := time.Since(fileStartTime)
 
 				log.Printf("[PERF] Sanitized %d/%d: %s (%.2fs)", idx+1, len(extractedFiles), extracted.Name, processingTime.Seconds())
@@ -1227,8 +1367,6 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 				totalZipSanitizedSize += len(sanitized)
 			}
 
-			// Recreate ZIP archive with sanitized content
-			log.Printf("[INFO] Recreating sanitized ZIP archive: %s", fileHeader.Filename)
 			recreateStartTime := time.Now()
 
 			sanitizedZipData, err := createZipArchive(sanitizedFiles)
@@ -1283,7 +1421,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 			log.Printf("[INFO] ZIP processing summary: %s", fileHeader.Filename)
 			log.Printf("[INFO]   Files: %d processed", len(extractedFiles))
-			log.Printf("[INFO]   Size: %.2f MB â†’ %.2f MB (%.1f%% reduction)",
+			log.Printf("[INFO]   Size: %.2f MB → %.2f MB (%.1f%% reduction)",
 				float64(totalZipOriginalSize)/1024/1024,
 				float64(totalZipSanitizedSize)/1024/1024,
 				(1.0-float64(totalZipSanitizedSize)/float64(totalZipOriginalSize))*100)
@@ -1341,7 +1479,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		fileStartTime := time.Now()
 		log.Printf("[PERF] Sanitization started: %s", fileHeader.Filename)
 
-		sanitized, sanitizeStats := sanitizeText(string(content), userWords, generateDetailedReport, fileHeader.Filename)
+		sanitized, sanitizeStats := sanitizeText(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename)
 		processingTime := time.Since(fileStartTime)
 
 		processingRateMBps := float64(len(content)) / 1024 / 1024 / processingTime.Seconds()
@@ -1362,7 +1500,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			sanitizeStats["sensitive_terms"],
 			sanitizeStats["user_words"],
 			totalPatterns)
-		// âœ… ADD: Record metrics to Prometheus
+		// ✅ ADD: Record metrics to Prometheus
 		fileExt := filepath.Ext(fileHeader.Filename)
 		uploadSize.WithLabelValues(fileExt).Observe(float64(len(content)))
 		processingDuration.WithLabelValues("upload").Observe(processingTime.Seconds())
@@ -1443,7 +1581,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[INFO] ========== Upload Processing Complete ==========")
 	log.Printf("[INFO] User: %s", username)
 	log.Printf("[INFO] Files Processed: %d", len(results))
-	log.Printf("[INFO] Total Size: %.2f MB â†’ %.2f MB (%.1f%% reduction)",
+	log.Printf("[INFO] Total Size: %.2f MB → %.2f MB (%.1f%% reduction)",
 		float64(totalOriginalSize)/1024/1024,
 		float64(totalSanitizedSize)/1024/1024,
 		(1.0-float64(totalSanitizedSize)/float64(totalOriginalSize))*100)
@@ -1660,12 +1798,6 @@ func escapeCSV(field string) string {
 }
 
 func downloadAllZipHandler(w http.ResponseWriter, r *http.Request) {
-	// SECURITY: Require valid session when Auto SSO enabled
-	if autoSSOEnabled && !isValidAdminSession(r) {
-		http.Error(w, "Session expired. Please log in again.", http.StatusUnauthorized)
-		return
-	}
-
 	// Get username for audit logging
 	username := "anonymous"
 	if cookie, err := r.Cookie("admin_session"); err == nil {
@@ -1725,12 +1857,6 @@ func individualFileHandler(w http.ResponseWriter, r *http.Request) {
 	filename := strings.TrimPrefix(r.URL.Path, "/download/sanitized/")
 	filename, _ = url.QueryUnescape(filename)
 
-	// SECURITY: Require valid session when Auto SSO enabled
-	if autoSSOEnabled && !isValidAdminSession(r) {
-		http.Error(w, "Session expired. Please log in again.", http.StatusUnauthorized)
-		return
-	}
-
 	// Get username for audit logging
 	username := "anonymous"
 	if cookie, err := r.Cookie("admin_session"); err == nil {
@@ -1785,7 +1911,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 		if oidcEnabled {
 			ssoButton = `<p style="text-align: center; margin: 20px 0;">
 				<a href="/auth/oidc/login" style="display: inline-block; padding: 10px 20px; background: #1976d2; color: white; text-decoration: none; border-radius: 4px;">
-					ðŸ” Login with SSO
+					🔐 Login with SSO
 				</a>
 			</p>
 			<p style="text-align: center;">OR</p>`
@@ -2110,7 +2236,7 @@ func adminADHandler(w http.ResponseWriter, r *http.Request) {
 		<button type="submit">Add Account</button>
 	</form>
 	
-	<p><a href="/admin">â† Back to Dashboard</a></p>
+	<p><a href="/admin">← Back to Dashboard</a></p>
 	`, accountsList)
 }
 
@@ -2175,6 +2301,826 @@ func clearDownloadCacheHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"status": "cleared"}`)
 }
 
+// Batch job API handlers
+func jobStatusAPIHandler(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimPrefix(r.URL.Path, "/api/jobs/status/")
+	if jobID == "" {
+		http.Error(w, "job_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Proxy to db-service
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
+	if err != nil {
+		http.Error(w, "Failed to get job status", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func jobListAPIHandler(w http.ResponseWriter, r *http.Request) {
+	// Get username from session
+	username := "anonymous"
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
+	}
+
+	// Proxy to db-service
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/list/%s", adServiceURL, username))
+	if err != nil {
+		http.Error(w, "Failed to get job list", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func myJobsPageHandler(w http.ResponseWriter, r *http.Request) {
+	// Get username from session
+	username := "anonymous"
+	authenticated := false
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+			authenticated = true
+		}
+		sessionMutex.Unlock()
+	}
+
+	if !authenticated {
+		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+		return
+	}
+
+	// Simple HTML page for job listing
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>My Batch Jobs - Yossarian Go</title>
+	<style>
+		body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
+		h1 { color: #1976d2; }
+		.job-card { 
+			border: 1px solid #ddd; 
+			border-radius: 8px; 
+			padding: 16px; 
+			margin: 16px 0; 
+			background: #f9f9f9;
+		}
+		.job-id { font-weight: bold; color: #333; }
+		.status { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+		.status.queued { background: #fff3e0; color: #f57c00; }
+		.status.processing { background: #e3f2fd; color: #1976d2; }
+		.status.completed { background: #e8f5e9; color: #2e7d32; }
+		.status.failed { background: #ffebee; color: #d32f2f; }
+		.progress { margin: 8px 0; }
+		.btn { 
+			padding: 8px 16px; 
+			background: #1976d2; 
+			color: white; 
+			text-decoration: none; 
+			border-radius: 4px;
+			display: inline-block;
+			margin-right: 8px;
+		}
+		.btn:hover { background: #1565c0; }
+		.back-link { margin-bottom: 20px; }
+	</style>
+</head>
+<body>
+	<div class="back-link">
+		<a href="/" class="btn">← Back to Main App</a>
+	</div>
+	<h1>📋 My Batch Jobs</h1>
+	<p>User: <strong>%s</strong></p>
+	<div id="jobs-container">Loading jobs...</div>
+
+	<script>
+		async function loadJobs() {
+			try {
+				const response = await fetch('/api/jobs/list');
+				const data = await response.json();
+				
+				const container = document.getElementById('jobs-container');
+				
+				if (!data.jobs || data.jobs.length === 0) {
+					container.innerHTML = '<p>No batch jobs found. Upload a ZIP file to create one!</p>';
+					return;
+				}
+				
+				container.innerHTML = data.jobs.map(job => {
+					const progress = job.total_files > 0 
+						? Math.round((job.processed_files / job.total_files) * 100) 
+						: 0;
+					
+					const createdDate = new Date(job.created_at).toLocaleString();
+					const completedDate = job.completed_at 
+						? new Date(job.completed_at).toLocaleString() 
+						: 'In progress';
+					
+					let actions = '';
+					if (job.status === 'completed') {
+						actions = '<a href="/jobs/download/' + job.job_id + '" class="btn">📥 Download Results</a>';
+					} else if (job.status === 'processing' || job.status === 'queued') {
+						actions = '<button class="btn" onclick="refreshStatus(\'' + job.job_id + '\')">🔄 Refresh</button>';
+					}
+					
+					return '<div class="job-card">' +
+						'<div class="job-id">Job: ' + job.job_id + '</div>' +
+						'<div>Status: <span class="status ' + job.status + '">' + job.status.toUpperCase() + '</span></div>' +
+						'<div class="progress">Progress: ' + job.processed_files + ' / ' + job.total_files + ' files (' + progress + '%)</div>' +
+						'<div>Created: ' + createdDate + '</div>' +
+						'<div>Completed: ' + completedDate + '</div>' +
+						'<div style="margin-top: 12px;">' + actions + '</div>' +
+					'</div>';
+				}).join('');
+				
+			} catch (error) {
+				document.getElementById('jobs-container').innerHTML = 
+					'<p style="color: red;">Error loading jobs: ' + error.message + '</p>';
+			}
+		}
+		
+		function refreshStatus(jobId) {
+			loadJobs();
+		}
+		
+		// Load jobs on page load
+		loadJobs();
+		
+		// Auto-refresh every 10 seconds
+		setInterval(loadJobs, 10000);
+	</script>
+</body>
+</html>
+	`, username)
+}
+
+func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimPrefix(r.URL.Path, "/jobs/download/")
+	if jobID == "" {
+		http.Error(w, "job_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Get job info to find output path
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
+	if err != nil {
+		http.Error(w, "Failed to get job status", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	var jobInfo struct {
+		JobID      string  `json:"job_id"`
+		Username   string  `json:"username"`
+		Status     string  `json:"status"`
+		OutputPath *string `json:"output_path"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
+		http.Error(w, "Failed to parse job info", http.StatusInternalServerError)
+		return
+	}
+
+	if jobInfo.Status != "completed" {
+		http.Error(w, "Job not completed yet", http.StatusBadRequest)
+		return
+	}
+
+	if jobInfo.OutputPath == nil {
+		http.Error(w, "Output path not available", http.StatusNotFound)
+		return
+	}
+
+	// Read sanitized ZIP file
+	outputZipPath := filepath.Join(*jobInfo.OutputPath, "sanitized.zip")
+	zipData, err := os.ReadFile(outputZipPath)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read output file: %v", err)
+		http.Error(w, "Output file not found", http.StatusNotFound)
+		return
+	}
+
+	// Send file to user
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized-%s.zip\"", jobID))
+	w.Write(zipData)
+
+	log.Printf("[BATCH] Job %s downloaded by user %s (%.2f MB)",
+		jobID, jobInfo.Username, float64(len(zipData))/1024/1024)
+}
+
+// Background batch job processor
+func batchJobProcessor() {
+	log.Printf("[BATCH] Background processor started")
+
+	// Track jobs currently being processed to avoid duplicates
+	processingJobs := make(map[string]bool)
+	var processingMutex sync.Mutex
+
+	scanCount := 0
+	for {
+		scanCount++
+		log.Printf("[BATCH] Scan #%d: Checking for queued jobs in %s...", scanCount, batchJobsBasePath)
+
+		// Scan jobs directory for queued jobs
+		if _, err := os.Stat(batchJobsBasePath); os.IsNotExist(err) {
+			// Jobs directory doesn't exist yet, create it
+			log.Printf("[BATCH] Jobs directory %s does not exist, creating...", batchJobsBasePath)
+			os.MkdirAll(batchJobsBasePath, 0755)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		// Walk through user directories
+		userDirs, err := os.ReadDir(batchJobsBasePath)
+		if err != nil {
+			log.Printf("[BATCH] Failed to read jobs directory: %v", err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		log.Printf("[BATCH] Found %d user directories in %s", len(userDirs), batchJobsBasePath)
+
+		foundJob := false
+		totalJobsChecked := 0
+
+		for _, userDir := range userDirs {
+			if !userDir.IsDir() {
+				continue
+			}
+
+			username := userDir.Name()
+			userPath := filepath.Join(batchJobsBasePath, username)
+
+			jobDirs, err := os.ReadDir(userPath)
+			if err != nil {
+				log.Printf("[BATCH] Failed to read user directory %s: %v", userPath, err)
+				continue
+			}
+
+			log.Printf("[BATCH] User %s has %d job directories", username, len(jobDirs))
+
+			for _, jobDir := range jobDirs {
+				if !jobDir.IsDir() {
+					continue
+				}
+
+				jobID := jobDir.Name()
+				totalJobsChecked++
+
+				// Check if already processing
+				processingMutex.Lock()
+				if processingJobs[jobID] {
+					processingMutex.Unlock()
+					log.Printf("[BATCH] Job %s already being processed, skipping", jobID)
+					continue
+				}
+				processingMutex.Unlock()
+
+				// Check job status in database
+				log.Printf("[BATCH] Checking database status for job %s", jobID)
+				client := &http.Client{Timeout: 5 * time.Second}
+				resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
+				if err != nil {
+					log.Printf("[BATCH] Failed to get job status from database for %s: %v", jobID, err)
+					continue
+				}
+
+				var jobInfo struct {
+					Status     string  `json:"status"`
+					InputPath  *string `json:"input_path"`
+					OutputPath *string `json:"output_path"`
+				}
+
+				if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
+					log.Printf("[BATCH] Failed to decode job info for %s: %v", jobID, err)
+					resp.Body.Close()
+					continue
+				}
+				resp.Body.Close()
+
+				// DEBUG: Log what we got from database
+				inputPathStr := "NULL"
+				outputPathStr := "NULL"
+				if jobInfo.InputPath != nil {
+					inputPathStr = *jobInfo.InputPath
+				}
+				if jobInfo.OutputPath != nil {
+					outputPathStr = *jobInfo.OutputPath
+				}
+				log.Printf("[BATCH] Job %s has status: %s, input_path: %s, output_path: %s",
+					jobID, jobInfo.Status, inputPathStr, outputPathStr)
+
+				// Only process queued jobs
+				if jobInfo.Status == "queued" && jobInfo.InputPath != nil && jobInfo.OutputPath != nil {
+					foundJob = true
+					log.Printf("[BATCH] Found queued job %s - starting processing", jobID)
+
+					// Mark as processing
+					processingMutex.Lock()
+					processingJobs[jobID] = true
+					processingMutex.Unlock()
+
+					// Process in goroutine (allows parallel processing)
+					go func(jid, uname, inPath, outPath string) {
+						defer func() {
+							processingMutex.Lock()
+							delete(processingJobs, jid)
+							processingMutex.Unlock()
+						}()
+
+						processBatchJob(jid, uname, inPath, outPath)
+					}(jobID, username, *jobInfo.InputPath, *jobInfo.OutputPath)
+
+					// Only process one job per cycle to avoid overwhelming system
+					break
+				}
+			}
+
+			if foundJob {
+				break
+			}
+		}
+
+		if totalJobsChecked > 0 {
+			log.Printf("[BATCH] Scan #%d complete: checked %d jobs, found work: %v", scanCount, totalJobsChecked, foundJob)
+		} else {
+			log.Printf("[BATCH] Scan #%d complete: no jobs found in filesystem", scanCount)
+		}
+
+		// Sleep before next check
+		if foundJob {
+			time.Sleep(5 * time.Second) // Quick check if we found work
+		} else {
+			time.Sleep(10 * time.Second) // Longer sleep if idle
+		}
+	}
+}
+
+func processBatchJob(jobID, username, inputPath, outputPath string) {
+	log.Printf("[BATCH] Processing job %s for user %s", jobID, username)
+
+	// Update status to processing
+	jobStartTime := time.Now()
+	updateJobStatus(jobID, "processing", 0, 0, "")
+
+	// Read ZIP file
+	zipContent, err := os.ReadFile(inputPath)
+	if err != nil {
+		log.Printf("[BATCH] Failed to read input file: %v", err)
+		updateJobStatus(jobID, "failed", 0, 0, fmt.Sprintf("Failed to read input: %v", err))
+		return
+	}
+
+	// Extract files from ZIP
+	extractedFiles := extractZipContent(zipContent)
+	totalFiles := len(extractedFiles)
+
+	if totalFiles == 0 {
+		log.Printf("[BATCH] No files extracted from ZIP")
+		updateJobStatus(jobID, "failed", 0, 0, "No valid files in ZIP")
+		return
+	}
+
+	// Update total file count
+	updateJobStatus(jobID, "processing", totalFiles, 0, "")
+
+	log.Printf("[BATCH] Job %s: extracted %d files, starting sanitization", jobID, totalFiles)
+
+	// Get user words (empty for batch jobs - could enhance later)
+	userWords := []string{}
+
+	// Process each file
+	var sanitizedFiles []ExtractedFile
+	for i, extracted := range extractedFiles {
+		// Sanitize file
+		sanitized, _ := sanitizeText(extracted.Content, userWords, false, extracted.Name)
+
+		sanitizedFiles = append(sanitizedFiles, ExtractedFile{
+			Name:    extracted.Name,
+			Content: sanitized,
+			Mode:    extracted.Mode,
+			ModTime: extracted.ModTime,
+		})
+
+		// Update progress every 10 files or on last file
+		if (i+1)%10 == 0 || i == totalFiles-1 {
+			updateJobStatus(jobID, "processing", totalFiles, i+1, "")
+			log.Printf("[BATCH] Job %s: progress %d/%d files", jobID, i+1, totalFiles)
+		}
+
+		// Small sleep to avoid CPU spike
+		if i%10 == 0 && i > 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	// Generate reports before creating output ZIP
+	log.Printf("[BATCH] Job %s: generating reports", jobID)
+	reportsDir := filepath.Join(outputPath, "..", "reports")
+	os.MkdirAll(reportsDir, 0755)
+
+	// 1. IP Mappings CSV
+	ipMappingsPath := filepath.Join(reportsDir, "ip-mappings.csv")
+	generateIPMappingsReport(ipMappingsPath)
+
+	// 2. Detailed Replacements CSV (always disabled for batch - too large)
+	// Batch jobs don't track line-by-line replacements to save memory
+
+	// 3. Processing Summary JSON
+	summaryPath := filepath.Join(reportsDir, "processing-summary.json")
+	totalStats := map[string]int{
+		"ip_addresses":    len(ipMappings),
+		"files_processed": totalFiles,
+	}
+	generateProcessingSummary(summaryPath, jobID, totalFiles, totalStats, time.Since(jobStartTime))
+
+	log.Printf("[BATCH] Job %s: reports generated in %s", jobID, reportsDir)
+
+	// Create output ZIP
+	log.Printf("[BATCH] Job %s: creating output ZIP", jobID)
+	sanitizedZipData, err := createZipArchive(sanitizedFiles)
+	if err != nil {
+		log.Printf("[BATCH] Failed to create output ZIP: %v", err)
+		updateJobStatus(jobID, "failed", totalFiles, totalFiles, fmt.Sprintf("Failed to create output: %v", err))
+		return
+	}
+
+	// Write output ZIP
+	outputZipPath := filepath.Join(outputPath, "sanitized.zip")
+	if err := os.WriteFile(outputZipPath, sanitizedZipData, 0644); err != nil {
+		log.Printf("[BATCH] Failed to write output file: %v", err)
+		updateJobStatus(jobID, "failed", totalFiles, totalFiles, fmt.Sprintf("Failed to write output: %v", err))
+		return
+	}
+
+	// Mark as completed
+	updateJobStatus(jobID, "completed", totalFiles, totalFiles, "")
+
+	log.Printf("[BATCH] Job %s completed: %d files processed, output: %.2f MB",
+		jobID, totalFiles, float64(len(sanitizedZipData))/1024/1024)
+}
+
+func generateIPMappingsReport(filepath string) error {
+	mapMutex.Lock()
+	defer mapMutex.Unlock()
+
+	f, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fmt.Fprintf(f, "original_ip,placeholder,timestamp\n")
+	for original, placeholder := range ipMappings {
+		fmt.Fprintf(f, "%s,%s,%s\n", original, placeholder, time.Now().Format(time.RFC3339))
+	}
+
+	log.Printf("[BATCH] IP mappings report saved: %d entries", len(ipMappings))
+	return nil
+}
+
+func generateDetailedReport(filepath string) error {
+	replacementMutex.Lock()
+	defer replacementMutex.Unlock()
+
+	f, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fmt.Fprintf(f, "Category,File,Line,Original,Sanitized\n")
+	for _, repl := range detailedReplacements {
+		category := escapeCSV(repl.Category)
+		file := escapeCSV(repl.File)
+		original := escapeCSV(repl.Original)
+		sanitized := escapeCSV(repl.Sanitized)
+
+		fmt.Fprintf(f, "%s,%s,%d,%s,%s\n", category, file, repl.Line, original, sanitized)
+	}
+
+	log.Printf("[BATCH] Detailed report saved: %d replacements", len(detailedReplacements))
+	return nil
+}
+
+func generateProcessingSummary(filepath string, jobID string, fileCount int, stats map[string]int, duration time.Duration) error {
+	summary := map[string]interface{}{
+		"job_id":          jobID,
+		"timestamp":       time.Now().Format(time.RFC3339),
+		"total_files":     fileCount,
+		"processing_time": duration.String(),
+		"patterns_found": map[string]int{
+			"ip_addresses":    stats["ip_addresses"],
+			"ad_accounts":     stats["ad_accounts"],
+			"jwt_tokens":      stats["jwt_tokens"],
+			"private_keys":    stats["private_keys"],
+			"passwords":       stats["passwords"],
+			"sensitive_terms": stats["sensitive_terms"],
+			"user_words":      stats["user_words"],
+		},
+		"total_patterns": stats["ip_addresses"] + stats["ad_accounts"] + stats["jwt_tokens"] +
+			stats["private_keys"] + stats["passwords"] + stats["sensitive_terms"] + stats["user_words"],
+	}
+
+	data, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(filepath, data, 0644)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[BATCH] Processing summary saved: %s", filepath)
+	return nil
+}
+
+func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	// Parse URL: /jobs/reports/{job_id}/{report_type}
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/reports/"), "/")
+	if len(pathParts) != 2 {
+		http.Error(w, "Invalid path format. Expected: /jobs/reports/{job_id}/{report_type}", http.StatusBadRequest)
+		return
+	}
+
+	jobID := pathParts[0]
+	reportType := pathParts[1]
+
+	// Get username for audit logging
+	username := "anonymous"
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
+	}
+
+	// Verify job exists and belongs to user
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
+	if err != nil {
+		log.Printf("[ERROR] Failed to verify job %s: %v", jobID, err)
+		http.Error(w, "Failed to verify job", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+
+	var jobInfo struct {
+		JobID    string `json:"job_id"`
+		Username string `json:"username"`
+		Status   string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
+		http.Error(w, "Failed to parse job info", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify user owns this job (or is admin)
+	if jobInfo.Username != username && !hasRole(r, "admin") {
+		log.Printf("[SECURITY] User %s attempted to access job %s owned by %s", username, jobID, jobInfo.Username)
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Determine report file path
+	var reportPath string
+	var contentType string
+	var filename string
+
+	switch reportType {
+	case "ip-mappings.csv":
+		reportPath = fmt.Sprintf("/data/jobs/%s/%s/reports/ip-mappings.csv", jobInfo.Username, jobID)
+		contentType = "text/csv"
+		filename = fmt.Sprintf("%s-ip-mappings.csv", jobID)
+	case "detailed-report.csv":
+		reportPath = fmt.Sprintf("/data/jobs/%s/%s/reports/detailed-report.csv", jobInfo.Username, jobID)
+		contentType = "text/csv"
+		filename = fmt.Sprintf("%s-detailed-report.csv", jobID)
+	case "summary.json":
+		reportPath = fmt.Sprintf("/data/jobs/%s/%s/reports/processing-summary.json", jobInfo.Username, jobID)
+		contentType = "application/json"
+		filename = fmt.Sprintf("%s-summary.json", jobID)
+	default:
+		http.Error(w, "Invalid report type. Valid types: ip-mappings.csv, detailed-report.csv, summary.json", http.StatusBadRequest)
+		return
+	}
+
+	// Check if report exists
+	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
+		log.Printf("[WARN] Report not found: %s for job %s", reportType, jobID)
+		http.Error(w, fmt.Sprintf("Report %s not available for this job", reportType), http.StatusNotFound)
+		return
+	}
+
+	// Read report file
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read report %s: %v", reportPath, err)
+		http.Error(w, "Failed to read report", http.StatusInternalServerError)
+		return
+	}
+
+	// Send file
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.Write(data)
+
+	log.Printf("[AUDIT] Report downloaded: user=%s, job=%s, report=%s, size_kb=%.2f",
+		username, jobID, reportType, float64(len(data))/1024)
+}
+func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	jobID := strings.TrimPrefix(r.URL.Path, "/api/jobs/delete/")
+	if jobID == "" {
+		http.Error(w, "job_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Get username for authorization
+	username := "anonymous"
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
+	}
+
+	// Verify job exists and belongs to user
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
+	if err != nil {
+		log.Printf("[ERROR] Failed to verify job %s: %v", jobID, err)
+		http.Error(w, "Failed to verify job", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+
+	var jobInfo struct {
+		JobID    string `json:"job_id"`
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
+		http.Error(w, "Failed to parse job info", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify user owns this job (or is admin)
+	if jobInfo.Username != username && !hasRole(r, "admin") {
+		log.Printf("[SECURITY] User %s attempted to delete job %s owned by %s", username, jobID, jobInfo.Username)
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Delete from database first
+	deleteReq, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/jobs/delete/%s", adServiceURL, jobID), nil)
+	deleteResp, err := client.Do(deleteReq)
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete job %s from database: %v", jobID, err)
+		http.Error(w, "Failed to delete job from database", http.StatusInternalServerError)
+		return
+	}
+	deleteResp.Body.Close()
+
+	// Delete files from PVC
+	jobDir := filepath.Join("/data/jobs", jobInfo.Username, jobID)
+	if err := os.RemoveAll(jobDir); err != nil {
+		log.Printf("[ERROR] Failed to delete job directory %s: %v", jobDir, err)
+		// Continue anyway - database record is already deleted
+	} else {
+		log.Printf("[BATCH] Job directory deleted: %s", jobDir)
+	}
+
+	log.Printf("[AUDIT] Job deleted: user=%s, job=%s", username, jobID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "deleted",
+		"job_id":  jobID,
+		"message": "Job and all associated files deleted successfully",
+	})
+}
+
+func batchJobCleanupTask() {
+	// Run cleanup every 6 hours
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+
+	// Run immediately on startup
+	performBatchCleanup()
+
+	for range ticker.C {
+		performBatchCleanup()
+	}
+}
+
+func performBatchCleanup() {
+	log.Printf("[CLEANUP] Starting 48-hour batch job cleanup")
+
+	retentionHours := 48
+	cutoffTime := time.Now().Add(-time.Duration(retentionHours) * time.Hour)
+
+	// Get all jobs older than 48 hours from database
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/cleanup?before=%s", adServiceURL, cutoffTime.Format(time.RFC3339)))
+	if err != nil {
+		log.Printf("[CLEANUP] Failed to get cleanup list: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		log.Printf("[CLEANUP] Database service returned %d", resp.StatusCode)
+		return
+	}
+
+	var result struct {
+		Jobs []struct {
+			JobID    string `json:"job_id"`
+			Username string `json:"username"`
+		} `json:"jobs"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("[CLEANUP] Failed to decode response: %v", err)
+		return
+	}
+
+	if len(result.Jobs) == 0 {
+		log.Printf("[CLEANUP] No jobs to clean up")
+		return
+	}
+
+	log.Printf("[CLEANUP] Found %d jobs older than %d hours", len(result.Jobs), retentionHours)
+
+	deletedCount := 0
+	errorCount := 0
+
+	for _, job := range result.Jobs {
+		// Delete from database
+		deleteReq, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/jobs/delete/%s", adServiceURL, job.JobID), nil)
+		deleteResp, err := client.Do(deleteReq)
+		if err != nil {
+			log.Printf("[CLEANUP] Failed to delete job %s from database: %v", job.JobID, err)
+			errorCount++
+			continue
+		}
+		deleteResp.Body.Close()
+
+		// Delete files from PVC
+		jobDir := filepath.Join("/data/jobs", job.Username, job.JobID)
+		if err := os.RemoveAll(jobDir); err != nil {
+			log.Printf("[CLEANUP] Failed to delete directory %s: %v", jobDir, err)
+			errorCount++
+		} else {
+			deletedCount++
+			log.Printf("[CLEANUP] Deleted job %s (user: %s)", job.JobID, job.Username)
+		}
+	}
+
+	log.Printf("[CLEANUP] Cleanup complete: %d deleted, %d errors", deletedCount, errorCount)
+
+	// Record metrics
+	if deletedCount > 0 {
+		patternsDetected.WithLabelValues("jobs_cleaned").Add(float64(deletedCount))
+	}
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -2189,6 +3135,14 @@ func main() {
 	// Initialize templates
 	initTemplates()
 
+	// Start background batch job processor
+	go batchJobProcessor()
+	log.Printf("[BATCH] Background processor initialized")
+
+	// Start 48-hour cleanup task
+	go batchJobCleanupTask()
+	log.Printf("[BATCH] Auto-cleanup task initialized (48-hour retention)")
+
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/health", mainHealthHandler)
 	http.HandleFunc("/api/userinfo", userInfoHandler)
@@ -2200,6 +3154,14 @@ func main() {
 	http.HandleFunc("/download/sanitized/", individualFileHandler)
 	http.HandleFunc("/download/detailed-report", downloadDetailedReportHandler)
 	http.HandleFunc("/clear-download-cache", clearDownloadCacheHandler)
+
+	// Batch job routes
+	http.HandleFunc("/api/jobs/status/", jobStatusAPIHandler)
+	http.HandleFunc("/api/jobs/list", jobListAPIHandler)
+	http.HandleFunc("/jobs/my-jobs", myJobsPageHandler)
+	http.HandleFunc("/jobs/download/", jobDownloadHandler)
+	http.HandleFunc("/jobs/reports/", jobReportsDownloadHandler)
+	http.HandleFunc("/api/jobs/delete/", jobDeleteAPIHandler)
 
 	// Admin routes
 	http.HandleFunc("/admin/login", adminLoginHandler)
@@ -2227,7 +3189,7 @@ func main() {
 	// Debug route
 	http.HandleFunc("/debug", debugHandler)
 
-	// âœ… ADD: Prometheus metrics endpoint
+	// ✅ ADD: Prometheus metrics endpoint
 	http.Handle("/metrics", promhttp.Handler())
 
 	log.Printf("Server starting on port %s with /metrics endpoint", port)

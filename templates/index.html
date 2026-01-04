@@ -659,7 +659,7 @@
                     <span class="nav-item-icon">📝</span>
                     <span>My Words</span>
                 </a>
-                <a class="nav-item" data-panel="my-jobs">
+                <a class="nav-item" href="/jobs/my-jobs">
                     <span class="nav-item-icon">📦</span>
                     <span>My Jobs</span>
                 </a>
@@ -826,18 +826,6 @@
                 </div>
             </div>
 
-            <!-- My Jobs Panel -->
-            <div class="panel" id="panel-my-jobs">
-                <div class="panel-header">
-                    <h1 class="panel-title">📦 My Batch Jobs</h1>
-                    <p class="panel-subtitle">Track and manage your batch processing jobs</p>
-                </div>
-
-                <div class="md-card">
-                    <p>My Jobs functionality coming soon...</p>
-                </div>
-            </div>
-
             <!-- Help Panel -->
             <div class="panel" id="panel-help">
                 <div class="panel-header">
@@ -887,8 +875,14 @@
         // Panel Navigation
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', (e) => {
-                e.preventDefault();
                 const panelId = item.getAttribute('data-panel');
+                
+                // If no data-panel attribute, this is an external link - let it navigate
+                if (!panelId) {
+                    return; // Allow default link behavior
+                }
+                
+                e.preventDefault();
                 
                 // Update nav active state
                 document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
@@ -896,7 +890,10 @@
                 
                 // Switch panels
                 document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-                document.getElementById(`panel-${panelId}`).classList.add('active');
+                const panel = document.getElementById(`panel-${panelId}`);
+                if (panel) {
+                    panel.classList.add('active');
+                }
             });
         });
 
@@ -1278,6 +1275,15 @@
         }
 
         async function processFile(file) {
+            // Check if this is a ZIP file for batch processing
+            const isZipFile = file.name.toLowerCase().endsWith('.zip');
+            
+            if (isZipFile) {
+                // Submit as batch job
+                return await submitBatchJob(file);
+            }
+            
+            // Regular single-file processing
             const formData = new FormData();
             formData.append('file', file);
             
@@ -1308,6 +1314,52 @@
             }
 
             return await response.json();
+        }
+        
+        async function submitBatchJob(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Use the regular /upload endpoint - it handles ZIP files as batch jobs
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+            
+            if (response.status === 401) {
+                const data = await response.json();
+                alert(data.message || 'Your session has expired. Please log in again.');
+                window.location.href = '/auth/oidc/login';
+                throw new Error('Session expired');
+            }
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Batch job submission failed: ${errorText}`);
+            }
+            
+            const data = await response.json();
+            
+            // Check if response has job_id (batch job) or files array (regular processing)
+            if (data.job_id) {
+                // Batch job created - show success and redirect to My Jobs page
+                const message = `✅ Batch job submitted successfully!\n\nJob ID: ${data.job_id}\nStatus: ${data.status || 'queued'}\n\nClick OK to view your jobs.`;
+                
+                if (confirm(message)) {
+                    window.location.href = '/jobs/my-jobs';
+                }
+                
+                // Return mock result so processFiles() doesn't break
+                return {
+                    filename: file.name,
+                    batch_job: true,
+                    job_id: data.job_id,
+                    status: data.status || 'queued'
+                };
+            } else {
+                // Regular response (shouldn't happen for ZIP, but handle it)
+                return data;
+            }
         }
 
         function getPersonalWordsForSanitization() {
