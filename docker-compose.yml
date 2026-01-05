@@ -1,30 +1,78 @@
 version: '3.8'
 
 services:
-  yossarian-go:
-    image: yossarian-go/yossarian-go:latest
+  # MinIO - Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: yossarian-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: yossarian
+      MINIO_ROOT_PASSWORD: yossarian123
+    ports:
+      - "9100:9000"   # Changed to 9100 to avoid conflict
+      - "9101:9001"   # Changed to 9101
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend (with built-in db-service functionality)
+  frontend:
+    image: yossarian-go/yossarian-go:v0.13.0
+    container_name: yossarian-frontend
+    environment:
+      MODE: frontend
+      PORT: 8080
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: yossarian
+      MINIO_SECRET_KEY: yossarian123
+      MINIO_BUCKET: yossarian-jobs
+      MINIO_USE_SSL: "false"
+      MAX_FILE_SIZE_MB: 50
+      MAX_FILE_COUNT: 10
+      MAX_TOTAL_UPLOAD_SIZE_MB: 500
     ports:
       - "8080:8080"
-    environment:
-      - PORT=8080
-      - ADMIN_PASSWORD=admin123
-      - OIDC_ENABLED=false
-      - AD_SERVICE_URL=http://yossarian-db-service:8081
-      - MAX_TOTAL_UPLOAD_SIZE_MB=100
-      - MAX_FILE_SIZE_MB=50
-      - MAX_ZIP_FILE_SIZE_MB=10
-      - MAX_FILE_COUNT=10
-    depends_on:
-      - yossarian-db-service
-    restart: unless-stopped
-
-  yossarian-db-service:
-    image: yossarian-go/yossarian-go-db-service:latest
-    ports:
-      - "8081:8081"
     volumes:
-      - db-data:/data
-    restart: unless-stopped
+      - frontend-data:/data
+    depends_on:
+      - minio
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Worker (processes batch jobs)
+  worker:
+    image: yossarian-go/yossarian-go:v0.13.0
+    container_name: yossarian-worker
+    environment:
+      MODE: worker
+      PORT: 8082
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: yossarian
+      MINIO_SECRET_KEY: yossarian123
+      MINIO_BUCKET: yossarian-jobs
+      MINIO_USE_SSL: "false"
+      WORKER_POLL_INTERVAL: "5"
+    ports:
+      - "8082:8082"
+    volumes:
+      - worker-data:/data
+    depends_on:
+      - minio
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
-  db-data:
+  minio-data:
+  frontend-data:
+  worker-data:

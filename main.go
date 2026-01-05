@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"mime/multipart"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -28,6 +29,10 @@ import (
 	"sync"
 	"time"
 
+	// MinIO client libraries
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+
 	// ✅ ADD: Prometheus client libraries
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -44,13 +49,22 @@ type UserInfo struct {
 
 // Version information - set during build
 var (
-	Version   = "v0.12.3"
+	Version   = "v0.13.0"
 	BuildTime = "unknown"
 	GitCommit = "unknown"
 )
 
 // Global storage for download and admin
 var (
+	// MinIO configuration (v0.13.0)
+	runMode               string
+	minioClient           *minio.Client
+	minioEndpoint         string
+	minioAccessKey        string
+	minioSecretKey        string
+	minioBucket           string
+	minioUseSSL           bool
+	workerPollInterval    int = 5
 	lastSanitizedContent  string
 	lastSanitizedFilename string
 	lastSanitizedFiles    map[string]string
@@ -1163,6 +1177,16 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Session validation (if OIDC enabled)
+	if autoSSOEnabled && !isValidAdminSession(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "session_expired",
+			"message": "Your session has expired. Please log in again.",
+		})
+		return
+	}
+
 	// Get username for audit logging
 	username := "anonymous"
 	if cookie, err := r.Cookie("admin_session"); err == nil {
@@ -1173,9 +1197,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		sessionMutex.Unlock()
 	}
 
-	err := r.ParseMultipartForm(int64(maxTotalUploadSizeMB) << 20)
-	if err != nil {
-		log.Printf("[ERROR] File upload failed: form parsing error for user=%s: %v", username, err)
+	if parseErr := r.ParseMultipartForm(int64(maxTotalUploadSizeMB) << 20); parseErr != nil {
+		log.Printf("[ERROR] File upload failed: form parsing error for user=%s: %v", username, parseErr)
 		http.Error(w, fmt.Sprintf("Files too large (max %dMB total)", maxTotalUploadSizeMB), http.StatusBadRequest)
 		return
 	}
@@ -1194,12 +1217,11 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] File upload started: user=%s, files=%d", username, len(files))
+	log.Printf("[INFO] File upload started: user=%s, files=%d, mode=%s", username, len(files), runMode)
 
 	// Check if detailed report was requested
 	shouldGenerateDetailedReport := r.FormValue("generate_detailed_report") == "true"
 	if shouldGenerateDetailedReport {
-		// Clear previous detailed replacements
 		replacementMutex.Lock()
 		detailedReplacements = []Replacement{}
 		replacementMutex.Unlock()
@@ -1218,71 +1240,109 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// === NEW v0.13.0: Frontend Mode - ZIP files go to MinIO ===
+	if runMode == "frontend" {
+		for _, fileHeader := range files {
+			if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
+				log.Printf("[FRONTEND] ZIP file detected: %s - uploading to MinIO", fileHeader.Filename)
+
+				file, err := fileHeader.Open()
+				if err != nil {
+					log.Printf("[ERROR] Failed to open ZIP: %v", err)
+					http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
+					return
+				}
+
+				// Read ZIP content
+				zipContent, err := io.ReadAll(file)
+				file.Close()
+				if err != nil {
+					log.Printf("[ERROR] Failed to read ZIP: %v", err)
+					http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
+					return
+				}
+
+				// Generate job ID
+				jobID := generateJobID(username)
+				ctx := context.Background()
+
+				// Upload to MinIO
+				objectName := fmt.Sprintf("%s/%s/input.zip", username, jobID)
+				if err := uploadToMinIO(ctx, objectName, bytes.NewReader(zipContent), int64(len(zipContent))); err != nil {
+					log.Printf("[ERROR] Failed to upload to MinIO: %v", err)
+					http.Error(w, "Failed to upload file", http.StatusInternalServerError)
+					return
+				}
+
+				// Count files in ZIP
+				zipReader, err := zip.NewReader(bytes.NewReader(zipContent), int64(len(zipContent)))
+				if err != nil {
+					log.Printf("[ERROR] Failed to read ZIP: %v", err)
+					http.Error(w, "Invalid ZIP file", http.StatusBadRequest)
+					return
+				}
+				totalFiles := len(zipReader.File)
+
+				// Create job record in database
+				jobData := map[string]interface{}{
+					"job_id":      jobID,
+					"username":    username,
+					"total_files": totalFiles,
+					"status":      "queued",
+				}
+
+				jsonData, _ := json.Marshal(jobData)
+				resp, err := http.Post(
+					fmt.Sprintf("%s/jobs/create", adServiceURL),
+					"application/json",
+					bytes.NewBuffer(jsonData),
+				)
+				if err != nil {
+					log.Printf("[ERROR] Failed to create job record: %v", err)
+					http.Error(w, "Failed to create job record", http.StatusInternalServerError)
+					return
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode != http.StatusOK {
+					body, _ := io.ReadAll(resp.Body)
+					log.Printf("[ERROR] Database service error: %s", string(body))
+					http.Error(w, "Failed to create job record", http.StatusInternalServerError)
+					return
+				}
+
+				log.Printf("[FRONTEND] Batch job %s created: user=%s, files=%d", jobID, username, totalFiles)
+
+				// Return success response
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"job_id":      jobID,
+					"status":      "queued",
+					"total_files": totalFiles,
+					"message":     "Batch job submitted successfully",
+				})
+				return
+			}
+		}
+	}
+
+	// === Regular file processing (both frontend and worker mode) ===
 	results := make([]map[string]interface{}, 0)
 	totalOriginalSize := 0
 	totalSanitizedSize := 0
 
-	// Clear previous files only at start of new batch
 	if lastSanitizedFiles == nil {
 		lastSanitizedFiles = make(map[string]string)
 	}
 
 	for _, fileHeader := range files {
-		// Check if this is a ZIP file - route to batch processing
-		if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
-			log.Printf("[BATCH] ZIP file detected: %s (%.2f MB) - routing to batch processing",
-				fileHeader.Filename, float64(fileHeader.Size)/1024/1024)
-
-			// Read ZIP content
-			file, err := fileHeader.Open()
-			if err != nil {
-				log.Printf("[ERROR] Failed to open ZIP file %s: %v", fileHeader.Filename, err)
-				http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
-				return
-			}
-
-			zipContent, err := io.ReadAll(file)
-			file.Close()
-			if err != nil {
-				log.Printf("[ERROR] Failed to read ZIP file %s: %v", fileHeader.Filename, err)
-				http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
-				return
-			}
-
-			// Create batch job
-			jobID, err := createBatchJob(username, zipContent, fileHeader.Filename)
-			if err != nil {
-				log.Printf("[ERROR] Failed to create batch job: %v", err)
-				http.Error(w, fmt.Sprintf("Failed to create batch job: %v", err), http.StatusInternalServerError)
-				return
-			}
-
-			// Return job ID to user
-			w.Header().Set("Content-Type", "application/json")
-			response := map[string]interface{}{
-				"status":     "batch_queued",
-				"job_id":     jobID,
-				"message":    "ZIP file queued for batch processing",
-				"filename":   fileHeader.Filename,
-				"size_mb":    float64(fileHeader.Size) / 1024 / 1024,
-				"username":   username,
-				"jobs_url":   "/jobs/my-jobs",
-				"status_url": fmt.Sprintf("/api/jobs/status/%s", jobID),
-			}
-			json.NewEncoder(w).Encode(response)
-
-			log.Printf("[BATCH] Job %s queued successfully for user %s", jobID, username)
-			return
-		}
-
-		// Check file size (for non-ZIP files)
+		// Check file size
 		if fileHeader.Size > int64(maxFileSizeMB)*1024*1024 {
-			log.Printf("[ERROR] File rejected: %s exceeds %dMB limit (%d bytes)",
-				fileHeader.Filename, maxFileSizeMB, fileHeader.Size)
+			log.Printf("[ERROR] File rejected: %s exceeds %dMB limit", fileHeader.Filename, maxFileSizeMB)
 			continue
 		}
 
-		log.Printf("[DEBUG] File received: %s (%d bytes)", fileHeader.Filename, fileHeader.Size)
+		log.Printf("[DEBUG] Processing file: %s (%d bytes)", fileHeader.Filename, fileHeader.Size)
 
 		file, err := fileHeader.Open()
 		if err != nil {
@@ -1297,215 +1357,25 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Basic binary detection
-		isBinary := isBinaryContent(content)
-		isArchive := isArchiveFile(fileHeader.Filename)
-		log.Printf("[DEBUG] File type check: %s - binary=%v, archive=%v", fileHeader.Filename, isBinary, isArchive)
-
-		if isBinary && !isArchive {
-			log.Printf("[WARN] File skipped: %s (binary content detected)", fileHeader.Filename)
-			continue // Skip binary files
-		}
-
-		log.Printf("[INFO] Processing file: %s (%.2f KB)", fileHeader.Filename, float64(len(content))/1024)
-
-		// Handle ZIP files
-		if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
-			log.Printf("[INFO] ZIP archive detected: %s (%.2f MB)", fileHeader.Filename, float64(len(content))/1024/1024)
-			fileStartTime := time.Now()
-
-			log.Printf("[DEBUG] Extracting ZIP contents: %s", fileHeader.Filename)
-			extractedFiles := extractZipContent(content)
-			extractionTime := time.Since(fileStartTime)
-
-			if len(extractedFiles) == 0 {
-				log.Printf("[ERROR] No files extracted from ZIP: %s", fileHeader.Filename)
-				continue
-			}
-
-			totalUncompressedSize := 0
-			for _, ef := range extractedFiles {
-				totalUncompressedSize += len(ef.Content)
-			}
-
-			log.Printf("[INFO] ZIP extraction complete: %s - %d files extracted (%.2f MB uncompressed) in %.2fs",
-				fileHeader.Filename, len(extractedFiles), float64(totalUncompressedSize)/1024/1024, extractionTime.Seconds())
-			log.Printf("[INFO] Processing ZIP contents: %s (%d files)", fileHeader.Filename, len(extractedFiles))
-
-			// Sanitize all extracted files
-			var sanitizedFiles []ExtractedFile
-			totalZipOriginalSize := 0
-			totalZipSanitizedSize := 0
-			totalZipStats := map[string]int{
-				"private_keys": 0, "jwt_tokens": 0, "passwords": 0,
-				"ad_accounts": 0, "sensitive_terms": 0, "user_words": 0,
-				"ip_addresses": 0,
-			}
-
-			for idx, extracted := range extractedFiles {
-				log.Printf("[DEBUG] Processing file %d/%d in ZIP: %s (%.2f KB)",
-					idx+1, len(extractedFiles), extracted.Name, float64(len(extracted.Content))/1024)
-
-				fileStartTime := time.Now()
-				fullFilename := fmt.Sprintf("%s:%s", fileHeader.Filename, extracted.Name)
-				sanitized, fileStats := sanitizeText(extracted.Content, userWords, shouldGenerateDetailedReport, fullFilename)
-				processingTime := time.Since(fileStartTime)
-
-				log.Printf("[PERF] Sanitized %d/%d: %s (%.2fs)", idx+1, len(extractedFiles), extracted.Name, processingTime.Seconds())
-
-				// Aggregate statistics
-				for key, value := range fileStats {
-					totalZipStats[key] += value
-				}
-				sanitizedFiles = append(sanitizedFiles, ExtractedFile{
-					Name:    extracted.Name,
-					Content: sanitized,
-					Mode:    extracted.Mode,
-					ModTime: extracted.ModTime,
-				})
-				totalZipOriginalSize += len(extracted.Content)
-				totalZipSanitizedSize += len(sanitized)
-			}
-
-			recreateStartTime := time.Now()
-
-			sanitizedZipData, err := createZipArchive(sanitizedFiles)
-			if err != nil {
-				log.Printf("[ERROR] Failed to recreate ZIP archive %s: %v", fileHeader.Filename, err)
-				continue
-			}
-
-			recreationTime := time.Since(recreateStartTime)
-			log.Printf("[DEBUG] ZIP recreation completed in %.2fs", recreationTime.Seconds())
-
-			// Calculate processing time for ZIP (use file start time)
-			zipProcessingTime := time.Since(fileStartTime)
-
-			compressionRatio := (1.0 - float64(len(sanitizedZipData))/float64(totalZipOriginalSize)) * 100
-			log.Printf("[INFO] ZIP archive created: %s (%.2f MB sanitized, %.2f MB original, %.1f%% compression)",
-				fileHeader.Filename, float64(len(sanitizedZipData))/1024/1024,
-				float64(totalZipOriginalSize)/1024/1024, compressionRatio)
-
-			// Store results for the entire ZIP file
-			result := map[string]interface{}{
-				"filename":          fileHeader.Filename,
-				"original_size":     len(content),
-				"sanitized_size":    len(sanitizedZipData),
-				"processing_time":   fmt.Sprintf("%.2fs", zipProcessingTime.Seconds()),
-				"total_ips":         0, // Will be calculated below
-				"ad_accounts":       0,
-				"jwt_tokens":        0,
-				"private_keys":      0,
-				"sensitive_terms":   0,
-				"user_words":        0,
-				"status":            "sanitized",
-				"files_processed":   len(extractedFiles),
-				"sanitized_content": string(sanitizedZipData), // Keep for download, exclude from reports
-			}
-
-			// Calculate total findings across all files
-			for _, sanitizedFile := range sanitizedFiles {
-				result["total_ips"] = result["total_ips"].(int) + countMatches(sanitizedFile.Content, "[IP-")
-				result["ad_accounts"] = result["ad_accounts"].(int) + countMatches(sanitizedFile.Content, "USN")
-				result["jwt_tokens"] = result["jwt_tokens"].(int) + countMatches(sanitizedFile.Content, "[JWT-REDACTED]")
-				result["private_keys"] = result["private_keys"].(int) + countMatches(sanitizedFile.Content, "[PRIVATE-KEY-REDACTED]")
-				result["sensitive_terms"] = result["sensitive_terms"].(int) + countMatches(sanitizedFile.Content, "[SENSITIVE]")
-				result["user_words"] = result["user_words"].(int) + countMatches(sanitizedFile.Content, "[USER-SENSITIVE]")
-			}
-
-			result["sample"] = fmt.Sprintf("ZIP archive with %d files processed", len(extractedFiles))
-
-			results = append(results, result)
-			totalOriginalSize += len(content)
-			totalSanitizedSize += len(sanitizedZipData)
-
-			log.Printf("[INFO] ZIP processing summary: %s", fileHeader.Filename)
-			log.Printf("[INFO]   Files: %d processed", len(extractedFiles))
-			log.Printf("[INFO]   Size: %.2f MB → %.2f MB (%.1f%% reduction)",
-				float64(totalZipOriginalSize)/1024/1024,
-				float64(totalZipSanitizedSize)/1024/1024,
-				(1.0-float64(totalZipSanitizedSize)/float64(totalZipOriginalSize))*100)
-			log.Printf("[INFO]   Patterns: IPs=%d, AD=%d, JWT=%d, Keys=%d, Sensitive=%d, UserWords=%d",
-				totalZipStats["ip_addresses"], totalZipStats["ad_accounts"], totalZipStats["jwt_tokens"],
-				totalZipStats["private_keys"], totalZipStats["sensitive_terms"], totalZipStats["user_words"])
-			log.Printf("[PERF] Total processing time: %.2fs (%.2f MB/sec)",
-				zipProcessingTime.Seconds(), float64(totalZipOriginalSize)/1024/1024/zipProcessingTime.Seconds())
-
-			log.Printf("[AUDIT] ZIP processed: user=%s, file=%s, files=%d, total_patterns=%d",
-				username, fileHeader.Filename, len(extractedFiles),
-				totalZipStats["ip_addresses"]+totalZipStats["ad_accounts"]+totalZipStats["jwt_tokens"]+
-					totalZipStats["private_keys"]+totalZipStats["sensitive_terms"]+totalZipStats["user_words"])
-
+		// Skip binary files
+		if isBinaryContent(content) && !isArchiveFile(fileHeader.Filename) {
+			log.Printf("[WARN] File skipped: %s (binary content)", fileHeader.Filename)
 			continue
 		}
 
-		if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
-			extractedFiles := extractZipContent(content)
-			for _, extracted := range extractedFiles {
-				// Sanitize content with timing
-				fileStartTime := time.Now()
-				sanitized, _ := sanitizeText(extracted.Content, userWords, false, extracted.Name)
-				processingTime := time.Since(fileStartTime)
+		log.Printf("[INFO] Sanitizing file: %s (%.2f KB)", fileHeader.Filename, float64(len(content))/1024)
 
-				// Store results for each extracted file
-				result := map[string]interface{}{
-					"filename":          fmt.Sprintf("%s:%s", fileHeader.Filename, extracted.Name),
-					"original_size":     len(extracted.Content),
-					"sanitized_size":    len(sanitized),
-					"processing_time":   fmt.Sprintf("%.2fs", processingTime.Seconds()),
-					"total_ips":         countMatches(sanitized, "[IP-"),
-					"ad_accounts":       countMatches(sanitized, "USN"),
-					"jwt_tokens":        countMatches(sanitized, "[JWT-REDACTED]"),
-					"private_keys":      countMatches(sanitized, "[PRIVATE-KEY-REDACTED]"),
-					"sensitive_terms":   countMatches(sanitized, "[SENSITIVE]"),
-					"user_words":        countMatches(sanitized, "[USER-SENSITIVE]"),
-					"sanitized_content": sanitized,
-					"status":            "sanitized",
-				}
-
-				if len(sanitized) > 200 {
-					result["sample"] = sanitized[:200]
-				} else {
-					result["sample"] = sanitized
-				}
-
-				results = append(results, result)
-				totalOriginalSize += len(extracted.Content)
-				totalSanitizedSize += len(sanitized)
-			}
-			continue
-		}
-		// Sanitize content with timing
+		// Sanitize content
 		fileStartTime := time.Now()
-		log.Printf("[PERF] Sanitization started: %s", fileHeader.Filename)
-
 		sanitized, sanitizeStats := sanitizeText(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename)
 		processingTime := time.Since(fileStartTime)
 
-		processingRateMBps := float64(len(content)) / 1024 / 1024 / processingTime.Seconds()
-		log.Printf("[PERF] Sanitization completed: %s in %.2fs (%.2f MB/sec)",
-			fileHeader.Filename, processingTime.Seconds(), processingRateMBps)
+		log.Printf("[PERF] Sanitized %s in %.2fs", fileHeader.Filename, processingTime.Seconds())
 
-		totalPatterns := sanitizeStats["private_keys"] + sanitizeStats["jwt_tokens"] +
-			sanitizeStats["passwords"] + sanitizeStats["ad_accounts"] +
-			sanitizeStats["sensitive_terms"] + sanitizeStats["user_words"] +
-			len(ipMappings)
-
-		log.Printf("[INFO] Results - File: %s, IPs: %d, AD: %d, JWT: %d, Keys: %d, Sensitive: %d, UserWords: %d, Total: %d",
-			fileHeader.Filename,
-			sanitizeStats["ip_addresses"],
-			sanitizeStats["ad_accounts"],
-			sanitizeStats["jwt_tokens"],
-			sanitizeStats["private_keys"],
-			sanitizeStats["sensitive_terms"],
-			sanitizeStats["user_words"],
-			totalPatterns)
-		// ✅ ADD: Record metrics to Prometheus
+		// Record metrics
 		fileExt := filepath.Ext(fileHeader.Filename)
 		uploadSize.WithLabelValues(fileExt).Observe(float64(len(content)))
 		processingDuration.WithLabelValues("upload").Observe(processingTime.Seconds())
-
-		// Record pattern detections from sanitizeStats
 		patternsDetected.WithLabelValues("ip_address").Add(float64(sanitizeStats["ip_addresses"]))
 		patternsDetected.WithLabelValues("ad_account").Add(float64(sanitizeStats["ad_accounts"]))
 		patternsDetected.WithLabelValues("jwt_token").Add(float64(sanitizeStats["jwt_tokens"]))
@@ -1513,18 +1383,19 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		patternsDetected.WithLabelValues("password").Add(float64(sanitizeStats["passwords"]))
 		patternsDetected.WithLabelValues("sensitive_term").Add(float64(sanitizeStats["sensitive_terms"]))
 		patternsDetected.WithLabelValues("user_word").Add(float64(sanitizeStats["user_words"]))
+
 		// Store results
 		result := map[string]interface{}{
 			"filename":          fileHeader.Filename,
 			"original_size":     len(content),
 			"sanitized_size":    len(sanitized),
 			"processing_time":   fmt.Sprintf("%.2fs", processingTime.Seconds()),
-			"total_ips":         countMatches(sanitized, "[IP-"),
-			"ad_accounts":       countMatches(sanitized, "USN"),
-			"jwt_tokens":        countMatches(sanitized, "[JWT-REDACTED]"),
-			"private_keys":      countMatches(sanitized, "[PRIVATE-KEY-REDACTED]"),
-			"sensitive_terms":   countMatches(sanitized, "[SENSITIVE]"),
-			"user_words":        countMatches(sanitized, "[USER-SENSITIVE]"),
+			"total_ips":         sanitizeStats["ip_addresses"],
+			"ad_accounts":       sanitizeStats["ad_accounts"],
+			"jwt_tokens":        sanitizeStats["jwt_tokens"],
+			"private_keys":      sanitizeStats["private_keys"],
+			"sensitive_terms":   sanitizeStats["sensitive_terms"],
+			"user_words":        sanitizeStats["user_words"],
 			"sanitized_content": sanitized,
 			"status":            "sanitized",
 		}
@@ -1538,81 +1409,35 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		results = append(results, result)
 		totalOriginalSize += len(content)
 		totalSanitizedSize += len(sanitized)
+
+		// Store for download
+		lastSanitizedFiles[fileHeader.Filename] = sanitized
 	}
 
-	// Store for download (combine all sanitized content)
+	// Combine all sanitized content
 	combinedSanitized := ""
 	for _, result := range results {
 		if content, exists := result["sanitized_content"]; exists && content != nil {
 			combinedSanitized += content.(string) + "\n\n"
 		}
 	}
-	// Store files for download
-	log.Printf("[INFO] Storing %d files for download", len(results))
-
-	storedCount := 0
-	totalStoredSize := 0
-
-	// Don't recreate map - append to existing files
-	for _, result := range results {
-		if content, exists := result["sanitized_content"]; exists && content != nil {
-			filename := result["filename"].(string)
-			contentStr := content.(string)
-			lastSanitizedFiles[filename] = contentStr
-
-			storedCount++
-			totalStoredSize += len(contentStr)
-
-			log.Printf("[DEBUG] File stored for download: %s (%.2f KB)", filename, float64(len(contentStr))/1024)
-		}
-	}
-
-	log.Printf("[INFO] Storage complete: %d files stored (%.2f MB total)",
-		storedCount, float64(totalStoredSize)/1024/1024)
-	log.Printf("[INFO] Total files available for download: %d", len(lastSanitizedFiles))
 
 	lastSanitizedContent = combinedSanitized
 	lastSanitizedFilename = "sanitized-files.txt"
 
-	// Final processing summary
-	totalProcessingTime := time.Since(time.Now()) // This will be updated in next change
-	overallRateMBps := float64(totalOriginalSize) / 1024 / 1024 / totalProcessingTime.Seconds()
-
-	log.Printf("[INFO] ========== Upload Processing Complete ==========")
-	log.Printf("[INFO] User: %s", username)
-	log.Printf("[INFO] Files Processed: %d", len(results))
-	log.Printf("[INFO] Total Size: %.2f MB → %.2f MB (%.1f%% reduction)",
-		float64(totalOriginalSize)/1024/1024,
-		float64(totalSanitizedSize)/1024/1024,
-		(1.0-float64(totalSanitizedSize)/float64(totalOriginalSize))*100)
-	log.Printf("[INFO] IP Mappings Created: %d", len(ipMappings))
-	log.Printf("[PERF] Overall Rate: %.2f MB/sec", overallRateMBps)
-
-	// Aggregate all patterns across all files
-	totalPatterns := 0
-	for _, result := range results {
-		totalPatterns += result["total_ips"].(int) + result["ad_accounts"].(int) +
-			result["jwt_tokens"].(int) + result["private_keys"].(int) +
-			result["sensitive_terms"].(int) + result["user_words"].(int)
-	}
-
-	log.Printf("[AUDIT] Upload completed: user=%s, files=%d, total_size_mb=%.2f, patterns_found=%d",
-		username, len(results), float64(totalOriginalSize)/1024/1024, totalPatterns)
-	log.Printf("[INFO] ===============================================")
+	log.Printf("[INFO] Upload complete: user=%s, files=%d, size=%.2fMB",
+		username, len(results), float64(totalOriginalSize)/1024/1024)
 
 	// Return JSON response
 	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"files":             results,
 		"total_files":       len(results),
 		"total_original":    totalOriginalSize,
 		"total_sanitized":   totalSanitizedSize,
 		"total_ip_mappings": len(ipMappings),
 		"status":            "completed",
-	}
-
-	jsonBytes, _ := json.Marshal(response)
-	w.Write(jsonBytes)
+	})
 }
 
 func extractZipContent(zipData []byte) []ExtractedFile {
@@ -2335,7 +2160,9 @@ func jobListAPIHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Proxy to db-service
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/jobs/list/%s", adServiceURL, username))
+	// Only show jobs from last 8 hours
+	cutoff := time.Now().Add(-8 * time.Hour).Format(time.RFC3339)
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/list/%s?after=%s", adServiceURL, username, cutoff))
 	if err != nil {
 		http.Error(w, "Failed to get job list", http.StatusInternalServerError)
 		return
@@ -2479,7 +2306,7 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get job info to find output path
+	// Get job info
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
 	if err != nil {
@@ -2505,27 +2332,37 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if jobInfo.OutputPath == nil {
-		http.Error(w, "Output path not available", http.StatusNotFound)
-		return
-	}
+	// Download from MinIO
+	minioPath := fmt.Sprintf("%s/%s/output.zip", jobInfo.Username, jobID)
 
-	// Read sanitized ZIP file
-	outputZipPath := filepath.Join(*jobInfo.OutputPath, "sanitized.zip")
-	zipData, err := os.ReadFile(outputZipPath)
+	log.Printf("[DOWNLOAD] Fetching from MinIO: %s", minioPath)
+
+	obj, err := downloadFromMinIO(context.Background(), minioPath)
 	if err != nil {
-		log.Printf("[ERROR] Failed to read output file: %v", err)
+		log.Printf("[ERROR] Failed to download from MinIO: %v", err)
 		http.Error(w, "Output file not found", http.StatusNotFound)
 		return
 	}
+	defer obj.Close()
 
-	// Send file to user
+	// Get file info for content length
+	stat, err := obj.Stat()
+	if err != nil {
+		log.Printf("[ERROR] Failed to stat MinIO object: %v", err)
+		http.Error(w, "Failed to get file info", http.StatusInternalServerError)
+		return
+	}
+
+	// Stream file to user
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized-%s.zip\"", jobID))
-	w.Write(zipData)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size))
 
-	log.Printf("[BATCH] Job %s downloaded by user %s (%.2f MB)",
-		jobID, jobInfo.Username, float64(len(zipData))/1024/1024)
+	if _, err := io.Copy(w, obj); err != nil {
+		log.Printf("[ERROR] Failed to stream file: %v", err)
+	}
+
+	log.Printf("[DOWNLOAD] Completed: %s (%d bytes)", minioPath, stat.Size)
 }
 
 // Background batch job processor
@@ -3121,10 +2958,479 @@ func performBatchCleanup() {
 	}
 }
 
+// initMinIO initializes the MinIO client
+func initMinIO() (*minio.Client, error) {
+	endpoint := minioEndpoint
+	accessKey := minioAccessKey
+	secretKey := minioSecretKey
+	useSSL := minioUseSSL
+
+	// Initialize MinIO client
+	client, err := minio.New(endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure: useSSL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create MinIO client: %v", err)
+	}
+
+	log.Printf("[MINIO] Connected to %s (SSL: %v)", endpoint, useSSL)
+
+	// Ensure bucket exists
+	if err := ensureBucket(client, minioBucket); err != nil {
+		return nil, fmt.Errorf("failed to ensure bucket exists: %v", err)
+	}
+
+	return client, nil
+}
+
+// ensureBucket creates the bucket if it doesn't exist
+func ensureBucket(client *minio.Client, bucketName string) error {
+	ctx := context.Background()
+
+	exists, err := client.BucketExists(ctx, bucketName)
+	if err != nil {
+		return fmt.Errorf("failed to check bucket existence: %v", err)
+	}
+
+	if !exists {
+		err = client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to create bucket: %v", err)
+		}
+		log.Printf("[MINIO] Created bucket: %s", bucketName)
+	} else {
+		log.Printf("[MINIO] Bucket exists: %s", bucketName)
+	}
+
+	return nil
+}
+
+// uploadToMinIO uploads a file to MinIO
+func uploadToMinIO(ctx context.Context, objectName string, reader io.Reader, size int64) error {
+	if minioClient == nil {
+		return fmt.Errorf("MinIO client not initialized")
+	}
+
+	_, err := minioClient.PutObject(ctx, minioBucket, objectName, reader, size, minio.PutObjectOptions{
+		ContentType: "application/zip",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to upload to MinIO: %v", err)
+	}
+
+	log.Printf("[MINIO] Uploaded: %s (%d bytes)", objectName, size)
+	return nil
+}
+
+// downloadFromMinIO downloads a file from MinIO
+func downloadFromMinIO(ctx context.Context, objectName string) (*minio.Object, error) {
+	if minioClient == nil {
+		return nil, fmt.Errorf("MinIO client not initialized")
+	}
+
+	object, err := minioClient.GetObject(ctx, minioBucket, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to download from MinIO: %v", err)
+	}
+
+	log.Printf("[MINIO] Downloaded: %s", objectName)
+	return object, nil
+}
+
+// deleteFromMinIO deletes a file from MinIO
+func deleteFromMinIO(ctx context.Context, objectName string) error {
+	if minioClient == nil {
+		return fmt.Errorf("MinIO client not initialized")
+	}
+
+	err := minioClient.RemoveObject(ctx, minioBucket, objectName, minio.RemoveObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to delete from MinIO: %v", err)
+	}
+
+	log.Printf("[MINIO] Deleted: %s", objectName)
+	return nil
+}
+
+// pollDatabaseForJobs queries the database for queued batch jobs and processes them
+func pollDatabaseForJobs() {
+	// Query database for next queued job
+	resp, err := http.Get(fmt.Sprintf("%s/batch/next", adServiceURL))
+	if err != nil {
+		log.Printf("[WORKER] Error querying database: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		// No jobs in queue (this is normal)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[WORKER] Database service returned status %d", resp.StatusCode)
+		return
+	}
+
+	// Parse job info
+	var job struct {
+		JobID    string `json:"job_id"`
+		Username string `json:"username"`
+		Status   string `json:"status"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		log.Printf("[WORKER] Error decoding job: %v", err)
+		return
+	}
+
+	log.Printf("[WORKER] Found queued job: %s (user: %s)", job.JobID, job.Username)
+
+	// Process the job
+	if err := processBatchJobFromMinIO(job.JobID, job.Username); err != nil {
+		log.Printf("[WORKER] Error processing job %s: %v", job.JobID, err)
+
+		// Mark job as failed
+		failResp, _ := http.Post(
+			fmt.Sprintf("%s/batch/%s/fail", adServiceURL, job.JobID),
+			"application/json",
+			strings.NewReader(fmt.Sprintf(`{"error": "%s"}`, err.Error())),
+		)
+		if failResp != nil {
+			failResp.Body.Close()
+		}
+		return
+	}
+
+	log.Printf("[WORKER] Job completed successfully: %s", job.JobID)
+}
+
+// startBatchWorker runs the main worker polling loop
+func startBatchWorker() {
+	pollInterval := workerPollInterval
+	if pollInterval == 0 {
+		pollInterval = 5 // Default 5 seconds
+	}
+
+	log.Printf("[WORKER] Batch worker started (poll interval: %d seconds)", pollInterval)
+
+	ticker := time.NewTicker(time.Duration(pollInterval) * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		pollDatabaseForJobs() // ✅ New function
+	}
+}
+
+// processBatchJobFromMinIO downloads job from MinIO, processes it, and uploads results
+func processBatchJobFromMinIO(jobID, username string) error {
+	ctx := context.Background()
+	log.Printf("[WORKER] Processing job %s for user %s", jobID, username)
+
+	// Update status to processing
+	updateJobStatus(jobID, "processing", 0, 0, "")
+	jobStartTime := time.Now()
+
+	// Download input.zip from MinIO
+	objectName := fmt.Sprintf("%s/%s/input.zip", username, jobID)
+	object, err := downloadFromMinIO(ctx, objectName)
+	if err != nil {
+		return fmt.Errorf("failed to download input from MinIO: %v", err)
+	}
+	defer object.Close()
+
+	// Read the ZIP content
+	zipContent, err := io.ReadAll(object)
+	if err != nil {
+		return fmt.Errorf("failed to read ZIP content: %v", err)
+	}
+
+	log.Printf("[WORKER] Downloaded input.zip for job %s (%d bytes)", jobID, len(zipContent))
+
+	// Extract and process files (reuse existing processBatchJob logic)
+	zipReader, err := zip.NewReader(bytes.NewReader(zipContent), int64(len(zipContent)))
+	if err != nil {
+		return fmt.Errorf("failed to read ZIP: %v", err)
+	}
+
+	// Extract files
+	var extractedFiles []ExtractedFile
+	for _, file := range zipReader.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+
+		rc, err := file.Open()
+		if err != nil {
+			log.Printf("[WORKER] Failed to open file %s: %v", file.Name, err)
+			continue
+		}
+
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			log.Printf("[WORKER] Failed to read file %s: %v", file.Name, err)
+			continue
+		}
+
+		extractedFiles = append(extractedFiles, ExtractedFile{
+			Name:    file.Name,
+			Content: string(content), // Convert []byte to string
+			Mode:    file.Mode(),
+			ModTime: file.Modified,
+		})
+	}
+
+	log.Printf("[WORKER] Extracted %d files from job %s", len(extractedFiles), jobID)
+
+	// Sanitize all files
+	var sanitizedFiles []ExtractedFile
+	totalStats := map[string]int{
+		"ip_addresses":    0,
+		"ad_accounts":     0,
+		"jwt_tokens":      0,
+		"private_keys":    0,
+		"passwords":       0,
+		"sensitive_terms": 0,
+		"user_words":      0,
+	}
+
+	for i, file := range extractedFiles {
+		log.Printf("[WORKER] Sanitizing file %d/%d: %s", i+1, len(extractedFiles), file.Name)
+
+		// Call your existing sanitize function (no user words for batch jobs)
+		sanitizedContent, stats := sanitizeText(file.Content, nil, false, file.Name)
+
+		sanitizedFiles = append(sanitizedFiles, ExtractedFile{
+			Name:    file.Name,
+			Content: sanitizedContent,
+			Mode:    file.Mode,
+			ModTime: file.ModTime,
+		})
+
+		// Aggregate stats
+		totalStats["ip_addresses"] += stats["total_ips"]
+		totalStats["ad_accounts"] += stats["ad_accounts"]
+		totalStats["jwt_tokens"] += stats["jwt_tokens"]
+		totalStats["private_keys"] += stats["private_keys"]
+		totalStats["passwords"] += stats["passwords"]
+		totalStats["sensitive_terms"] += stats["sensitive_terms"]
+		totalStats["user_words"] += stats["user_words"]
+
+		// Update progress
+		updateJobStatus(jobID, "processing", len(extractedFiles), i+1, "")
+		log.Printf("[WORKER] Job %s progress: %d%%", int((float64(i+1)/float64(len(extractedFiles)))*100))
+	}
+
+	// Create output ZIP
+	var outputZipBuffer bytes.Buffer
+	zipWriter := zip.NewWriter(&outputZipBuffer)
+
+	for _, file := range sanitizedFiles {
+		writer, err := zipWriter.Create(file.Name)
+		if err != nil {
+			log.Printf("[WORKER] Failed to create ZIP entry for %s: %v", file.Name, err)
+			continue
+		}
+
+		// Convert string to []byte for Write
+		if _, err := writer.Write([]byte(file.Content)); err != nil {
+			log.Printf("[WORKER] Failed to write file to ZIP: %v", err)
+			continue
+		}
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return fmt.Errorf("failed to finalize output ZIP: %v", err)
+	}
+
+	outputZipData := outputZipBuffer.Bytes()
+	log.Printf("[WORKER] Created output.zip for job %s (%d bytes)", jobID, len(outputZipData))
+
+	// Upload output.zip to MinIO
+	outputObjectName := fmt.Sprintf("%s/%s/output.zip", username, jobID)
+	if err := uploadToMinIO(ctx, outputObjectName, bytes.NewReader(outputZipData), int64(len(outputZipData))); err != nil {
+		return fmt.Errorf("failed to upload output to MinIO: %v", err)
+	}
+
+	log.Printf("[WORKER] Uploaded output.zip for job %s", jobID)
+
+	// Update job status to completed
+	processingTime := time.Since(jobStartTime)
+	log.Printf("[WORKER] Job %s completed in %.2f seconds", jobID, processingTime.Seconds())
+	updateJobStatus(jobID, "completed", len(extractedFiles), len(extractedFiles), "")
+
+	return nil
+}
+
+// cleanupOldJobsWorker removes jobs older than 48 hours from MinIO and database
+func cleanupOldJobsWorker() {
+	log.Printf("[WORKER] Running cleanup task (8-hour retention)")
+
+	cutoffTime := time.Now().Add(-8 * time.Hour)
+
+	// Query database for old jobs
+	resp, err := http.Get(fmt.Sprintf("%s/jobs/cleanup?before=%s",
+		adServiceURL, cutoffTime.Format(time.RFC3339)))
+	if err != nil {
+		log.Printf("[WORKER] Failed to query old jobs: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Jobs []struct {
+			JobID    string `json:"job_id"`
+			Username string `json:"username"`
+		} `json:"jobs"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("[WORKER] Failed to decode cleanup jobs: %v", err)
+		return
+	}
+
+	if len(result.Jobs) == 0 {
+		log.Printf("[WORKER] No old jobs to clean up")
+		return
+	}
+
+	log.Printf("[WORKER] Found %d old jobs to clean up", len(result.Jobs))
+
+	ctx := context.Background()
+	cleanedCount := 0
+
+	for _, job := range result.Jobs {
+		// Delete from MinIO
+		inputObj := fmt.Sprintf("%s/%s/input.zip", job.Username, job.JobID)
+		outputObj := fmt.Sprintf("%s/%s/output.zip", job.Username, job.JobID)
+
+		deleteFromMinIO(ctx, inputObj)
+		deleteFromMinIO(ctx, outputObj)
+
+		// Delete from database
+		req, _ := http.NewRequest("DELETE",
+			fmt.Sprintf("%s/jobs/delete/%s", adServiceURL, job.JobID), nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			cleanedCount++
+		}
+	}
+
+	log.Printf("[WORKER] Cleanup complete: %d jobs removed", cleanedCount)
+}
+
+// batchJobSubmitHandler handles ZIP uploads in frontend mode
+func batchJobSubmitHandler(w http.ResponseWriter, r *http.Request, file multipart.File, fileHeader *multipart.FileHeader, username string) {
+	ctx := context.Background()
+
+	// Read file content
+	content, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "Failed to read file", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate job ID
+	jobID := generateJobID(username)
+
+	// Upload to MinIO
+	objectName := fmt.Sprintf("%s/%s/input.zip", username, jobID)
+	if err := uploadToMinIO(ctx, objectName, bytes.NewReader(content), int64(len(content))); err != nil {
+		log.Printf("[ERROR] Failed to upload to MinIO: %v", err)
+		http.Error(w, "Failed to upload file", http.StatusInternalServerError)
+		return
+	}
+
+	// Count files in ZIP
+	zipReader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to read ZIP: %v", err)
+		http.Error(w, "Invalid ZIP file", http.StatusBadRequest)
+		return
+	}
+	totalFiles := len(zipReader.File)
+
+	// Create job record in database
+	jobData := map[string]interface{}{
+		"job_id":      jobID,
+		"username":    username,
+		"total_files": totalFiles,
+		"status":      "queued",
+	}
+
+	jsonData, _ := json.Marshal(jobData)
+	resp, err := http.Post(
+		fmt.Sprintf("%s/jobs/create", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create job record: %v", err)
+		http.Error(w, "Failed to create job record", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("[ERROR] Database service error: %s", string(body))
+		http.Error(w, "Failed to create job record", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[FRONTEND] Batch job %s created by %s: %d files", jobID, username, totalFiles)
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"job_id":      jobID,
+		"status":      "queued",
+		"total_files": totalFiles,
+		"message":     "Batch job submitted successfully",
+	})
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
+	}
+
+	// NEW v0.13.0: Load MODE and MinIO configuration
+	runMode = os.Getenv("MODE")
+	if runMode == "" {
+		runMode = "frontend" // Default to frontend for backwards compatibility
+	}
+	log.Printf("[STARTUP] Running in %s mode", strings.ToUpper(runMode))
+
+	minioEndpoint = os.Getenv("MINIO_ENDPOINT")
+	minioAccessKey = os.Getenv("MINIO_ACCESS_KEY")
+	minioSecretKey = os.Getenv("MINIO_SECRET_KEY")
+	minioBucket = os.Getenv("MINIO_BUCKET")
+	if minioBucket == "" {
+		minioBucket = "yossarian-jobs"
+	}
+	minioUseSSL = os.Getenv("MINIO_USE_SSL") == "true"
+
+	if interval := os.Getenv("WORKER_POLL_INTERVAL"); interval != "" {
+		if val, err := strconv.Atoi(interval); err == nil {
+			workerPollInterval = val
+		}
+	}
+
+	// Initialize MinIO if configured
+	if minioEndpoint != "" {
+		var err error
+		minioClient, err = initMinIO()
+		if err != nil {
+			log.Fatalf("[FATAL] MinIO initialization failed: %v", err)
+		}
+		log.Printf("[STARTUP] MinIO initialized successfully")
+	} else if runMode == "frontend" {
+		log.Printf("[WARN] Frontend mode but MinIO not configured - batch processing will fail")
 	}
 
 	if adminPassword == "" {
@@ -3191,6 +3497,30 @@ func main() {
 
 	// ✅ ADD: Prometheus metrics endpoint
 	http.Handle("/metrics", promhttp.Handler())
+
+	// NEW v0.13.0: Worker mode specific startup
+	if runMode == "worker" {
+		log.Printf("[WORKER] Starting batch worker...")
+
+		// Start batch worker in background
+		go startBatchWorker()
+
+		// Start cleanup task (runs every 6 hours)
+		go func() {
+			ticker := time.NewTicker(6 * time.Hour)
+			defer ticker.Stop()
+
+			// Run cleanup immediately on startup
+			cleanupOldJobsWorker()
+
+			// Then run every 6 hours
+			for range ticker.C {
+				cleanupOldJobsWorker()
+			}
+		}()
+
+		log.Printf("[WORKER] Batch worker and cleanup task started")
+	}
 
 	log.Printf("Server starting on port %s with /metrics endpoint", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))

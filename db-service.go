@@ -764,9 +764,30 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := db.Query(`SELECT job_id, status, total_files, processed_files, 
-		created_at, completed_at FROM batch_jobs 
-		WHERE username = ? ORDER BY created_at DESC LIMIT 50`, username)
+	// Get optional 'after' parameter for filtering by date
+	after := r.URL.Query().Get("after")
+	var rows *sql.Rows
+	var err error
+
+	if after != "" {
+		// Parse RFC3339 and convert to SQLite format
+		afterTime, err := time.Parse(time.RFC3339, after)
+		if err != nil {
+			afterTime = time.Now().Add(-8 * time.Hour) // Fallback
+		}
+		sqliteFormat := afterTime.Format("2006-01-02 15:04:05")
+
+		// Show all jobs, but hide completed jobs older than cutoff
+		rows, err = db.Query(`SELECT job_id, status, total_files, processed_files,
+					created_at, completed_at FROM batch_jobs
+					WHERE username = ? AND (status != 'completed' OR completed_at IS NULL OR completed_at >= ?)
+					ORDER BY created_at DESC LIMIT 50`, username, sqliteFormat)
+	} else {
+		// No filter, return all jobs
+		rows, err = db.Query(`SELECT job_id, status, total_files, processed_files,
+					created_at, completed_at FROM batch_jobs
+					WHERE username = ? ORDER BY created_at DESC LIMIT 50`, username)
+	}
 	if err != nil {
 		http.Error(w, "Database query failed", http.StatusInternalServerError)
 		return
@@ -986,6 +1007,70 @@ func jobQueuedHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Add after jobQueuedHandler
+func batchNextHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get next queued job and atomically mark as processing
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	var job struct {
+		JobID    string `json:"job_id"`
+		Username string `json:"username"`
+		Status   string `json:"status"`
+	}
+
+	err = tx.QueryRow(`
+		SELECT job_id, username, status 
+		FROM batch_jobs 
+		WHERE status = 'queued' 
+		ORDER BY created_at ASC 
+		LIMIT 1
+	`).Scan(&job.JobID, &job.Username, &job.Status)
+
+	if err == sql.ErrNoRows {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to query next job: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Claim the job (mark as processing)
+	_, err = tx.Exec(`
+		UPDATE batch_jobs 
+		SET status = 'processing', started_at = CURRENT_TIMESTAMP 
+		WHERE job_id = ?
+	`, job.JobID)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to claim job: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[ERROR] Failed to commit transaction: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[INFO] Claimed job %s for processing", job.JobID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(job)
+}
+
 func main() {
 	// Load LDAP configuration
 	ldapServer = os.Getenv("LDAP_SERVER")
@@ -1040,6 +1125,7 @@ func main() {
 	http.HandleFunc("/jobs/queued", jobQueuedHandler)
 	http.HandleFunc("/jobs/delete/", jobDeleteHandler)
 	http.HandleFunc("/jobs/cleanup", jobCleanupListHandler)
+	http.HandleFunc("/batch/next", batchNextHandler)
 
 	log.Printf("Database service starting on port 8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
