@@ -1,0 +1,93 @@
+{{- if .Values.ingress.enabled }}
+{{- if .Values.ingress.useContourHTTPProxy }}
+---
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+spec:
+  virtualhost:
+    fqdn: {{ .Values.ingress.host }}
+    {{- if .Values.ingress.tls }}
+    tls:
+      secretName: {{ (index .Values.ingress.tls 0).secretName }}
+    {{- end }}
+  routes:
+    # Route downloads to worker
+    - conditions:
+        - prefix: /jobs/download
+      services:
+        - name: {{ include "yossarian-go.fullname" . }}-worker
+          port: 8080
+    # Route reports to worker
+    - conditions:
+        - prefix: /jobs/reports
+      services:
+        - name: {{ include "yossarian-go.fullname" . }}-worker
+          port: 8080
+    # Route everything else to frontend
+    - conditions:
+        - prefix: /
+      services:
+        - name: {{ include "yossarian-go.fullname" . }}-frontend
+          port: 8080
+      enableWebsockets: true
+{{- else }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- range .Values.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # Worker paths (downloads and reports)
+          - path: /jobs/download
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "yossarian-go.fullname" . }}-worker
+                port:
+                  number: 8080
+          - path: /jobs/reports
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "yossarian-go.fullname" . }}-worker
+                port:
+                  number: 8080
+          # Frontend (everything else)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "yossarian-go.fullname" . }}-frontend
+                port:
+                  number: 8080
+{{- end }}
+{{- end }}

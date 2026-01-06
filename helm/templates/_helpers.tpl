@@ -38,24 +38,14 @@ helm.sh/chart: {{ include "yossarian-go.chart" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-environment: {{ .Values.global.environment }}
 {{- end }}
 
 {{/*
-Selector labels for app
+Selector labels
 */}}
 {{- define "yossarian-go.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "yossarian-go.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end }}
-
-{{/*
-Selector labels for db-service
-*/}}
-{{- define "yossarian-go.dbSelectorLabels" -}}
-app.kubernetes.io/name: {{ include "yossarian-go.name" . }}-db
-app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/component: database
 {{- end }}
 
 {{/*
@@ -70,29 +60,40 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Database PVC name
+MinIO secret key (generate if not provided)
 */}}
-{{- define "yossarian-go.dbPvcName" -}}
-{{- printf "%s-db-pvc" (include "yossarian-go.fullname" .) }}
+{{- define "yossarian-go.minioSecretKey" -}}
+{{- if .Values.minio.secretKey }}
+{{- .Values.minio.secretKey }}
+{{- else }}
+{{- randAlphaNum 32 }}
+{{- end }}
 {{- end }}
 
 {{/*
-Batch jobs PVC name
+Frontend image
 */}}
-{{- define "yossarian-go.batchPvcName" -}}
-{{- printf "%s-batch-pvc" (include "yossarian-go.fullname" .) }}
+{{- define "yossarian-go.frontend.image" -}}
+{{- printf "%s:%s" .Values.images.app.repository (.Values.images.app.tag | default .Chart.AppVersion) }}
 {{- end }}
 
 {{/*
-App service name
+Worker image
 */}}
-{{- define "yossarian-go.appServiceName" -}}
-{{- printf "%s-service" (include "yossarian-go.fullname" .) }}
+{{- define "yossarian-go.worker.image" -}}
+{{- printf "%s:%s" .Values.images.app.repository (.Values.images.app.tag | default .Chart.AppVersion) }}
 {{- end }}
 
 {{/*
-DB service name
+Database image
 */}}
-{{- define "yossarian-go.dbServiceName" -}}
-{{- printf "%s-db-service" (include "yossarian-go.fullname" .) }}
+{{- define "yossarian-go.database.image" -}}
+{{- printf "%s:%s" .Values.images.database.repository (.Values.images.database.tag | default "latest") }}
+{{- end }}
+
+{{/*
+MinIO image
+*/}}
+{{- define "yossarian-go.minio.image" -}}
+{{- printf "%s:%s" .Values.minio.image.repository (.Values.minio.image.tag | default "latest") }}
 {{- end }}

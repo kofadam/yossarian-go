@@ -1,332 +1,236 @@
 # Yossarian Go Helm Chart
 
-Enterprise-grade log sanitization system with batch processing support.
+Enterprise-grade log sanitization system for Kubernetes environments.
 
 ## Overview
 
-This Helm chart deploys Yossarian Go v0.10.0+ with:
-- Main application (2-3 replicas)
-- Database service (SQLite + HTTP API)
-- Batch job processing with PVC storage
-- OIDC/SSO authentication
-- LDAP/Active Directory integration
-- Automated AD synchronization
-- Prometheus metrics
-- TLS/HTTPS via Contour HTTPProxy
+Yossarian Go automatically detects and replaces sensitive information (IP addresses, usernames, passwords, tokens, keys) in log files, making them safe to share with external support teams or vendors.
+
+**Features:**
+- 🔒 Pattern detection (IPs, AD accounts, JWT tokens, private keys, passwords)
+- ⚡ Scalable architecture (MinIO-backed batch processing)
+- 🔐 Enterprise SSO (any OIDC provider: Okta, Auth0, Keycloak, Azure AD)
+- 📊 Prometheus metrics + Grafana dashboards
+- 🌐 Air-gap ready (no external dependencies)
+- 🗑️ Auto-cleanup (8-hour retention)
 
 ## Prerequisites
 
-- Kubernetes 1.19+
-- Helm 3.0+
-- PersistentVolume support (for database and batch jobs)
-- Contour ingress controller
-- cert-manager (optional, for TLS)
-- Keycloak or compatible OIDC provider
-- Active Directory / LDAP server
+- Kubernetes 1.24+
+- Helm 3.8+
+- Persistent volume provisioner (for RWO volumes)
+- Ingress controller (Contour HTTPProxy or nginx/traefik)
+- (Optional) OIDC provider for enterprise authentication
+- (Optional) LDAP/Active Directory for account lookups
 
 ## Quick Start
 
-### 1. Clone Repository
 ```bash
-git clone https://github.com/kofadam/yossarian-go.git
-cd yossarian-go/helm
-```
-
-### 2. Create Namespace
-```bash
-kubectl create namespace yossarian-go
-```
-
-### 3. Configure Values
-Edit `values.yaml` or create `values-custom.yaml`:
-
-```yaml
-# Minimal required configuration
-config:
-  oidc:
-    issuerUrl: "https://your-keycloak.com/auth/realms/your-realm"
-    clientId: "yossarian-go"
-    redirectUrl: "https://yossarian.yourdomain.com/auth/oidc/callback"
-  
-  ldap:
-    server: "ldaps://your-dc.company.com:636"
-    bindDn: "CN=service-account,OU=Services,DC=company,DC=com"
-    searchBase: "DC=company,DC=com"
-
-secrets:
-  adminPassword: "your-secure-password"
-  oidcClientSecret: "your-oidc-secret"
-  ldapBindPassword: "your-ldap-password"
-
-ingress:
-  fqdn: "yossarian.yourdomain.com"
-```
-
-### 4. Install Chart
-```bash
-# Development
-helm install yossarian . -f values.yaml
-
-# Production
-helm install yossarian . -f values-prod.yaml
-```
-
-### 5. Access Application
-```bash
-# Get the URL
-helm status yossarian
-
-# Or port-forward for testing
-kubectl port-forward -n yossarian-go svc/yossarian-service 8080:80
+# Install directly from GitHub Container Registry (OCI)
+helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
+  --version 0.13.3 \
+  --namespace yossarian-go \
+  --create-namespace \
+  --set ingress.host=yossarian.example.com \
+  --set auth.adminPassword=your-secure-password
 ```
 
 ## Configuration
 
-### Core Configuration
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `global.namespace` | Kubernetes namespace | `yossarian-go` |
-| `global.environment` | Environment name | `development` |
-| `image.app.repository` | Main app image | `ghcr.io/kofadam/yossarian-go` |
-| `image.app.tag` | App version | `v0.10.0` |
-| `image.dbService.repository` | DB service image | `ghcr.io/kofadam/yossarian-go-db-service` |
-| `image.dbService.tag` | DB service version | `v0.10.0` |
-
-### Replicas
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `replicaCount.app` | Main app replicas | `2` |
-| `replicaCount.dbService` | DB service replicas | `1` |
-
-### Storage
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `storage.database.enabled` | Enable database PVC | `true` |
-| `storage.database.size` | Database PVC size | `5Gi` |
-| `storage.batchJobs.enabled` | Enable batch jobs PVC | `true` |
-| `storage.batchJobs.size` | Batch jobs PVC size | `100Gi` |
-
-### OIDC Configuration
-
-| Parameter | Description | Required |
-|-----------|-------------|----------|
-| `config.oidc.enabled` | Enable OIDC auth | Yes |
-| `config.oidc.issuerUrl` | OIDC issuer URL | Yes |
-| `config.oidc.clientId` | OIDC client ID | Yes |
-| `config.oidc.redirectUrl` | OAuth2 callback URL | Yes |
-| `secrets.oidcClientSecret` | OIDC client secret | Yes |
-
-### LDAP Configuration
-
-| Parameter | Description | Required |
-|-----------|-------------|----------|
-| `config.ldap.server` | LDAP server URL | Yes |
-| `config.ldap.bindDn` | Bind DN | Yes |
-| `config.ldap.searchBase` | Search base DN | Yes |
-| `secrets.ldapBindPassword` | LDAP password | Yes |
-
-### File Upload Limits
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `config.maxTotalUploadSizeMB` | Max total upload | `100` |
-| `config.maxFileSizeMB` | Max single file | `50` |
-| `config.maxZipFileSizeMB` | Max file in ZIP | `10` |
-| `config.maxFileCount` | Max file count | `10` |
-
-## Advanced Usage
-
-### Using External Secrets
-
-Instead of storing secrets in values.yaml:
-
-```bash
-# Create secret manually
-kubectl create secret generic yossarian-secrets \
-  --from-literal=ADMIN_PASSWORD=xxx \
-  --from-literal=OIDC_CLIENT_SECRET=xxx \
-  --from-literal=LDAP_BIND_PASSWORD=xxx \
-  -n yossarian-go
-
-# Then disable secret creation in values.yaml
-# and reference external secret in deployments
-```
-
-### Custom CA Certificate
+### Minimal Configuration (No OIDC, No LDAP)
 
 ```yaml
-customCA:
+# minimal-values.yaml
+ingress:
+  host: yossarian.example.com
+
+auth:
+  adminPassword: "secure-password-here"
+```
+
+```bash
+helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
+  --version 0.13.3 \
+  -f minimal-values.yaml \
+  -n yossarian-go --create-namespace
+```
+
+### Enterprise with Okta
+
+```yaml
+# okta-values.yaml
+ingress:
+  host: yossarian.company.com
+  className: nginx  # or traefik, etc.
+  useContourHTTPProxy: false  # Use standard Ingress
+
+oidc:
   enabled: true
-  certificate: |
-    -----BEGIN CERTIFICATE-----
-    MIIDXTCCAkWgAwIBAgIJAKJ...
-    -----END CERTIFICATE-----
+  issuerURL: "https://company.okta.com"
+  clientID: "yossarian-client"
+  clientSecret: "secret-from-okta"
+  redirectURL: "https://yossarian.company.com/auth/oidc/callback"
+  autoSSO: true
 ```
 
-### Resource Limits
+### Full Enterprise (OIDC + Active Directory)
 
 ```yaml
-resources:
-  app:
+# enterprise-values.yaml
+ingress:
+  host: yossarian.company.com
+
+oidc:
+  enabled: true
+  issuerURL: "https://keycloak.company.com/realms/main"
+  clientID: "yossarian-go"
+  clientSecret: "keycloak-secret"
+  redirectURL: "https://yossarian.company.com/auth/oidc/callback"
+
+ldap:
+  enabled: true
+  server: "ldaps://dc.company.com:636"
+  bindDN: "CN=svc-yossarian,OU=Service,DC=company,DC=com"
+  bindPassword: "ldap-password"
+  searchBase: "DC=company,DC=com"
+
+domain:
+  netbios: "COMPANY"
+  fqdn: "company.com"
+```
+
+## OIDC Provider Examples
+
+### Okta
+```yaml
+oidc:
+  issuerURL: "https://your-domain.okta.com"
+```
+
+### Auth0
+```yaml
+oidc:
+  issuerURL: "https://your-domain.auth0.com"
+```
+
+### Keycloak
+```yaml
+oidc:
+  issuerURL: "https://keycloak.company.com/realms/myrealm"
+```
+
+### Azure AD
+```yaml
+oidc:
+  issuerURL: "https://login.microsoftonline.com/{tenant-id}/v2.0"
+```
+
+### Google
+```yaml
+oidc:
+  issuerURL: "https://accounts.google.com"
+```
+
+## Storage Configuration
+
+```yaml
+persistence:
+  minio:
+    size: 100Gi
+    storageClass: "fast-ssd"  # Optional
+  
+  database:
+    size: 5Gi
+  
+  worker:
+    size: 50Gi
+```
+
+## Resource Limits
+
+```yaml
+frontend:
+  replicas: 3
+  resources:
     requests:
-      memory: "1Gi"
-      cpu: "500m"
+      cpu: 250m
+      memory: 512Mi
     limits:
-      memory: "4Gi"
-      cpu: "2000m"
+      cpu: 1000m
+      memory: 2Gi
+
+worker:
+  replicas: 1  # Must be 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
 ```
 
-### Node Affinity
-
-```yaml
-nodeSelector:
-  workload-type: application
-
-affinity:
-  podAntiAffinity:
-    preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 100
-        podAffinityTerm:
-          labelSelector:
-            matchExpressions:
-              - key: app.kubernetes.io/name
-                operator: In
-                values:
-                  - yossarian-go
-          topologyKey: kubernetes.io/hostname
-```
-
-## Operations
-
-### Upgrade
+## Upgrading
 
 ```bash
-# Upgrade to new version
-helm upgrade yossarian . --set image.app.tag=v0.10.1
-
-# With custom values
-helm upgrade yossarian . -f values-prod.yaml
+helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
+  --version 0.13.3 \
+  -n yossarian-go \
+  -f custom-values.yaml
 ```
 
-### Rollback
+## Uninstall
 
 ```bash
-helm rollback yossarian
+helm uninstall yossarian -n yossarian-go
+
+# Optionally delete PVCs
+kubectl delete pvc -n yossarian-go -l app.kubernetes.io/instance=yossarian
 ```
 
-### Uninstall
+## Values
 
-```bash
-helm uninstall yossarian
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `ingress.enabled` | Enable ingress | `true` |
+| `ingress.host` | Ingress hostname | `yossarian.example.com` |
+| `ingress.useContourHTTPProxy` | Use Contour HTTPProxy instead of standard Ingress | `true` |
+| `auth.adminPassword` | Admin password (if OIDC disabled) | `changeme` |
+| `oidc.enabled` | Enable OIDC authentication | `false` |
+| `oidc.issuerURL` | OIDC provider URL | `""` |
+| `ldap.enabled` | Enable LDAP/AD integration | `false` |
+| `persistence.minio.size` | MinIO storage size | `100Gi` |
+| `persistence.worker.size` | Worker storage size | `50Gi` |
+| `frontend.replicas` | Frontend pod count | `3` |
+| `worker.replicas` | Worker pod count (must be 1) | `1` |
 
-# Clean up PVCs (optional - will delete data!)
-kubectl delete pvc -n yossarian-go yossarian-db-pvc yossarian-batch-pvc
-```
-
-### Backup
-
-```bash
-# Backup database PVC
-kubectl exec -n yossarian-go deployment/yossarian-db \
-  -- tar czf - /data > yossarian-db-backup-$(date +%Y%m%d).tar.gz
-
-# Backup batch jobs PVC
-kubectl exec -n yossarian-go deployment/yossarian \
-  -- tar czf - /data/jobs > yossarian-jobs-backup-$(date +%Y%m%d).tar.gz
-```
-
-### Monitoring
-
-```bash
-# View Prometheus metrics
-kubectl port-forward -n yossarian-go svc/yossarian-service 8080:80
-curl http://localhost:8080/metrics
-
-# View logs
-kubectl logs -n yossarian-go -l app.kubernetes.io/name=yossarian-go --tail=100 -f
-```
+See [values.yaml](values.yaml) for all available options.
 
 ## Troubleshooting
 
-### Pods Not Starting
-
+### Check worker logs
 ```bash
-# Check pod status
-kubectl get pods -n yossarian-go
-
-# View pod events
-kubectl describe pod -n yossarian-go <pod-name>
-
-# Check logs
-kubectl logs -n yossarian-go <pod-name>
+kubectl logs -n yossarian-go deployment/yossarian-worker
 ```
 
-### PVC Issues
-
+### Verify MinIO connectivity
 ```bash
-# Check PVC status
-kubectl get pvc -n yossarian-go
-
-# Check PV
-kubectl get pv
-
-# Fix permissions
-kubectl exec -n yossarian-go deployment/yossarian -- chmod -R 755 /data
+kubectl exec -n yossarian-go deployment/yossarian-worker -- \
+  curl http://yossarian-minio:9000/minio/health/live
 ```
 
-### OIDC Authentication Failing
-
+### Test OIDC connection
 ```bash
-# Test OIDC issuer URL
-curl https://your-keycloak.com/auth/realms/your-realm/.well-known/openid-configuration
-
-# Check logs for auth errors
-kubectl logs -n yossarian-go -l app.kubernetes.io/name=yossarian-go | grep OIDC
+kubectl logs -n yossarian-go deployment/yossarian-frontend | grep OIDC
 ```
 
-### LDAP Connection Issues
-
+### Trigger manual AD sync
 ```bash
-# Test LDAP from pod
-kubectl exec -n yossarian-go deployment/yossarian-db -- \
-  curl http://localhost:8081/ldap/test
-
-# Check LDAP logs
-kubectl logs -n yossarian-go -l app.kubernetes.io/component=database | grep LDAP
+kubectl create job --from=cronjob/yossarian-ad-sync manual-sync-$(date +%s) -n yossarian-go
 ```
-
-### Batch Jobs Not Processing
-
-```bash
-# Check batch storage
-kubectl exec -n yossarian-go deployment/yossarian -- ls -la /data/jobs
-
-# Check background processor logs
-kubectl logs -n yossarian-go -l app.kubernetes.io/name=yossarian-go | grep BATCH
-
-# Manually trigger job (if needed)
-kubectl exec -n yossarian-go deployment/yossarian -- \
-  ls /data/jobs/<username>/<job-id>/
-```
-
-## Security Considerations
-
-1. **Change Default Passwords**: Always change default admin password in production
-2. **Use External Secrets**: Consider using Vault, Sealed Secrets, or External Secrets Operator
-3. **Enable Network Policies**: Restrict pod-to-pod communication
-4. **Regular Updates**: Keep images up-to-date with security patches
-5. **Audit Logs**: Enable and monitor audit logging
-6. **TLS Everywhere**: Ensure TLS is enabled for all external access
-7. **RBAC**: Implement proper RBAC policies
 
 ## Support
 
-- GitHub Issues: https://github.com/kofadam/yossarian-go/issues
-- Documentation: https://github.com/kofadam/yossarian-go/blob/main/README.md
-
-## License
-
-[Your License Here]
+- **Issues**: [GitHub Issues](https://github.com/kofadam/yossarian-go/issues)
+- **Documentation**: [https://github.com/kofadam/yossarian-go](https://github.com/kofadam/yossarian-go)
+- **License**: MIT
