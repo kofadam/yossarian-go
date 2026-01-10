@@ -21,12 +21,31 @@ services:
       retries: 3
 
   # Frontend (with built-in db-service functionality)
+  db-service:
+    image: ghcr.io/kofadam/yossarian-go-db-service:v0.12.3
+    container_name: yossarian-db-service
+    environment:
+      PORT: 8081
+    ports:
+      - "8083:8081"
+    volumes:
+      - db-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend
   frontend:
-    image: yossarian-go/yossarian-go:v0.13.0
+    image: yossarian-go/yossarian-go:v0.13.3-dev
     container_name: yossarian-frontend
     environment:
       MODE: frontend
       PORT: 8080
+      ADMIN_PASSWORD: admin123
+      OIDC_ENABLED: "false"
+      AD_SERVICE_URL: http://yossarian-db-service:8081
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: yossarian
       MINIO_SECRET_KEY: yossarian123
@@ -36,11 +55,14 @@ services:
       MAX_FILE_COUNT: 10
       MAX_TOTAL_UPLOAD_SIZE_MB: 500
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
       - frontend-data:/data
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
+      db-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
       interval: 30s
@@ -49,7 +71,7 @@ services:
 
   # Worker (processes batch jobs)
   worker:
-    image: yossarian-go/yossarian-go:v0.13.0
+    image: yossarian-go/yossarian-go:v0.13.3-dev
     container_name: yossarian-worker
     environment:
       MODE: worker
@@ -65,7 +87,10 @@ services:
     volumes:
       - worker-data:/data
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
+      db-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health"]
       interval: 30s
@@ -76,3 +101,4 @@ volumes:
   minio-data:
   frontend-data:
   worker-data:
+  db-data:

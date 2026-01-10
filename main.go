@@ -409,9 +409,10 @@ func init() {
 				Endpoint:     provider.Endpoint(),
 				Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 			}
-			autoSSOEnabled = true // Enable auto SSO when OIDC is successfully configured
+			// Only enable auto SSO if explicitly requested
+			autoSSOEnabled = os.Getenv("AUTO_SSO_ENABLED") == "true"
 			log.Printf("OIDC enabled with issuer: %s", oidcIssuerURL)
-			log.Printf("Auto SSO enforcement: ENABLED - all users must authenticate via OIDC")
+			log.Printf("Auto SSO enforcement: %v", autoSSOEnabled)
 		}
 	} else {
 		autoSSOEnabled = false
@@ -1770,6 +1771,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 			sessionMutex.Lock()
 			adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
+			sessionUsers[sessionID] = "Administrator"  // Add username to map
 			sessionRoles[sessionID] = []string{"admin", "user"} // Grant admin role for password login
 			activeSessions.Inc()
 			sessionMutex.Unlock()
@@ -1779,7 +1781,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 				Value:    sessionID,
 				Path:     "/",
 				HttpOnly: true,
-				Secure:   true,
+				Secure:   false, // Allow HTTP for local development
 				MaxAge:   1800,
 			}
 			http.SetCookie(w, cookie)
@@ -2174,129 +2176,26 @@ func jobListAPIHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func myJobsPageHandler(w http.ResponseWriter, r *http.Request) {
-	// Get username from session
-	username := "anonymous"
+	// Check authentication
 	authenticated := false
 	if cookie, err := r.Cookie("admin_session"); err == nil {
 		sessionMutex.Lock()
-		if user, exists := sessionUsers[cookie.Value]; exists {
-			username = user
+		if _, exists := sessionUsers[cookie.Value]; exists {
 			authenticated = true
 		}
 		sessionMutex.Unlock()
 	}
-
 	if !authenticated {
 		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 		return
 	}
-
-	// Simple HTML page for job listing
+	// Use template file instead of hardcoded HTML
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>My Batch Jobs - Yossarian Go</title>
-	<style>
-		body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
-		h1 { color: #1976d2; }
-		.job-card { 
-			border: 1px solid #ddd; 
-			border-radius: 8px; 
-			padding: 16px; 
-			margin: 16px 0; 
-			background: #f9f9f9;
-		}
-		.job-id { font-weight: bold; color: #333; }
-		.status { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
-		.status.queued { background: #fff3e0; color: #f57c00; }
-		.status.processing { background: #e3f2fd; color: #1976d2; }
-		.status.completed { background: #e8f5e9; color: #2e7d32; }
-		.status.failed { background: #ffebee; color: #d32f2f; }
-		.progress { margin: 8px 0; }
-		.btn { 
-			padding: 8px 16px; 
-			background: #1976d2; 
-			color: white; 
-			text-decoration: none; 
-			border-radius: 4px;
-			display: inline-block;
-			margin-right: 8px;
-		}
-		.btn:hover { background: #1565c0; }
-		.back-link { margin-bottom: 20px; }
-	</style>
-</head>
-<body>
-	<div class="back-link">
-		<a href="/" class="btn">← Back to Main App</a>
-	</div>
-	<h1>📋 My Batch Jobs</h1>
-	<p>User: <strong>%s</strong></p>
-	<div id="jobs-container">Loading jobs...</div>
-
-	<script>
-		async function loadJobs() {
-			try {
-				const response = await fetch('/api/jobs/list');
-				const data = await response.json();
-				
-				const container = document.getElementById('jobs-container');
-				
-				if (!data.jobs || data.jobs.length === 0) {
-					container.innerHTML = '<p>No batch jobs found. Upload a ZIP file to create one!</p>';
-					return;
-				}
-				
-				container.innerHTML = data.jobs.map(job => {
-					const progress = job.total_files > 0 
-						? Math.round((job.processed_files / job.total_files) * 100) 
-						: 0;
-					
-					const createdDate = new Date(job.created_at).toLocaleString();
-					const completedDate = job.completed_at 
-						? new Date(job.completed_at).toLocaleString() 
-						: 'In progress';
-					
-					let actions = '';
-					if (job.status === 'completed') {
-						actions = '<a href="/jobs/download/' + job.job_id + '" class="btn">📥 Download Results</a>';
-					} else if (job.status === 'processing' || job.status === 'queued') {
-						actions = '<button class="btn" onclick="refreshStatus(\'' + job.job_id + '\')">🔄 Refresh</button>';
-					}
-					
-					return '<div class="job-card">' +
-						'<div class="job-id">Job: ' + job.job_id + '</div>' +
-						'<div>Status: <span class="status ' + job.status + '">' + job.status.toUpperCase() + '</span></div>' +
-						'<div class="progress">Progress: ' + job.processed_files + ' / ' + job.total_files + ' files (' + progress + '%)</div>' +
-						'<div>Created: ' + createdDate + '</div>' +
-						'<div>Completed: ' + completedDate + '</div>' +
-						'<div style="margin-top: 12px;">' + actions + '</div>' +
-					'</div>';
-				}).join('');
-				
-			} catch (error) {
-				document.getElementById('jobs-container').innerHTML = 
-					'<p style="color: red;">Error loading jobs: ' + error.message + '</p>';
-			}
-		}
-		
-		function refreshStatus(jobId) {
-			loadJobs();
-		}
-		
-		// Load jobs on page load
-		loadJobs();
-		
-		// Auto-refresh every 10 seconds
-		setInterval(loadJobs, 10000);
-	</script>
-</body>
-</html>
-	`, username)
+	err := templates.ExecuteTemplate(w, "my-jobs.html", nil)
+	if err != nil {
+		log.Printf("Template error: %v", err)
+		return
+	}
 }
 
 func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -2745,51 +2644,53 @@ func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine report file path
-	var reportPath string
+	// Determine MinIO object name and response details
+	var minioObjectName string
 	var contentType string
 	var filename string
-
 	switch reportType {
 	case "ip-mappings.csv":
-		reportPath = fmt.Sprintf("/data/jobs/%s/%s/reports/ip-mappings.csv", jobInfo.Username, jobID)
+		minioObjectName = fmt.Sprintf("%s/%s/reports/ip-mappings.csv", jobInfo.Username, jobID)
 		contentType = "text/csv"
 		filename = fmt.Sprintf("%s-ip-mappings.csv", jobID)
 	case "detailed-report.csv":
-		reportPath = fmt.Sprintf("/data/jobs/%s/%s/reports/detailed-report.csv", jobInfo.Username, jobID)
+		minioObjectName = fmt.Sprintf("%s/%s/reports/detailed-report.csv", jobInfo.Username, jobID)
 		contentType = "text/csv"
 		filename = fmt.Sprintf("%s-detailed-report.csv", jobID)
 	case "summary.json":
-		reportPath = fmt.Sprintf("/data/jobs/%s/%s/reports/processing-summary.json", jobInfo.Username, jobID)
+		minioObjectName = fmt.Sprintf("%s/%s/reports/summary.json", jobInfo.Username, jobID)
 		contentType = "application/json"
 		filename = fmt.Sprintf("%s-summary.json", jobID)
 	default:
 		http.Error(w, "Invalid report type. Valid types: ip-mappings.csv, detailed-report.csv, summary.json", http.StatusBadRequest)
 		return
 	}
-
-	// Check if report exists
-	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
-		log.Printf("[WARN] Report not found: %s for job %s", reportType, jobID)
+	// Download from MinIO
+	ctx := context.Background()
+	obj, err := downloadFromMinIO(ctx, minioObjectName)
+	if err != nil {
+		log.Printf("[WARN] Report not found in MinIO: %s for job %s", reportType, jobID)
 		http.Error(w, fmt.Sprintf("Report %s not available for this job", reportType), http.StatusNotFound)
 		return
 	}
-
-	// Read report file
-	data, err := os.ReadFile(reportPath)
+	defer obj.Close()
+	// Get file info for content length
+	stat, err := obj.Stat()
 	if err != nil {
-		log.Printf("[ERROR] Failed to read report %s: %v", reportPath, err)
-		http.Error(w, "Failed to read report", http.StatusInternalServerError)
+		log.Printf("[ERROR] Failed to stat MinIO object: %v", err)
+		http.Error(w, "Failed to get file info", http.StatusInternalServerError)
 		return
 	}
-
-	// Send file
+	// Stream file to user
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-	w.Write(data)
-
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size))
+	if _, err := io.Copy(w, obj); err != nil {
+		log.Printf("[ERROR] Failed to stream report: %v", err)
+		return
+	}
 	log.Printf("[AUDIT] Report downloaded: user=%s, job=%s, report=%s, size_kb=%.2f",
-		username, jobID, reportType, float64(len(data))/1024)
+		username, jobID, reportType, float64(stat.Size)/1024)
 }
 func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "DELETE" {
@@ -2996,9 +2897,17 @@ func ensureBucket(client *minio.Client, bucketName string) error {
 	if !exists {
 		err = client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to create bucket: %v", err)
+			// Ignore "bucket already exists" error
+			errMsg := err.Error()
+			if !strings.Contains(errMsg, "already own it") && 
+			   !strings.Contains(errMsg, "BucketAlreadyOwnedByYou") &&
+			   !strings.Contains(errMsg, "BucketAlreadyExists") {
+				return fmt.Errorf("failed to create bucket: %v", err)
+			}
+			log.Printf("[MINIO] Bucket already exists: %s", bucketName)
+		} else {
+			log.Printf("[MINIO] Created bucket: %s", bucketName)
 		}
-		log.Printf("[MINIO] Created bucket: %s", bucketName)
 	} else {
 		log.Printf("[MINIO] Bucket exists: %s", bucketName)
 	}
@@ -3248,6 +3157,36 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	outputZipData := outputZipBuffer.Bytes()
 	log.Printf("[WORKER] Created output.zip for job %s (%d bytes)", jobID, len(outputZipData))
 
+	// Generate reports (IP mappings, summary)
+	log.Printf("[WORKER] Job %s: generating reports", jobID)
+	
+	// Calculate processing time
+	processingTime := time.Since(jobStartTime)
+	
+	// 1. IP Mappings Report
+	ipMappingsReport := generateIPMappingsReportInMemory()
+	
+	// 2. Processing Summary
+	summaryReport := generateProcessingSummaryInMemory(jobID, len(extractedFiles), totalStats, processingTime)
+	
+	// Upload reports to MinIO (use existing ctx from function start)
+	
+	// Upload IP mappings
+	ipMappingsObjectName := fmt.Sprintf("%s/%s/reports/ip-mappings.csv", username, jobID)
+	if err := uploadToMinIO(ctx, ipMappingsObjectName, bytes.NewReader([]byte(ipMappingsReport)), int64(len(ipMappingsReport))); err != nil {
+		log.Printf("[WORKER] Warning: Failed to upload IP mappings report: %v", err)
+	} else {
+		log.Printf("[WORKER] Uploaded IP mappings report (%d bytes)", len(ipMappingsReport))
+	}
+	
+	// Upload summary
+	summaryObjectName := fmt.Sprintf("%s/%s/reports/summary.json", username, jobID)
+	if err := uploadToMinIO(ctx, summaryObjectName, bytes.NewReader([]byte(summaryReport)), int64(len(summaryReport))); err != nil {
+		log.Printf("[WORKER] Warning: Failed to upload summary report: %v", err)
+	} else {
+		log.Printf("[WORKER] Uploaded summary report (%d bytes)", len(summaryReport))
+	}
+
 	// Upload output.zip to MinIO
 	outputObjectName := fmt.Sprintf("%s/%s/output.zip", username, jobID)
 	if err := uploadToMinIO(ctx, outputObjectName, bytes.NewReader(outputZipData), int64(len(outputZipData))); err != nil {
@@ -3255,9 +3194,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	}
 
 	log.Printf("[WORKER] Uploaded output.zip for job %s", jobID)
-
 	// Update job status to completed
-	processingTime := time.Since(jobStartTime)
 	log.Printf("[WORKER] Job %s completed in %.2f seconds", jobID, processingTime.Seconds())
 	updateJobStatus(jobID, "completed", len(extractedFiles), len(extractedFiles), "")
 
@@ -3391,6 +3328,45 @@ func batchJobSubmitHandler(w http.ResponseWriter, r *http.Request, file multipar
 		"total_files": totalFiles,
 		"message":     "Batch job submitted successfully",
 	})
+}
+
+// generateIPMappingsReportInMemory creates IP mappings CSV in memory
+func generateIPMappingsReportInMemory() string {
+	mapMutex.Lock()
+	defer mapMutex.Unlock()
+
+	var buf strings.Builder
+	buf.WriteString("original_ip,placeholder,timestamp\n")
+	
+	for original, placeholder := range ipMappings {
+		buf.WriteString(fmt.Sprintf("%s,%s,%s\n", original, placeholder, time.Now().Format(time.RFC3339)))
+	}
+	
+	return buf.String()
+}
+
+// generateProcessingSummaryInMemory creates processing summary JSON in memory
+func generateProcessingSummaryInMemory(jobID string, fileCount int, stats map[string]int, duration time.Duration) string {
+	summary := map[string]interface{}{
+		"job_id":          jobID,
+		"timestamp":       time.Now().Format(time.RFC3339),
+		"total_files":     fileCount,
+		"processing_time": duration.String(),
+		"patterns_found": map[string]int{
+			"ip_addresses":    stats["ip_addresses"],
+			"ad_accounts":     stats["ad_accounts"],
+			"jwt_tokens":      stats["jwt_tokens"],
+			"private_keys":    stats["private_keys"],
+			"passwords":       stats["passwords"],
+			"sensitive_terms": stats["sensitive_terms"],
+			"user_words":      stats["user_words"],
+		},
+		"total_patterns": stats["ip_addresses"] + stats["ad_accounts"] + stats["jwt_tokens"] +
+			stats["private_keys"] + stats["passwords"] + stats["sensitive_terms"] + stats["user_words"],
+	}
+
+	data, _ := json.MarshalIndent(summary, "", "  ")
+	return string(data)
 }
 
 func main() {

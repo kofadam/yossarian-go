@@ -607,6 +607,90 @@
             box-shadow: 0 0 0 3px var(--md-primary-container);
         }
 
+        /* Pattern Preview Panel */
+        .preview-panel {
+            background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+            border-left: 4px solid var(--md-primary);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 16px;
+            display: none;
+        }
+
+        .preview-panel.visible {
+            display: block;
+            animation: slideDown 0.3s ease;
+        }
+
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .preview-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--md-primary);
+            margin-bottom: 12px;
+        }
+
+        .preview-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .preview-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: white;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 500;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .preview-badge-count {
+            background: var(--md-primary);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+            min-width: 20px;
+            text-align: center;
+        }
+
+        .preview-warning {
+            background: #fff3e0;
+            border-left: 4px solid var(--md-warning);
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 12px;
+            font-size: 13px;
+            color: #e65100;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .preview-success {
+            background: #e8f5e9;
+            border-left: 4px solid var(--md-success);
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 12px;
+            font-size: 13px;
+            color: #2e7d32;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
         /* Responsive */
         @media (max-width: 1024px) {
             .app-container {
@@ -735,6 +819,16 @@
                     </div>
 
                     <div class="file-list" id="fileList"></div>
+
+                    <!-- Pattern Preview Panel -->
+                    <div class="preview-panel" id="previewPanel">
+                        <div class="preview-header">
+                            <span>🔬</span>
+                            <span>Pattern Preview</span>
+                        </div>
+                        <div class="preview-badges" id="previewBadges"></div>
+                        <div id="previewMessage"></div>
+                    </div>
 
                     <div class="progress-container" id="progressContainer">
                         <div class="progress-bar">
@@ -1148,6 +1242,197 @@
             });
         }
 
+        // Pattern detection for preview
+        function detectPatterns(text) {
+            const patterns = {
+                ips: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
+                emails: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+                adAccounts: /\b[A-Z0-9-]+\\[a-zA-Z0-9._-]{4,15}\b|\b[a-zA-Z0-9._-]{4,15}@[a-zA-Z0-9.-]+\b/g,
+                jwt: /eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+/g,
+                privateKeys: /-----BEGIN[^-]*KEY-----/g,
+                passwords: /password["':=\s]+["']?[^"',\s]{3,50}/gi
+            };
+
+            const results = {
+                ips: new Set(),
+                emails: new Set(),
+                adAccounts: new Set(),
+                jwt: 0,
+                privateKeys: 0,
+                passwords: 0,
+                total: 0
+            };
+
+            // Count unique IPs
+            const ipMatches = text.match(patterns.ips);
+            if (ipMatches) {
+                ipMatches.forEach(ip => results.ips.add(ip));
+            }
+
+            // Count unique emails
+            const emailMatches = text.match(patterns.emails);
+            if (emailMatches) {
+                emailMatches.forEach(email => results.emails.add(email));
+            }
+
+            // Count unique AD accounts
+            const adMatches = text.match(patterns.adAccounts);
+            if (adMatches) {
+                adMatches.forEach(account => results.adAccounts.add(account));
+            }
+
+            // Count JWT tokens
+            const jwtMatches = text.match(patterns.jwt);
+            results.jwt = jwtMatches ? jwtMatches.length : 0;
+
+            // Count private keys
+            const keyMatches = text.match(patterns.privateKeys);
+            results.privateKeys = keyMatches ? keyMatches.length : 0;
+
+            // Count passwords
+            const pwdMatches = text.match(patterns.passwords);
+            results.passwords = pwdMatches ? pwdMatches.length : 0;
+
+            // Calculate total
+            results.total = results.ips.size + results.emails.size + results.adAccounts.size + 
+                           results.jwt + results.privateKeys + results.passwords;
+
+            return {
+                ips: results.ips.size,
+                emails: results.emails.size,
+                adAccounts: results.adAccounts.size,
+                jwt: results.jwt,
+                privateKeys: results.privateKeys,
+                passwords: results.passwords,
+                total: results.total
+            };
+        }
+
+        async function previewFilePatterns(files) {
+            const previewPanel = document.getElementById('previewPanel');
+            const previewBadges = document.getElementById('previewBadges');
+            const previewMessage = document.getElementById('previewMessage');
+
+            // Reset preview
+            previewBadges.innerHTML = '';
+            previewMessage.innerHTML = '';
+
+            let totalPatterns = {
+                ips: 0,
+                emails: 0,
+                adAccounts: 0,
+                jwt: 0,
+                privateKeys: 0,
+                passwords: 0,
+                total: 0
+            };
+
+            let filesAnalyzed = 0;
+            let binaryFilesSkipped = 0;
+
+            // Analyze each file (sample first 100KB for large files)
+            for (const fileObj of files) {
+                const file = fileObj.file;
+
+                // Skip ZIP files (batch processing)
+                if (file.name.toLowerCase().endsWith('.zip')) {
+                    continue;
+                }
+
+                // Skip very large files
+                if (file.size > 10 * 1024 * 1024) {
+                    continue;
+                }
+
+                try {
+                    const text = await file.text();
+                    
+                    // Skip binary files
+                    if (text.includes('\0') || text.includes('\uFFFD')) {
+                        binaryFilesSkipped++;
+                        continue;
+                    }
+
+                    const patterns = detectPatterns(text);
+                    totalPatterns.ips += patterns.ips;
+                    totalPatterns.emails += patterns.emails;
+                    totalPatterns.adAccounts += patterns.adAccounts;
+                    totalPatterns.jwt += patterns.jwt;
+                    totalPatterns.privateKeys += patterns.privateKeys;
+                    totalPatterns.passwords += patterns.passwords;
+                    totalPatterns.total += patterns.total;
+                    filesAnalyzed++;
+                } catch (error) {
+                    console.log('Could not preview file:', file.name);
+                }
+            }
+
+            // Show preview only if files were analyzed
+            if (filesAnalyzed > 0) {
+                previewPanel.classList.add('visible');
+
+                // Create badges
+                const badges = [];
+                if (totalPatterns.ips > 0) {
+                    badges.push(`<div class="preview-badge">
+                        <span>🌐 IP Addresses</span>
+                        <span class="preview-badge-count">${totalPatterns.ips}</span>
+                    </div>`);
+                }
+                if (totalPatterns.adAccounts > 0) {
+                    badges.push(`<div class="preview-badge">
+                        <span>👤 AD Accounts</span>
+                        <span class="preview-badge-count">${totalPatterns.adAccounts}</span>
+                    </div>`);
+                }
+                if (totalPatterns.emails > 0) {
+                    badges.push(`<div class="preview-badge">
+                        <span>📧 Emails</span>
+                        <span class="preview-badge-count">${totalPatterns.emails}</span>
+                    </div>`);
+                }
+                if (totalPatterns.jwt > 0) {
+                    badges.push(`<div class="preview-badge">
+                        <span>🎫 JWT Tokens</span>
+                        <span class="preview-badge-count">${totalPatterns.jwt}</span>
+                    </div>`);
+                }
+                if (totalPatterns.privateKeys > 0) {
+                    badges.push(`<div class="preview-badge">
+                        <span>🔐 Private Keys</span>
+                        <span class="preview-badge-count">${totalPatterns.privateKeys}</span>
+                    </div>`);
+                }
+                if (totalPatterns.passwords > 0) {
+                    badges.push(`<div class="preview-badge">
+                        <span>🔑 Passwords</span>
+                        <span class="preview-badge-count">${totalPatterns.passwords}</span>
+                    </div>`);
+                }
+
+                previewBadges.innerHTML = badges.join('');
+
+                // Show message
+                if (totalPatterns.total === 0) {
+                    previewMessage.innerHTML = `
+                        <div class="preview-warning">
+                            <span>⚠️</span>
+                            <span><strong>No sensitive patterns detected</strong> - Verify this is the correct file type. The file will be processed but may not contain sensitive data.</span>
+                        </div>
+                    `;
+                } else {
+                    previewMessage.innerHTML = `
+                        <div class="preview-success">
+                            <span>✅</span>
+                            <span><strong>${totalPatterns.total} patterns detected</strong> across ${filesAnalyzed} file(s) - Ready for sanitization</span>
+                        </div>
+                    `;
+                }
+            } else {
+                previewPanel.classList.remove('visible');
+            }
+        }
+
         function handleFiles(files) {
             const fileArray = Array.from(files);
             
@@ -1155,7 +1440,6 @@
                 alert(`Maximum ${maxFileCount} files allowed`);
                 return;
             }
-
             selectedFiles = [];
             processingResults = [];
             document.getElementById('resultsSection').style.display = 'none';
@@ -1163,12 +1447,17 @@
             
             fetch('/clear-download-cache', { method: 'POST' }).catch(() => {});
             
+            // Check if any file is a ZIP (batch job)
+            let hasZipFile = false;
+            
             fileArray.forEach(file => {
                 if (file.size > maxFileSizeMB * 1024 * 1024) {
                     alert(`File "${file.name}" exceeds ${maxFileSizeMB}MB`);
                     return;
                 }
-
+                if (file.name.toLowerCase().endsWith('.zip')) {
+                    hasZipFile = true;
+                }
                 selectedFiles.push({
                     file: file,
                     id: Date.now() + Math.random(),
@@ -1176,9 +1465,34 @@
                     results: null
                 });
             });
-
+            
             displayFileList();
             updateProcessButton();
+            
+            // Disable detailed report checkbox for ZIP files (batch jobs)
+            const detailedReportCheckbox = document.getElementById('detailedReportCheckbox');
+            const detailedReportContainer = detailedReportCheckbox.closest('div[style*="margin-top: 16px"]');
+            
+            if (hasZipFile) {
+                detailedReportCheckbox.disabled = true;
+                detailedReportCheckbox.checked = false;
+                detailedReportContainer.style.opacity = '0.5';
+                detailedReportContainer.title = 'Detailed reports are not available for batch jobs (ZIP files) due to memory constraints';
+            } else {
+                detailedReportCheckbox.disabled = false;
+                detailedReportContainer.style.opacity = '1';
+                detailedReportContainer.title = '';
+            }
+        }
+
+        function getStatusText(status) {
+            const map = {
+                'ready': 'Ready',
+                'processing': 'Processing...',
+                'complete': 'Complete',
+                'error': 'Error'
+            };
+            return map[status] || status;
         }
 
         function displayFileList() {
@@ -1198,23 +1512,13 @@
                     <div class="file-item">
                         <div class="file-icon">${ext}</div>
                         <div class="file-info">
-                            <div class="file-name">${file.name}</div>
+                            <div class="file-name">${escapeHtml(file.name)}</div>
                             <div class="file-size">${sizeStr}</div>
                         </div>
                         <div class="file-status ${fileObj.status}">${getStatusText(fileObj.status)}</div>
                     </div>
                 `;
             }).join('');
-        }
-
-        function getStatusText(status) {
-            const map = {
-                'ready': 'Ready',
-                'processing': 'Processing...',
-                'complete': 'Complete',
-                'error': 'Error'
-            };
-            return map[status] || status;
         }
 
         function formatFileSize(bytes) {
@@ -1589,6 +1893,7 @@
             document.getElementById('fileList').innerHTML = '';
             document.getElementById('progressContainer').classList.remove('visible');
             document.getElementById('resultsSection').style.display = 'none';
+            document.getElementById('previewPanel').classList.remove('visible');
             updateProcessButton();
             fetch('/clear-download-cache', { method: 'POST' }).catch(() => {});
         }
