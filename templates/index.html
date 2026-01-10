@@ -721,6 +721,113 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* My Jobs Panel Styles */
+        .job-list { padding: 16px 24px; }
+
+        .job-item {
+            background: var(--md-surface-variant);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            border-left: 4px solid var(--md-primary);
+        }
+
+        .job-item.completed { border-left-color: var(--md-success); }
+        .job-item.failed { border-left-color: var(--md-error); }
+        .job-item.processing { border-left-color: var(--md-warning); }
+
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .job-id {
+            font-family: monospace;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--md-primary);
+        }
+
+        .job-status {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .job-status.queued { background: #e3f2fd; color: #1976d2; }
+        .job-status.processing { background: #fff3e0; color: #f57c00; }
+        .job-status.completed { background: #e8f5e8; color: #2e7d32; }
+        .job-status.failed { background: #ffebee; color: #d32f2f; }
+
+        .job-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 12px;
+            font-size: 13px;
+        }
+
+        .job-detail-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .job-detail-label {
+            font-size: 11px;
+            color: var(--md-on-surface-variant);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 2px;
+        }
+
+        .job-detail-value {
+            font-weight: 500;
+            color: var(--md-on-surface);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 24px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .empty-state-icon { font-size: 64px; margin-bottom: 16px; opacity: 0.5; }
+        .empty-state-text { font-size: 16px; margin-bottom: 8px; }
+        .empty-state-subtext { font-size: 14px; }
+
+        .security-warning {
+            background: #fff3e0;
+            border-left: 4px solid #f57c00;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #e65100;
+            margin-top: 12px;
+        }
+
+        .report-downloads {
+            margin-top: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .btn-report {
+            padding: 6px 12px;
+            font-size: 12px;
+            background: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #90caf9;
+        }
+
+        .btn-report:hover {
+            background: #bbdefb;
+        }
     </style>
 </head>
 <body>
@@ -743,7 +850,7 @@
                     <span class="nav-item-icon">📝</span>
                     <span>My Words</span>
                 </a>
-                <a class="nav-item" href="/jobs/my-jobs">
+                <a class="nav-item" data-panel="my-jobs">
                     <span class="nav-item-icon">📦</span>
                     <span>My Jobs</span>
                 </a>
@@ -951,6 +1058,28 @@
                 </div>
             </div>
 
+            <!-- My Jobs Panel -->
+            <div class="panel" id="panel-my-jobs">
+                <div class="panel-header">
+                    <h1 class="panel-title">📦 My Batch Jobs</h1>
+                    <p class="panel-subtitle">Track and download your sanitization jobs</p>
+                </div>
+
+                <div class="md-card">
+                    <div class="card-header" style="border-bottom: 1px solid #e0e0e0; padding: 20px 24px 16px; margin: -24px -24px 24px -24px;">
+                        <div>
+                            <h2 style="font-size: 18px; font-weight: 500; margin: 0;">Recent Jobs</h2>
+                            <div style="font-size: 14px; color: var(--md-on-surface-variant); margin-top: 4px;">Your last 50 batch processing jobs</div>
+                        </div>
+                        <button class="md-button md-button-primary" onclick="refreshJobs()">🔄 Refresh</button>
+                    </div>
+                    
+                    <div id="jobsList" class="job-list">
+                        <div class="loading">⏳ Loading jobs...</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Admin Panel -->
             <div class="panel" id="panel-admin">
                 <div class="panel-header">
@@ -959,14 +1088,208 @@
                 </div>
 
                 <div class="md-card">
-                    <p>Admin panel functionality coming soon...</p>
+                    <p>Admin panel will be integrated in next step...</p>
                 </div>
             </div>
         </main>
     </div>
 
     <script>
+        // My Jobs Panel Functions
+        let autoRefreshInterval = null;
+
+        function formatJobDate(isoString) {
+            const date = new Date(isoString);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(diff / 3600000);
+            const days = Math.floor(diff / 86400000);
+
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            if (days < 7) return `${days}d ago`;
+            return date.toLocaleDateString();
+        }
+
+        function getStatusIcon(status) {
+            const icons = {
+                'queued': '⏳',
+                'processing': '⚙️',
+                'completed': '✅',
+                'failed': '❌'
+            };
+            return icons[status] || '📄';
+        }
+
+        function renderJob(job) {
+            const progress = job.total_files > 0 
+                ? Math.round((job.processed_files / job.total_files) * 100)
+                : 0;
+
+            let progressBar = '';
+            if (job.status === 'processing' && job.total_files > 0) {
+                progressBar = `
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${progress}%"></div>
+                    </div>
+                    <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 4px;">
+                        ${job.processed_files} / ${job.total_files} files (${progress}%)
+                    </div>
+                `;
+            }
+
+            let errorMessage = '';
+            if (job.status === 'failed' && job.error_message) {
+                errorMessage = `
+                    <div style="background: #ffebee; padding: 8px 12px; border-radius: 4px; margin-top: 8px; font-size: 12px; color: #d32f2f;">
+                        <strong>Error:</strong> ${escapeHtml(job.error_message)}
+                    </div>
+                `;
+            }
+
+            let actions = '';
+            if (job.status === 'completed') {
+                actions = `
+                    <div>
+                        <a href="/jobs/download/${job.job_id}" class="md-button md-button-filled" style="background: var(--md-success); font-size: 12px; padding: 6px 12px;">📥 Download Sanitized ZIP</a>
+                        <div class="report-downloads">
+                            <a href="/jobs/reports/${job.job_id}/ip-mappings.csv" class="btn-report">📊 IP Mappings</a>
+                            <a href="/jobs/reports/${job.job_id}/summary.json" class="btn-report">📄 Summary</a>
+                        </div>
+                        <div class="security-warning">
+                            ⚠️ <strong>Security Notice:</strong> Reports contain mapping details and should <strong>NOT</strong> be shared externally. Only share the sanitized ZIP file.
+                        </div>
+                    </div>
+                `;
+            } else if (job.status === 'processing') {
+                actions = `<span style="padding: 6px 12px; background: #e0e0e0; color: #666; border-radius: 20px; font-size: 12px;">⏳ Processing...</span>`;
+            } else if (job.status === 'queued') {
+                actions = `<span style="padding: 6px 12px; background: #e3f2fd; color: #1976d2; border-radius: 20px; font-size: 12px;">⏳ In Queue</span>`;
+            }
+
+            return `
+                <div class="job-item ${job.status}">
+                    <div class="job-header">
+                        <div class="job-id">${getStatusIcon(job.status)} ${escapeHtml(job.job_id)}</div>
+                        <div class="job-status ${job.status}">${job.status}</div>
+                    </div>
+                    
+                    <div class="job-details">
+                        <div class="job-detail-item">
+                            <div class="job-detail-label">Created</div>
+                            <div class="job-detail-value">${formatJobDate(job.created_at)}</div>
+                        </div>
+                        <div class="job-detail-item">
+                            <div class="job-detail-label">Files</div>
+                            <div class="job-detail-value">${job.total_files > 0 ? job.total_files : 'Pending'}</div>
+                        </div>
+                        <div class="job-detail-item">
+                            <div class="job-detail-label">Completed</div>
+                            <div class="job-detail-value">${job.completed_at ? formatJobDate(job.completed_at) : '-'}</div>
+                        </div>
+                    </div>
+
+                    ${progressBar}
+                    ${errorMessage}
+
+                    <div style="margin-top: 12px;">
+                        ${actions}
+                    </div>
+                </div>
+            `;
+        }
+
+        async function loadJobs() {
+            try {
+                const response = await fetch('/api/jobs/list');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const jobsList = document.getElementById('jobsList');
+
+                if (!data.jobs || data.jobs.length === 0) {
+                    jobsList.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📦</div>
+                            <div class="empty-state-text">No batch jobs yet</div>
+                            <div class="empty-state-subtext">Upload a ZIP file to create your first batch job</div>
+                            <div style="margin-top: 24px;">
+                                <button class="md-button md-button-filled" onclick="switchToPanel('secure-files')">📤 Upload Files</button>
+                            </div>
+                        </div>
+                    `;
+                    stopAutoRefresh();
+                    return;
+                }
+
+                jobsList.innerHTML = data.jobs.map(job => renderJob(job)).join('');
+
+                // Auto-refresh if any jobs are processing or queued
+                const hasActiveJobs = data.jobs.some(j => j.status === 'processing' || j.status === 'queued');
+                if (hasActiveJobs) {
+                    startAutoRefresh();
+                } else {
+                    stopAutoRefresh();
+                }
+
+            } catch (error) {
+                console.error('Failed to load jobs:', error);
+                document.getElementById('jobsList').innerHTML = `
+                    <div style="background: #ffebee; color: #d32f2f; padding: 12px 16px; border-radius: 8px; margin: 16px 24px; border-left: 4px solid #d32f2f;">
+                        ❌ Failed to load jobs: ${escapeHtml(error.message)}
+                    </div>
+                `;
+            }
+        }
+
+        function refreshJobs() {
+            document.getElementById('jobsList').innerHTML = '<div class="loading">⏳ Refreshing...</div>';
+            loadJobs();
+        }
+
+        function startAutoRefresh() {
+            if (!autoRefreshInterval) {
+                autoRefreshInterval = setInterval(loadJobs, 5000);
+            }
+        }
+
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+        }
+
         // Panel Navigation
+        function switchToPanel(panelId) {
+            // Update nav active state
+            document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+            const navItem = document.querySelector(`.nav-item[data-panel="${panelId}"]`);
+            if (navItem) {
+                navItem.classList.add('active');
+            }
+            
+            // Switch panels
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            const panel = document.getElementById(`panel-${panelId}`);
+            if (panel) {
+                panel.classList.add('active');
+                
+                // Load data when panel becomes active
+                if (panelId === 'my-jobs') {
+                    loadJobs();
+                }
+                
+                // Update URL
+                const path = panelId === 'secure-files' ? '/' : `/${panelId}`;
+                history.pushState({ panel: panelId }, '', path);
+            }
+        }
+
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 const panelId = item.getAttribute('data-panel');
@@ -977,18 +1300,27 @@
                 }
                 
                 e.preventDefault();
-                
-                // Update nav active state
-                document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-                item.classList.add('active');
-                
-                // Switch panels
-                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-                const panel = document.getElementById(`panel-${panelId}`);
-                if (panel) {
-                    panel.classList.add('active');
-                }
+                switchToPanel(panelId);
             });
+        });
+
+        // Handle browser back/forward buttons
+        window.addEventListener('popstate', (e) => {
+            if (e.state && e.state.panel) {
+                switchToPanel(e.state.panel);
+            }
+        });
+
+        // Handle initial URL on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            const path = window.location.pathname;
+            if (path === '/my-jobs') {
+                switchToPanel('my-jobs');
+            } else if (path === '/help') {
+                switchToPanel('help');
+            } else if (path === '/admin') {
+                switchToPanel('admin');
+            }
         });
 
         // Personal Words Management
@@ -1466,8 +1798,13 @@
                 });
             });
             
-            displayFileList();
             updateProcessButton();
+            
+            // Display file list immediately
+            displayFileList();
+            
+            // Show pattern preview
+            previewFilePatterns(selectedFiles);
             
             // Disable detailed report checkbox for ZIP files (batch jobs)
             const detailedReportCheckbox = document.getElementById('detailedReportCheckbox');
@@ -1650,7 +1987,7 @@
                 const message = `✅ Batch job submitted successfully!\n\nJob ID: ${data.job_id}\nStatus: ${data.status || 'queued'}\n\nClick OK to view your jobs.`;
                 
                 if (confirm(message)) {
-                    window.location.href = '/jobs/my-jobs';
+                    window.location.href = 'my-jobs';
                 }
                 
                 // Return mock result so processFiles() doesn't break
