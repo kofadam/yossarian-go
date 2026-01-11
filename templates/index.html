@@ -1153,7 +1153,10 @@
             if (job.status === 'completed') {
                 actions = `
                     <div>
-                        <a href="/jobs/download/${job.job_id}" class="md-button md-button-filled" style="background: var(--md-success); font-size: 12px; padding: 6px 12px;">📥 Download Sanitized ZIP</a>
+                        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                            <a href="/jobs/download/${job.job_id}" class="md-button md-button-filled" style="background: var(--md-success); font-size: 12px; padding: 6px 12px;">📥 Download Sanitized ZIP</a>
+                            <button onclick="deleteJob('${job.job_id}')" class="md-button md-button-text" style="background: #ffebee; color: var(--md-error); font-size: 12px; padding: 6px 12px;">🗑️ Delete Job</button>
+                        </div>
                         <div class="report-downloads">
                             <a href="/jobs/reports/${job.job_id}/ip-mappings.csv" class="btn-report">📊 IP Mappings</a>
                             <a href="/jobs/reports/${job.job_id}/summary.json" class="btn-report">📄 Summary</a>
@@ -1162,11 +1165,12 @@
                             ⚠️ <strong>Security Notice:</strong> Reports contain mapping details and should <strong>NOT</strong> be shared externally. Only share the sanitized ZIP file.
                         </div>
                     </div>
-                `;
-            } else if (job.status === 'processing') {
+                `;            } else if (job.status === 'processing') {
                 actions = `<span style="padding: 6px 12px; background: #e0e0e0; color: #666; border-radius: 20px; font-size: 12px;">⏳ Processing...</span>`;
             } else if (job.status === 'queued') {
                 actions = `<span style="padding: 6px 12px; background: #e3f2fd; color: #1976d2; border-radius: 20px; font-size: 12px;">⏳ In Queue</span>`;
+            } else if (job.status === 'failed') {
+                actions = `<button onclick="deleteJob('${job.job_id}')" class="md-button md-button-text" style="background: #ffebee; color: var(--md-error); font-size: 12px; padding: 6px 12px;">🗑️ Delete Job</button>`;
             }
 
             return `
@@ -1199,6 +1203,31 @@
                     </div>
                 </div>
             `;
+        }
+
+        async function deleteJob(jobId) {
+            if (!confirm(`Delete job ${jobId}?\n\nThis will permanently remove all files (input, output, reports) from the server.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/jobs/delete/${jobId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to delete job: HTTP ${response.status}`);
+                }
+
+                const result = await response.json();
+                console.log('Job deleted:', result);
+
+                // Reload jobs list
+                loadJobs();
+            } catch (error) {
+                console.error('Delete error:', error);
+                alert(`Failed to delete job: ${error.message}`);
+            }
         }
 
         async function loadJobs() {
@@ -1802,9 +1831,6 @@
             
             // Display file list immediately
             displayFileList();
-            
-            // Show pattern preview
-            previewFilePatterns(selectedFiles);
             
             // Disable detailed report checkbox for ZIP files (batch jobs)
             const detailedReportCheckbox = document.getElementById('detailedReportCheckbox');
