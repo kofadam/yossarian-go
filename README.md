@@ -32,8 +32,10 @@ Enterprise-grade log sanitization system built in Go for air-gapped environments
 - **Split Architecture**: Horizontally scalable frontend + dedicated worker
 - **MinIO Storage**: Centralized object storage for batch jobs
 - **Async Processing**: Upload and return later - no waiting for large files
+- **Job Cancellation**: Cancel queued/processing jobs (v0.13.8+)
 - **Auto-Cleanup**: 8-hour retention policy for completed jobs
 - **Performance**: ~0.2s processing time for 4-file batches
+- **Memory Optimized**: Streaming architecture prevents OOMKilled crashes (v0.13.8)
 
 ### 🔒 Security & Compliance
 - **Zero persistence**: No data retention after download (8-hour window for batch jobs)
