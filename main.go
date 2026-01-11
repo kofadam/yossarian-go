@@ -2197,28 +2197,7 @@ func jobListAPIHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-func myJobsPageHandler(w http.ResponseWriter, r *http.Request) {
-	// Check authentication
-	authenticated := false
-	if cookie, err := r.Cookie("admin_session"); err == nil {
-		sessionMutex.Lock()
-		if _, exists := sessionUsers[cookie.Value]; exists {
-			authenticated = true
-		}
-		sessionMutex.Unlock()
-	}
-	if !authenticated {
-		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
-		return
-	}
-	// Use template file instead of hardcoded HTML
-	w.Header().Set("Content-Type", "text/html")
-	err := templates.ExecuteTemplate(w, "my-jobs.html", nil)
-	if err != nil {
-		log.Printf("Template error: %v", err)
-		return
-	}
-}
+// Removed: myJobsPageHandler - My Jobs is now integrated into SPA (index.html panel)
 
 func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	jobID := strings.TrimPrefix(r.URL.Path, "/jobs/download/")
@@ -2796,6 +2775,100 @@ func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func jobCancelAPIHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	jobID := strings.TrimPrefix(r.URL.Path, "/api/jobs/cancel/")
+	if jobID == "" {
+		http.Error(w, "job_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Get username for authorization
+	username := "anonymous"
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
+	}
+
+	// Verify job exists and belongs to user
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
+	if err != nil {
+		log.Printf("[ERROR] Failed to verify job %s: %v", jobID, err)
+		http.Error(w, "Failed to verify job", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+
+	var jobInfo struct {
+		JobID    string `json:"job_id"`
+		Username string `json:"username"`
+		Status   string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
+		http.Error(w, "Failed to parse job info", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify user owns this job (or is admin)
+	if jobInfo.Username != username && !hasRole(r, "admin") {
+		log.Printf("[SECURITY] User %s attempted to cancel job %s owned by %s", username, jobID, jobInfo.Username)
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Only allow cancelling queued or processing jobs
+	if jobInfo.Status != "queued" && jobInfo.Status != "processing" {
+		http.Error(w, fmt.Sprintf("Cannot cancel job with status: %s", jobInfo.Status), http.StatusBadRequest)
+		return
+	}
+
+	// Update job status to cancelled
+	updateData := map[string]interface{}{
+		"job_id": jobID,
+		"status": "cancelled",
+	}
+
+	jsonData, _ := json.Marshal(updateData)
+	updateResp, err := client.Post(
+		fmt.Sprintf("%s/jobs/update", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		log.Printf("[ERROR] Failed to cancel job %s: %v", jobID, err)
+		http.Error(w, "Failed to cancel job", http.StatusInternalServerError)
+		return
+	}
+	defer updateResp.Body.Close()
+
+	if updateResp.StatusCode != 200 {
+		http.Error(w, "Failed to update job status", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[AUDIT] Job cancelled: user=%s, job=%s", username, jobID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "cancelled",
+		"job_id":  jobID,
+		"message": "Job cancelled successfully",
+	})
+}
+
 func batchJobCleanupTask() {
 	// Run cleanup every 6 hours
 	ticker := time.NewTicker(6 * time.Hour)
@@ -3108,9 +3181,44 @@ func startBatchWorker() {
 }
 
 // processBatchJobFromMinIO downloads job from MinIO, processes it, and uploads results
+func isJobCancelled(jobID string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	var jobInfo struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
+		return false
+	}
+
+	return jobInfo.Status == "cancelled"
+}
+
 func processBatchJobFromMinIO(jobID, username string) error {
 	ctx := context.Background()
 	log.Printf("[WORKER] Processing job %s for user %s", jobID, username)
+
+	// Clear global maps from previous job to prevent memory accumulation
+	mapMutex.Lock()
+	ipMappings = make(map[string]string)
+	ipCounter = 1
+	mapMutex.Unlock()
+
+	cacheMutex.Lock()
+	adLookupCache = make(map[string]string)
+	cacheMutex.Unlock()
+
+	// Clear detailed replacements tracking
+	replacementMutex.Lock()
+	detailedReplacements = []Replacement{}
+	replacementMutex.Unlock()
+
+	log.Printf("[WORKER] Cleared global caches for new job")
 
 	// Update status to processing
 	updateJobStatus(jobID, "processing", 0, 0, "")
@@ -3168,8 +3276,10 @@ func processBatchJobFromMinIO(jobID, username string) error {
 
 	log.Printf("[WORKER] Extracted %d files from job %s", len(extractedFiles), jobID)
 
-	// Sanitize all files
-	var sanitizedFiles []ExtractedFile
+	// Create output ZIP (streaming approach to reduce memory)
+	var outputZipBuffer bytes.Buffer
+	zipWriter := zip.NewWriter(&outputZipBuffer)
+
 	totalStats := map[string]int{
 		"ip_addresses":    0,
 		"ad_accounts":     0,
@@ -3181,17 +3291,17 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	}
 
 	for i, file := range extractedFiles {
+		// Check if job was cancelled
+		if isJobCancelled(jobID) {
+			log.Printf("[WORKER] Job %s cancelled by user, aborting at file %d/%d", jobID, i+1, len(extractedFiles))
+			updateJobStatus(jobID, "cancelled", len(extractedFiles), i, "Cancelled by user")
+			return fmt.Errorf("job cancelled by user")
+		}
+
 		log.Printf("[WORKER] Sanitizing file %d/%d: %s", i+1, len(extractedFiles), file.Name)
 
 		// Call your existing sanitize function (no user words for batch jobs)
 		sanitizedContent, stats := sanitizeText(file.Content, nil, false, file.Name)
-
-		sanitizedFiles = append(sanitizedFiles, ExtractedFile{
-			Name:    file.Name,
-			Content: sanitizedContent,
-			Mode:    file.Mode,
-			ModTime: file.ModTime,
-		})
 
 		// Aggregate stats
 		totalStats["ip_addresses"] += stats["total_ips"]
@@ -3202,26 +3312,40 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		totalStats["sensitive_terms"] += stats["sensitive_terms"]
 		totalStats["user_words"] += stats["user_words"]
 
-		// Update progress
-		updateJobStatus(jobID, "processing", len(extractedFiles), i+1, "")
-		log.Printf("[WORKER] Job %s progress: %d%%", int((float64(i+1)/float64(len(extractedFiles)))*100))
-	}
+		// Write directly to ZIP (streaming - don't hold all files in memory)
+		header := &zip.FileHeader{
+			Name:   file.Name,
+			Method: zip.Deflate,
+		}
+		header.SetMode(file.Mode)
+		header.SetModTime(file.ModTime)
 
-	// Create output ZIP
-	var outputZipBuffer bytes.Buffer
-	zipWriter := zip.NewWriter(&outputZipBuffer)
-
-	for _, file := range sanitizedFiles {
-		writer, err := zipWriter.Create(file.Name)
+		writer, err := zipWriter.CreateHeader(header)
 		if err != nil {
 			log.Printf("[WORKER] Failed to create ZIP entry for %s: %v", file.Name, err)
 			continue
 		}
 
-		// Convert string to []byte for Write
-		if _, err := writer.Write([]byte(file.Content)); err != nil {
+		if _, err := writer.Write([]byte(sanitizedContent)); err != nil {
 			log.Printf("[WORKER] Failed to write file to ZIP: %v", err)
 			continue
+		}
+
+		// Release memory immediately after writing each file
+		sanitizedContent = ""
+
+		// Trigger GC every 10 large files to keep memory under control
+		if i%10 == 0 && i > 0 {
+			// Small sleep to allow GC to catch up on large batches
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// Update progress
+		updateJobStatus(jobID, "processing", len(extractedFiles), i+1, "")
+
+		if i%50 == 0 || i == len(extractedFiles)-1 {
+			log.Printf("[WORKER] Job %s progress: %d/%d files (%.1f%%)",
+				jobID, i+1, len(extractedFiles), float64(i+1)/float64(len(extractedFiles))*100)
 		}
 	}
 
@@ -3522,10 +3646,11 @@ func main() {
 	// Batch job routes
 	http.HandleFunc("/api/jobs/status/", jobStatusAPIHandler)
 	http.HandleFunc("/api/jobs/list", jobListAPIHandler)
-	http.HandleFunc("/jobs/my-jobs", myJobsPageHandler)
+	// Removed: /jobs/my-jobs route - My Jobs is now integrated into SPA (index.html panel)
 	http.HandleFunc("/jobs/download/", jobDownloadHandler)
 	http.HandleFunc("/jobs/reports/", jobReportsDownloadHandler)
 	http.HandleFunc("/api/jobs/delete/", jobDeleteAPIHandler)
+	http.HandleFunc("/api/jobs/cancel/", jobCancelAPIHandler)
 
 	// Admin routes
 	http.HandleFunc("/admin/login", adminLoginHandler)

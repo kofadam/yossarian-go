@@ -736,6 +736,7 @@
         .job-item.completed { border-left-color: var(--md-success); }
         .job-item.failed { border-left-color: var(--md-error); }
         .job-item.processing { border-left-color: var(--md-warning); }
+        .job-item.cancelled { border-left-color: #9e9e9e; }
 
         .job-header {
             display: flex;
@@ -1118,7 +1119,8 @@
                 'queued': '⏳',
                 'processing': '⚙️',
                 'completed': '✅',
-                'failed': '❌'
+                'failed': '❌',
+                'cancelled': '🚫'
             };
             return icons[status] || '📄';
         }
@@ -1166,9 +1168,26 @@
                         </div>
                     </div>
                 `;            } else if (job.status === 'processing') {
-                actions = `<span style="padding: 6px 12px; background: #e0e0e0; color: #666; border-radius: 20px; font-size: 12px;">⏳ Processing...</span>`;
+                actions = `
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <span style="padding: 6px 12px; background: #e0e0e0; color: #666; border-radius: 20px; font-size: 12px;">⏳ Processing...</span>
+                        <button onclick="cancelJob('${job.job_id}')" class="md-button md-button-text" style="color: var(--md-error); font-size: 12px; padding: 6px 12px;">🚫 Cancel</button>
+                    </div>
+                `;
             } else if (job.status === 'queued') {
-                actions = `<span style="padding: 6px 12px; background: #e3f2fd; color: #1976d2; border-radius: 20px; font-size: 12px;">⏳ In Queue</span>`;
+                actions = `
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <span style="padding: 6px 12px; background: #e3f2fd; color: #1976d2; border-radius: 20px; font-size: 12px;">⏳ In Queue</span>
+                        <button onclick="cancelJob('${job.job_id}')" class="md-button md-button-text" style="color: var(--md-error); font-size: 12px; padding: 6px 12px;">🚫 Cancel</button>
+                    </div>
+                `;
+            } else if (job.status === 'cancelled') {
+                actions = `
+                    <div>
+                        <span style="padding: 6px 12px; background: #f5f5f5; color: #757575; border-radius: 20px; font-size: 12px;">🚫 Cancelled</span>
+                        <button onclick="deleteJob('${job.job_id}')" class="md-button md-button-text" style="color: var(--md-error); font-size: 12px; padding: 6px 12px; margin-left: 8px;">🗑️ Delete</button>
+                    </div>
+                `;
             } else if (job.status === 'failed') {
                 actions = `<button onclick="deleteJob('${job.job_id}')" class="md-button md-button-text" style="background: #ffebee; color: var(--md-error); font-size: 12px; padding: 6px 12px;">🗑️ Delete Job</button>`;
             }
@@ -1290,6 +1309,48 @@
             if (autoRefreshInterval) {
                 clearInterval(autoRefreshInterval);
                 autoRefreshInterval = null;
+            }
+        }
+
+        async function cancelJob(jobId) {
+            if (!confirm(`Cancel job ${jobId}?\n\nThis will stop processing if the job is currently running.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/jobs/cancel/${jobId}`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+
+                await loadJobs(); // Refresh job list
+            } catch (error) {
+                alert(`Failed to cancel job: ${error.message}`);
+            }
+        }
+
+        async function deleteJob(jobId) {
+            if (!confirm(`Delete job ${jobId}?\n\nThis will permanently remove the job and all associated files.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/jobs/delete/${jobId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+
+                await loadJobs(); // Refresh job list
+            } catch (error) {
+                alert(`Failed to delete job: ${error.message}`);
             }
         }
 

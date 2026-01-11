@@ -38,7 +38,7 @@ services:
 
   # Frontend
   frontend:
-    image: yossarian-go/yossarian-go:v0.13.3-dev
+    image: yossarian-go/yossarian-go:v0.13.8-dev
     container_name: yossarian-frontend
     environment:
       MODE: frontend
@@ -71,7 +71,7 @@ services:
 
   # Worker (processes batch jobs)
   worker:
-    image: yossarian-go/yossarian-go:v0.13.3-dev
+    image: yossarian-go/yossarian-go:v0.13.8-dev
     container_name: yossarian-worker
     environment:
       MODE: worker
