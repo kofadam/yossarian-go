@@ -173,55 +173,11 @@ var (
 	autoSSOEnabled bool
 )
 
-// ✅ ADD: Prometheus metrics
+// Prometheus metrics for v0.13.0+ split architecture
 var (
-	// HTTP request metrics
-	httpRequestsTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "yossarian_http_requests_total",
-			Help: "Total number of HTTP requests",
-		},
-		[]string{"method", "endpoint", "status"},
-	)
+	// ===== SHARED METRICS (Frontend + Worker) =====
 
-	// Upload metrics
-	uploadSize = promauto.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "yossarian_upload_size_bytes",
-			Help:    "Size of uploaded files in bytes",
-			Buckets: []float64{1024, 10240, 102400, 1048576, 10485760, 104857600}, // 1KB to 100MB
-		},
-		[]string{"file_type"},
-	)
-
-	processingDuration = promauto.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "yossarian_processing_duration_seconds",
-			Help:    "Time taken to process files",
-			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60}, // 0.1s to 60s
-		},
-		[]string{"operation"},
-	)
-
-	// Pattern detection metrics
-	patternsDetected = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "yossarian_patterns_detected_total",
-			Help: "Total number of sensitive patterns detected",
-		},
-		[]string{"pattern_type"},
-	)
-
-	// Error counter
-	errorsTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "yossarian_errors_total",
-			Help: "Total number of errors by type",
-		},
-		[]string{"error_type"},
-	)
-
-	// AD cache metrics
+	// AD cache metrics (used by both frontend and worker)
 	adCacheHits = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "yossarian_ad_cache_hits_total",
@@ -236,12 +192,87 @@ var (
 		},
 	)
 
-	// Active sessions gauge
+	// Active sessions gauge (frontend only, but defined globally)
 	activeSessions = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "yossarian_active_sessions",
 			Help: "Number of active user sessions",
 		},
+	)
+
+	// ===== BATCH JOB METRICS (Worker) =====
+
+	// Batch job status counts
+	batchJobsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "yossarian_batch_jobs_total",
+			Help: "Total number of batch jobs by status",
+		},
+		[]string{"status"}, // queued, processing, completed, failed
+	)
+
+	// Batch job queue depth (current count of queued jobs)
+	batchJobQueueDepth = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "yossarian_batch_job_queue_depth",
+			Help: "Current number of queued batch jobs",
+		},
+	)
+
+	// Batch processing duration
+	batchProcessingDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "yossarian_batch_processing_duration_seconds",
+			Help:    "Time taken to process batch jobs",
+			Buckets: []float64{1, 5, 10, 30, 60, 120, 300, 600}, // 1s to 10min
+		},
+	)
+
+	// Batch files processed
+	batchFilesProcessed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "yossarian_batch_files_processed_total",
+			Help: "Total number of files processed in batch jobs",
+		},
+	)
+
+	// Batch patterns detected
+	batchPatternsDetected = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "yossarian_batch_patterns_detected_total",
+			Help: "Total number of sensitive patterns detected in batch jobs",
+		},
+		[]string{"pattern_type"}, // ip_address, ad_account, jwt_token, etc.
+	)
+
+	// ===== MinIO METRICS (Worker) =====
+
+	// MinIO operations
+	minioOperationsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "yossarian_minio_operations_total",
+			Help: "Total number of MinIO operations",
+		},
+		[]string{"operation"}, // upload, download, delete
+	)
+
+	// MinIO operation duration
+	minioOperationDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "yossarian_minio_operation_duration_seconds",
+			Help:    "Duration of MinIO operations",
+			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30}, // 0.1s to 30s
+		},
+		[]string{"operation"}, // upload, download, delete
+	)
+
+	// MinIO operation errors
+	minioOperationErrors = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "yossarian_minio_operation_errors_total",
+			Help: "Total number of MinIO operation errors",
+		},
+		[]string{"operation"}, // upload, download, delete
 	)
 )
 
@@ -1373,17 +1404,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("[PERF] Sanitized %s in %.2fs", fileHeader.Filename, processingTime.Seconds())
 
-		// Record metrics
-		fileExt := filepath.Ext(fileHeader.Filename)
-		uploadSize.WithLabelValues(fileExt).Observe(float64(len(content)))
-		processingDuration.WithLabelValues("upload").Observe(processingTime.Seconds())
-		patternsDetected.WithLabelValues("ip_address").Add(float64(sanitizeStats["ip_addresses"]))
-		patternsDetected.WithLabelValues("ad_account").Add(float64(sanitizeStats["ad_accounts"]))
-		patternsDetected.WithLabelValues("jwt_token").Add(float64(sanitizeStats["jwt_tokens"]))
-		patternsDetected.WithLabelValues("private_key").Add(float64(sanitizeStats["private_keys"]))
-		patternsDetected.WithLabelValues("password").Add(float64(sanitizeStats["passwords"]))
-		patternsDetected.WithLabelValues("sensitive_term").Add(float64(sanitizeStats["sensitive_terms"]))
-		patternsDetected.WithLabelValues("user_word").Add(float64(sanitizeStats["user_words"]))
+		// Metrics removed - single file processing is not the primary use case in v0.13.0+
+		// Batch job metrics are recorded in worker processing instead
 
 		// Store results
 		result := map[string]interface{}{
@@ -1771,7 +1793,7 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 			sessionMutex.Lock()
 			adminSessions[sessionID] = time.Now().Add(30 * time.Minute)
-			sessionUsers[sessionID] = "Administrator"  // Add username to map
+			sessionUsers[sessionID] = "Administrator"           // Add username to map
 			sessionRoles[sessionID] = []string{"admin", "user"} // Grant admin role for password login
 			activeSessions.Inc()
 			sessionMutex.Unlock()
@@ -2853,9 +2875,9 @@ func performBatchCleanup() {
 
 	log.Printf("[CLEANUP] Cleanup complete: %d deleted, %d errors", deletedCount, errorCount)
 
-	// Record metrics
+	// Record batch job deletion metrics
 	if deletedCount > 0 {
-		patternsDetected.WithLabelValues("jobs_cleaned").Add(float64(deletedCount))
+		batchJobsTotal.WithLabelValues("deleted").Add(float64(deletedCount))
 	}
 }
 
@@ -2899,9 +2921,9 @@ func ensureBucket(client *minio.Client, bucketName string) error {
 		if err != nil {
 			// Ignore "bucket already exists" error
 			errMsg := err.Error()
-			if !strings.Contains(errMsg, "already own it") && 
-			   !strings.Contains(errMsg, "BucketAlreadyOwnedByYou") &&
-			   !strings.Contains(errMsg, "BucketAlreadyExists") {
+			if !strings.Contains(errMsg, "already own it") &&
+				!strings.Contains(errMsg, "BucketAlreadyOwnedByYou") &&
+				!strings.Contains(errMsg, "BucketAlreadyExists") {
 				return fmt.Errorf("failed to create bucket: %v", err)
 			}
 			log.Printf("[MINIO] Bucket already exists: %s", bucketName)
@@ -2921,14 +2943,22 @@ func uploadToMinIO(ctx context.Context, objectName string, reader io.Reader, siz
 		return fmt.Errorf("MinIO client not initialized")
 	}
 
+	startTime := time.Now()
 	_, err := minioClient.PutObject(ctx, minioBucket, objectName, reader, size, minio.PutObjectOptions{
 		ContentType: "application/zip",
 	})
+	duration := time.Since(startTime)
+
 	if err != nil {
+		minioOperationErrors.WithLabelValues("upload").Inc()
 		return fmt.Errorf("failed to upload to MinIO: %v", err)
 	}
 
-	log.Printf("[MINIO] Uploaded: %s (%d bytes)", objectName, size)
+	// Record metrics
+	minioOperationsTotal.WithLabelValues("upload").Inc()
+	minioOperationDuration.WithLabelValues("upload").Observe(duration.Seconds())
+
+	log.Printf("[MINIO] Uploaded: %s (%d bytes) in %.2fs", objectName, size, duration.Seconds())
 	return nil
 }
 
@@ -2938,12 +2968,20 @@ func downloadFromMinIO(ctx context.Context, objectName string) (*minio.Object, e
 		return nil, fmt.Errorf("MinIO client not initialized")
 	}
 
+	startTime := time.Now()
 	object, err := minioClient.GetObject(ctx, minioBucket, objectName, minio.GetObjectOptions{})
+	duration := time.Since(startTime)
+
 	if err != nil {
+		minioOperationErrors.WithLabelValues("download").Inc()
 		return nil, fmt.Errorf("failed to download from MinIO: %v", err)
 	}
 
-	log.Printf("[MINIO] Downloaded: %s", objectName)
+	// Record metrics
+	minioOperationsTotal.WithLabelValues("download").Inc()
+	minioOperationDuration.WithLabelValues("download").Observe(duration.Seconds())
+
+	log.Printf("[MINIO] Downloaded: %s in %.2fs", objectName, duration.Seconds())
 	return object, nil
 }
 
@@ -2953,12 +2991,20 @@ func deleteFromMinIO(ctx context.Context, objectName string) error {
 		return fmt.Errorf("MinIO client not initialized")
 	}
 
+	startTime := time.Now()
 	err := minioClient.RemoveObject(ctx, minioBucket, objectName, minio.RemoveObjectOptions{})
+	duration := time.Since(startTime)
+
 	if err != nil {
+		minioOperationErrors.WithLabelValues("delete").Inc()
 		return fmt.Errorf("failed to delete from MinIO: %v", err)
 	}
 
-	log.Printf("[MINIO] Deleted: %s", objectName)
+	// Record metrics
+	minioOperationsTotal.WithLabelValues("delete").Inc()
+	minioOperationDuration.WithLabelValues("delete").Observe(duration.Seconds())
+
+	log.Printf("[MINIO] Deleted: %s in %.2fs", objectName, duration.Seconds())
 	return nil
 }
 
@@ -2996,9 +3042,15 @@ func pollDatabaseForJobs() {
 
 	log.Printf("[WORKER] Found queued job: %s (user: %s)", job.JobID, job.Username)
 
+	// Record job picked up from queue
+	batchJobsTotal.WithLabelValues("processing").Inc()
+
 	// Process the job
 	if err := processBatchJobFromMinIO(job.JobID, job.Username); err != nil {
 		log.Printf("[WORKER] Error processing job %s: %v", job.JobID, err)
+
+		// Record failed job metric
+		batchJobsTotal.WithLabelValues("failed").Inc()
 
 		// Mark job as failed
 		failResp, _ := http.Post(
@@ -3015,6 +3067,25 @@ func pollDatabaseForJobs() {
 	log.Printf("[WORKER] Job completed successfully: %s", job.JobID)
 }
 
+// updateQueueDepthMetric queries database for current queue depth
+func updateQueueDepthMetric() {
+	resp, err := http.Get(fmt.Sprintf("%s/jobs/queued", adServiceURL))
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Count int `json:"count"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return
+	}
+
+	batchJobQueueDepth.Set(float64(result.Count))
+}
+
 // startBatchWorker runs the main worker polling loop
 func startBatchWorker() {
 	pollInterval := workerPollInterval
@@ -3028,7 +3099,11 @@ func startBatchWorker() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		pollDatabaseForJobs() // ✅ New function
+		// Update queue depth metric
+		updateQueueDepthMetric()
+
+		// Process jobs
+		pollDatabaseForJobs()
 	}
 }
 
@@ -3159,18 +3234,18 @@ func processBatchJobFromMinIO(jobID, username string) error {
 
 	// Generate reports (IP mappings, summary)
 	log.Printf("[WORKER] Job %s: generating reports", jobID)
-	
+
 	// Calculate processing time
 	processingTime := time.Since(jobStartTime)
-	
+
 	// 1. IP Mappings Report
 	ipMappingsReport := generateIPMappingsReportInMemory()
-	
+
 	// 2. Processing Summary
 	summaryReport := generateProcessingSummaryInMemory(jobID, len(extractedFiles), totalStats, processingTime)
-	
+
 	// Upload reports to MinIO (use existing ctx from function start)
-	
+
 	// Upload IP mappings
 	ipMappingsObjectName := fmt.Sprintf("%s/%s/reports/ip-mappings.csv", username, jobID)
 	if err := uploadToMinIO(ctx, ipMappingsObjectName, bytes.NewReader([]byte(ipMappingsReport)), int64(len(ipMappingsReport))); err != nil {
@@ -3178,7 +3253,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	} else {
 		log.Printf("[WORKER] Uploaded IP mappings report (%d bytes)", len(ipMappingsReport))
 	}
-	
+
 	// Upload summary
 	summaryObjectName := fmt.Sprintf("%s/%s/reports/summary.json", username, jobID)
 	if err := uploadToMinIO(ctx, summaryObjectName, bytes.NewReader([]byte(summaryReport)), int64(len(summaryReport))); err != nil {
@@ -3194,6 +3269,21 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	}
 
 	log.Printf("[WORKER] Uploaded output.zip for job %s", jobID)
+
+	// Record Prometheus metrics
+	batchProcessingDuration.Observe(processingTime.Seconds())
+	batchFilesProcessed.Add(float64(len(extractedFiles)))
+	batchJobsTotal.WithLabelValues("completed").Inc()
+
+	// Record pattern detection metrics
+	batchPatternsDetected.WithLabelValues("ip_address").Add(float64(totalStats["ip_addresses"]))
+	batchPatternsDetected.WithLabelValues("ad_account").Add(float64(totalStats["ad_accounts"]))
+	batchPatternsDetected.WithLabelValues("jwt_token").Add(float64(totalStats["jwt_tokens"]))
+	batchPatternsDetected.WithLabelValues("private_key").Add(float64(totalStats["private_keys"]))
+	batchPatternsDetected.WithLabelValues("password").Add(float64(totalStats["passwords"]))
+	batchPatternsDetected.WithLabelValues("sensitive_term").Add(float64(totalStats["sensitive_terms"]))
+	batchPatternsDetected.WithLabelValues("user_word").Add(float64(totalStats["user_words"]))
+
 	// Update job status to completed
 	log.Printf("[WORKER] Job %s completed in %.2f seconds", jobID, processingTime.Seconds())
 	updateJobStatus(jobID, "completed", len(extractedFiles), len(extractedFiles), "")
@@ -3337,11 +3427,11 @@ func generateIPMappingsReportInMemory() string {
 
 	var buf strings.Builder
 	buf.WriteString("original_ip,placeholder,timestamp\n")
-	
+
 	for original, placeholder := range ipMappings {
 		buf.WriteString(fmt.Sprintf("%s,%s,%s\n", original, placeholder, time.Now().Format(time.RFC3339)))
 	}
-	
+
 	return buf.String()
 }
 
@@ -3416,14 +3506,6 @@ func main() {
 
 	// Initialize templates
 	initTemplates()
-
-	// Start background batch job processor
-	go batchJobProcessor()
-	log.Printf("[BATCH] Background processor initialized")
-
-	// Start 48-hour cleanup task
-	go batchJobCleanupTask()
-	log.Printf("[BATCH] Auto-cleanup task initialized (48-hour retention)")
 
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/health", mainHealthHandler)
