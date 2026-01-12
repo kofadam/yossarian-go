@@ -3,14 +3,13 @@
 ![Go Version](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)
 ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-Native-326CE5?logo=kubernetes)
+![Helm](https://img.shields.io/badge/Helm-v0.13.8-0F1689?logo=helm)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-v0.13.3-blue)
+![Version](https://img.shields.io/badge/Version-v0.13.8-blue)
 
 🛡️ **Enterprise log sanitization with MinIO-backed batch processing**
 
-## Overview
-
-Enterprise-grade log sanitization system built in Go for air-gapped environments. Automatically detects and replaces sensitive information in log files with anonymized tokens. Features scalable architecture with MinIO-backed asynchronous batch processing for handling large workloads.
+Automatically detects and replaces sensitive information in log files with anonymized tokens. Built for air-gapped environments with horizontal scaling, OIDC authentication, and Prometheus monitoring.
 
 **Named after the Catch-22 character who censored letters** - Yossarian Go sanitizes your logs so you can safely share them with external support teams, vendors, or less-secure storage.
 
@@ -18,279 +17,231 @@ Enterprise-grade log sanitization system built in Go for air-gapped environments
 
 ---
 
-## ✨ Key Features
+## ✨ What Gets Protected?
 
-### 🔍 Pattern Detection
-- **IP Addresses** → `[IP-001]` with consistent mapping
-- **AD Accounts** → USN format via LDAP integration (`CORP\user` → `USN123456789`)
-- **JWT Tokens** → `[JWT-REDACTED]`
-- **Private Keys** → `[PRIVATE-KEY-REDACTED]`
-- **Passwords** → `[PASSWORD-REDACTED]`
-- **Custom Sensitive Terms** → Admin-configured patterns
-
-### ⚡ Scalable Architecture (v0.13.0+)
-- **Split Architecture**: Horizontally scalable frontend + dedicated worker
-- **MinIO Storage**: Centralized object storage for batch jobs
-- **Async Processing**: Upload and return later - no waiting for large files
-- **Job Cancellation**: Cancel queued/processing jobs (v0.13.8+)
-- **Auto-Cleanup**: 8-hour retention policy for completed jobs
-- **Performance**: ~0.2s processing time for 4-file batches
-- **Memory Optimized**: Streaming architecture prevents OOMKilled crashes (v0.13.8)
-
-### 🔒 Security & Compliance
-- **Zero persistence**: No data retention after download (8-hour window for batch jobs)
-- **Air-gap ready**: No external dependencies
-- **Enterprise SSO**: OIDC/Keycloak integration
-- **Audit trails**: Complete IP mapping exports
-
-### 📊 Monitoring
-- **Prometheus metrics**: `/metrics` endpoint
-- **Grafana dashboards**: Pre-built visualization
-- **Performance tracking**: Cache hit rates, processing times
-
----
-
-## 🗃️ Architecture
-
-### Split Architecture (v0.13.0+)
-```
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────┐
-│ Frontend Pods    │────▶│ MinIO Storage    │◀────│ Worker Pod   │
-│ (Scalable 1-10+) │     │ (Batch Files)    │     │ (Single Pod) │
-│ - Web UI         │     │ - input.zip      │     │ - Job Queue  │
-│ - Upload Handler │     │ - output.zip     │     │ - Processing │
-│ - OIDC Auth      │     │ - 8hr retention  │     │ - AD Lookups │
-└──────────────────┘     └──────────────────┘     └──────────────┘
-         │                                                  │
-         └────────────────────┬──────────────────────────┘
-                              │
-                     ┌────────▼─────────┐
-                     │  DB Service Pod  │
-                     │  - Job Queue     │
-                     │  - AD Cache      │
-                     │  - Org Settings  │
-                     └──────────────────┘
-```
-
-**Workflow:**
-1. User uploads ZIP → Frontend stores in MinIO → Job queued in database
-2. Worker polls database → Downloads from MinIO → Processes files → Uploads results
-3. User downloads results → Files auto-deleted after 8 hours
-
-**Components:**
-- **Frontend**: Stateless pods (horizontal scaling) handling UI and uploads
-- **Worker**: Single pod with PVC processing batch jobs from MinIO queue
-- **MinIO**: Centralized object storage for batch files (input/output ZIPs)
-- **DB Service**: SQLite with HTTP API for job queue and metadata
+- **🌐 IP Addresses** → `[IP-001]` with consistent mapping
+- **👤 AD Accounts** → USN format via LDAP (`CORP\user` → `USN123456789`)
+- **🎫 JWT Tokens** → `[JWT-REDACTED]`
+- **🔐 Private Keys** → `[PRIVATE-KEY-REDACTED]`
+- **🔑 Passwords** → `[PASSWORD-REDACTED]`
+- **🏢 Custom Terms** → Admin-configured organizational patterns
 
 ---
 
 ## 🚀 Quick Start
 
-### Docker Compose (Local Development)
+### Option 1: Helm Chart (Recommended)
+
+```bash
+# Standard installation
+helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
+  --version 0.13.8 \
+  --namespace yossarian-go \
+  --create-namespace \
+  --set ingress.host=yossarian.example.com \
+  --set auth.adminPassword=changeme
+```
+
+**📦 Air-Gap Installation** (using Distribution Tooling for Helm):
+```bash
+# Wrap chart with all container images included
+dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8 -o /tmp/wrapped
+
+# Push to air-gapped registry
+dt push /tmp/wrapped/yossarian-go-0.13.8.wrap.tgz \
+  oci://your-registry.local/yossarian-go:0.13.8
+
+# Install in air-gap environment
+helm install yossarian oci://your-registry.local/yossarian-go:0.13.8
+```
+
+> **💡 New to Distribution Tooling?** It bundles all container images with the Helm chart for true air-gap deployment. Learn more: [Distribution Tooling Guide](docs/DISTRIBUTION-TOOLING-GUIDE.md)
+
+**📚 Documentation:**
+- [Complete Helm Chart Documentation](helm/yossarian-go/README.md)
+- [Air-Gap Installation Guide](docs/DISTRIBUTION-TOOLING-GUIDE.md)
+- [Certificate Configuration](docs/CERTIFICATE-CONFIGURATION-GUIDE.md)
+- [Technical Architecture](docs/ARCHITECTURE.md)
+
+### Option 2: Docker Compose (Local Development)
+
 ```bash
 git clone https://github.com/kofadam/yossarian-go.git
 cd yossarian-go
-
-# Start services (includes MinIO)
 docker-compose up -d
-
-# Access application
 open http://localhost:8080
 ```
 
-### Kubernetes Deployment
-
-**Prerequisites:**
-- Kubernetes cluster
-- Persistent volume provisioner
-- Contour ingress controller (or modify HTTPProxy)
-
-**Deploy:**
-```bash
-# Build images
-./build.sh v0.13.3
-./build-db-service.sh v0.12.3
-
-# Tag for your registry
-docker tag yossarian-go/yossarian-go:v0.13.3 your-registry/yossarian-go:v0.13.3
-docker tag yossarian-go/yossarian-go-db-service:v0.12.3 your-registry/yossarian-go-db-service:v0.12.3
-
-# Push to registry
-docker push your-registry/yossarian-go:v0.13.3
-docker push your-registry/yossarian-go-db-service:v0.12.3
-
-# Deploy to Kubernetes
-kubectl apply -f k8s/
-```
-
-**Required Resources:**
-- MinIO StatefulSet (50Gi PVC)
-- Frontend Deployment (3 replicas, no PVC)
-- Worker Deployment (1 replica, 50Gi PVC for processing)
-- DB Service Deployment (1 replica, 10Gi PVC for SQLite)
-
 ---
 
-## ⚙️ Configuration
+## 🎯 Key Features
 
-### Environment Variables
+### ⚡ Scalable Architecture
+- **Split Architecture**: Horizontally scalable frontend + dedicated worker
+- **MinIO Storage**: Centralized object storage for batch jobs
+- **Async Processing**: Upload large files and download results later
+- **Job Cancellation**: Cancel queued/processing jobs (v0.13.8+)
+- **Auto-Cleanup**: 8-hour retention policy for completed jobs
+- **Memory Optimized**: Streaming architecture prevents OOM crashes (v0.13.8)
 
-**Main Application (Frontend & Worker):**
-```bash
-MODE=frontend                    # Or "worker"
-PORT=8080
-ADMIN_PASSWORD=changeme          # If OIDC disabled
+### 🔒 Security & Compliance
+- **Zero Persistence**: No data retained after download
+- **Air-Gap Ready**: No external dependencies required
+- **Enterprise SSO**: OIDC/Keycloak integration
+- **Audit Trails**: Complete IP mapping exports
 
-# MinIO (v0.13.0+)
-MINIO_ENDPOINT=minio:9000
-MINIO_ACCESS_KEY=yossarian
-MINIO_SECRET_KEY=changeme
-MINIO_BUCKET=yossarian-jobs
-MINIO_USE_SSL=false
-
-# Database Service
-AD_SERVICE_URL=http://yossarian-db-service:8081
-
-# File Limits
-MAX_TOTAL_UPLOAD_SIZE_MB=100
-MAX_FILE_SIZE_MB=50
-MAX_FILE_COUNT=10
-```
-
-**OIDC/Keycloak:**
-```bash
-OIDC_ENABLED=true
-OIDC_ISSUER_URL=https://keycloak.example.com/realms/myrealm
-OIDC_CLIENT_ID=yossarian-go
-OIDC_CLIENT_SECRET=changeme
-OIDC_REDIRECT_URL=https://yossarian.example.com/auth/oidc/callback
-AUTO_SSO_ENABLED=true
-```
-
-**Database Service:**
-```bash
-# LDAP/Active Directory
-LDAP_SERVER=ldaps://dc.example.com:636
-LDAP_BIND_DN=CN=svc-yossarian,OU=Service,DC=example,DC=com
-LDAP_BIND_PASSWORD=changeme
-LDAP_SEARCH_BASE=DC=example,DC=com
-LDAP_SYNC_INTERVAL=3600
-```
-
----
-
-## 🔒 Security Considerations
-
-### Data Lifecycle
-- **Upload**: Stored in MinIO temporarily
-- **Processing**: Worker downloads to local PVC, processes, uploads results
-- **Download**: Results streamed from MinIO
-- **Cleanup**: Files auto-deleted 8 hours after job completion
-
-### Air-Gap Deployment
-- No external dependencies (CDN, APIs, etc.)
-- All resources bundled inline
-- Works completely offline
-
-### Authentication
-- Enterprise SSO via OIDC/Keycloak
-- Role-based access control (admin/user)
-- Secure session management
-- User-attributed batch jobs
+### 📊 Monitoring & Observability
+- **Prometheus Metrics**: `/metrics` endpoint on all components
+- **Grafana Dashboards**: Pre-built overview and worker detail dashboards
+- **ServiceMonitor**: Native Prometheus Operator integration (v0.13.8+)
+- **Performance Tracking**: Cache hit rates, processing times, queue depth
 
 ---
 
 ## 📈 Performance
 
-**Single File Processing:**
-- 3MB file with 35K patterns: 2.6 seconds
-- Throughput: ~1MB/second
-- Memory: <200MB per file
-
-**Batch Processing:**
-- 4-file ZIP: 0.2 seconds
-- AD lookup caching: 23x performance boost
-- Cache hit rate: 98%+
-
-**Scalability:**
-- Frontend: Horizontal scaling (1-10+ pods)
-- Worker: Single pod with queue-based processing
-- Concurrent batch jobs: Limited by worker resources
+- **Single File**: 3MB file with 35K patterns in 2.6 seconds
+- **Batch Processing**: 4-file ZIP in 0.2 seconds
+- **AD Lookup Caching**: 23x performance boost (98%+ cache hit rate)
+- **Scalability**: Frontend scales 1-10+ pods, worker handles queue-based processing
 
 ---
 
-## 🔄 Upgrading to v0.13.3
+## ⚙️ Configuration Highlights
 
-**Breaking Changes from v0.12.x:**
-- MinIO now required for batch processing
-- Split architecture (frontend/worker instead of single deployment)
-- New environment variables for MinIO configuration
+### Essential Settings (via Helm values.yaml)
 
-**Migration Steps:**
-1. Deploy MinIO StatefulSet
-2. Update frontend deployment (remove PVC, add MinIO config)
-3. Create worker deployment (1 replica with PVC)
-4. Update HTTPProxy routing (downloads → worker)
-5. Test batch upload and download flow
+```yaml
+# Domain & Access
+ingress:
+  host: yossarian.example.com
+  tls: true
+
+# Authentication
+auth:
+  oidc:
+    enabled: true
+    issuerUrl: https://keycloak.example.com/realms/myrealm
+    clientId: yossarian-go
+    autoSSO: true  # Force SSO login
+
+# Active Directory Integration
+database:
+  ldap:
+    enabled: true
+    server: ldaps://dc.example.com:636
+    bindDN: CN=svc-yossarian,OU=Service,DC=example,DC=com
+
+# Monitoring
+metrics:
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      prometheus: kube-prometheus
+
+# Storage & Performance
+minio:
+  persistence:
+    size: 100Gi
+worker:
+  resources:
+    requests:
+      memory: 256Mi  # Optimized in v0.13.8
+```
+
+See [complete values.yaml documentation](helm/yossarian-go/README.md#configuration) for all options.
+
+---
+
+## 📊 Monitoring Setup
+
+### Quick Start with Prometheus Operator
+
+```bash
+# Enable ServiceMonitor in Helm values
+helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
+  --version 0.13.8 \
+  --reuse-values \
+  --set metrics.serviceMonitor.enabled=true \
+  --set metrics.serviceMonitor.additionalLabels.prometheus=kube-prometheus
+```
+
+### Import Grafana Dashboards
+
+1. Download dashboards from [grafana/](grafana/) directory
+2. Import via Grafana UI: **Dashboards** → **Import** → Upload JSON
+3. Available dashboards:
+   - **Yossarian Overview**: System health, job queue, processing stats
+   - **Worker Details**: Memory usage, cache performance, processing times
+
+**Exposed Metrics:**
+- `yossarian_http_requests_total` - HTTP request counter
+- `yossarian_upload_size_bytes` - File upload sizes
+- `yossarian_processing_duration_seconds` - Processing time histogram
+- `yossarian_patterns_detected_total` - Detected sensitive patterns
+- `yossarian_ad_cache_hits_total` / `ad_cache_misses_total` - Cache performance
+- `yossarian_active_sessions` - Current user sessions
+
+---
+
+## 🔄 Upgrading
+
+### From v0.13.3 to v0.13.8
+
+```bash
+helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
+  --version 0.13.8 \
+  --namespace yossarian-go \
+  --reuse-values
+```
+
+**What's New in v0.13.8:**
+- ✅ ServiceMonitor for Prometheus Operator
+- ✅ Distribution Tooling annotations (air-gap support)
+- ✅ Memory optimization (worker: 2Gi → 512Mi limit)
+- ✅ Job cancellation (1-hour timeout)
+- ✅ Certificate configuration fix (OIDC vs LDAPS)
+
+**Breaking Changes:** None (fully backwards compatible)
+
+See [CHANGELOG](helm/yossarian-go/CHANGELOG.md) for complete version history.
+
+---
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Helm Chart README](helm/yossarian-go/README.md) | Complete installation and configuration guide |
+| [Distribution Tooling Guide](docs/DISTRIBUTION-TOOLING-GUIDE.md) | Air-gap deployment with bundled images |
+| [Certificate Configuration](docs/CERTIFICATE-CONFIGURATION-GUIDE.md) | OIDC and LDAPS certificate setup |
+| [Technical Architecture](docs/ARCHITECTURE.md) | System design and component details |
+| [Development Guide](docs/DEVELOPMENT.md) | Building, testing, and contributing |
 
 ---
 
 ## 🛠️ Development
 
-### Project Structure
-```
-yossarian-go/
-├── main.go                    # Main app (frontend + worker modes)
-├── db-service.go              # Database service + job queue API
-├── templates/                 # HTML templates
-│   ├── index.html            # Main upload UI
-│   ├── admin.html            # Admin panel
-│   └── my-jobs.html          # Batch job status page
-├── k8s/                      # Kubernetes manifests
-│   ├── 01-minio.yaml         # MinIO StatefulSet
-│   ├── 02-frontend.yaml      # Frontend Deployment
-│   ├── 03-worker.yaml        # Worker Deployment
-│   └── 04-httpproxy.yaml     # Ingress routing
-├── Dockerfile                # Main app image
-├── Dockerfile.db-service     # DB service image
-├── docker-compose.yml        # Local dev (includes MinIO)
-├── build.sh                  # Build main app
-└── build-db-service.sh       # Build DB service
-```
-
-### Building
 ```bash
-# Build main app
-./build.sh v0.13.3
+# Clone repository
+git clone https://github.com/kofadam/yossarian-go.git
+cd yossarian-go
 
-# Build database service
+# Build images
+./build.sh v0.13.8
 ./build-db-service.sh v0.12.3
 
-# Run locally with MinIO
+# Run locally
 docker-compose up -d
 ```
 
-### Testing Batch Processing
-```bash
-# Create test ZIP
-zip test.zip file1.log file2.log file3.log
-
-# Upload
-curl -F "file=@test.zip" http://localhost:8080/upload
-
-# Check status (get job_id from response)
-curl http://localhost:8080/api/jobs/status/{job_id}
-
-# Download results when completed
-curl -O http://localhost:8080/jobs/download/{job_id}
-```
+See [Development Guide](docs/DEVELOPMENT.md) for detailed instructions.
 
 ---
 
 ## 📄 License
 
-MIT License - See LICENSE file for details
+MIT License - See [LICENSE](LICENSE) file for details
 
 ---
 
@@ -305,7 +256,8 @@ MIT License - See LICENSE file for details
 ## 📞 Support
 
 - **Issues**: [GitHub Issues](https://github.com/kofadam/yossarian-go/issues)
-- **Version**: v0.13.3
+- **Discussions**: [GitHub Discussions](https://github.com/kofadam/yossarian-go/discussions)
+- **Version**: v0.13.8
 - **Last Updated**: January 2026
 
 ---
