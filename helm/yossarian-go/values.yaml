@@ -1,18 +1,5 @@
 # Default values for yossarian-go
 # This is a YAML-formatted file.
-
-# Namespace configuration
-namespace:
-  # Set to false if namespace already exists (e.g., with custom pod-security labels)
-  create: true
-  # Additional labels to apply to the namespace
-  labels:
-    pod-security.kubernetes.io/enforce: privileged
-    # pod-security.kubernetes.io/audit: restricted
-    # pod-security.kubernetes.io/warn: restricted
-  # Additional annotations
-  annotations: {}
-
 # Ingress configuration
 ingress:
   enabled: true
