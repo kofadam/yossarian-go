@@ -1,0 +1,51 @@
+---
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: yossarian-go-httpproxy
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+spec:
+  virtualhost:
+    fqdn: yossarian-go.example.com  # CHANGE THIS to your domain
+    tls:
+      secretName: yossarian-go-tls  # Must match certificate secretName
+  routes:
+    # Worker: Download endpoints (large files)
+    - conditions:
+        - prefix: /jobs/download
+      services:
+        - name: yossarian-worker
+          port: 8080
+      timeoutPolicy:
+        idle: 300s
+        response: 300s
+    
+    # Worker: Report downloads
+    - conditions:
+        - prefix: /jobs/reports
+      services:
+        - name: yossarian-worker
+          port: 8080
+      timeoutPolicy:
+        idle: 60s
+        response: 60s
+    
+    # Frontend: All other routes (with session affinity)
+    - conditions:
+        - prefix: /
+      services:
+        - name: yossarian-frontend
+          port: 8080
+      loadBalancerPolicy:
+        strategy: Cookie
+      cookieRewritePolicies:
+        - name: X-Contour-Session-Affinity
+          pathRewrite:
+            value: /
+          sameSite: Lax
+          secure: true
+      timeoutPolicy:
+        idle: 60s
+        response: 60s

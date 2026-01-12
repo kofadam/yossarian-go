@@ -1,0 +1,87 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yossarian-db-service
+  namespace: yossarian-go
+  labels:
+    app: yossarian-db-service
+    component: database
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+  selector:
+    app: yossarian-db-service
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yossarian-db-service
+  namespace: yossarian-go
+  labels:
+    app: yossarian-db-service
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yossarian-db-service
+  template:
+    metadata:
+      labels:
+        app: yossarian-db-service
+        component: database
+    spec:
+      containers:
+        - name: yossarian-db-service
+          image: ghcr.io/kofadam/yossarian-go-db-service:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: DC_CA_CERT_PATH
+              value: /etc/ssl/certs/ca-bundle.crt
+          envFrom:
+            - configMapRef:
+                name: yossarian-go-config
+            - secretRef:
+                name: yossarian-go-secrets
+          volumeMounts:
+            - name: database-storage
+              mountPath: /data
+            - name: custom-ca
+              mountPath: /etc/ssl/certs/ca-bundle.crt
+              subPath: ca-bundle.crt
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 512Mi
+      volumes:
+        - name: database-storage
+          persistentVolumeClaim:
+            claimName: yossarian-go-db-pvc
+        - name: custom-ca
+          configMap:
+            name: custom-ca-bundle
+            optional: true

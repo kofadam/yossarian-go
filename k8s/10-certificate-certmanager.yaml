@@ -1,0 +1,35 @@
+---
+# cert-manager Certificate (for automatic TLS certificate generation)
+# Prerequisites:
+# 1. cert-manager must be installed in your cluster
+# 2. ClusterIssuer or Issuer must be configured (e.g., letsencrypt-prod)
+#
+# Installation: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: yossarian-go-tls
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+spec:
+  # Secret name that will store the TLS certificate (referenced by Ingress/HTTPProxy)
+  secretName: yossarian-go-tls
+  
+  # Certificate duration and renewal
+  duration: 2160h    # 90 days
+  renewBefore: 360h  # 15 days before expiration
+  
+  # Reference to ClusterIssuer or Issuer
+  issuerRef:
+    name: letsencrypt-prod  # CHANGE THIS to your ClusterIssuer/Issuer name
+    kind: ClusterIssuer     # Or "Issuer" if using namespace-scoped issuer
+    group: cert-manager.io
+  
+  # Domain names for the certificate
+  dnsNames:
+    - yossarian-go.example.com  # CHANGE THIS to your domain
+  
+  # ACME/Let's Encrypt uses HTTP-01 or DNS-01 challenge
+  # This example uses HTTP-01 (default for most ingress controllers)
+  # For DNS-01 challenge, configure your ClusterIssuer with DNS provider

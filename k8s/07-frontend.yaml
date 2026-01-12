@@ -1,0 +1,112 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yossarian-frontend
+  namespace: yossarian-go
+  labels:
+    app: yossarian
+    mode: frontend
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: yossarian
+    mode: frontend
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yossarian-frontend
+  namespace: yossarian-go
+  labels:
+    app: yossarian
+    mode: frontend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: yossarian
+      mode: frontend
+  template:
+    metadata:
+      labels:
+        app: yossarian
+        mode: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/kofadam/yossarian-go:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: MODE
+              value: "frontend"
+            - name: PORT
+              value: "8080"
+            - name: CA_CERT_PATH
+              value: /etc/ssl/certs/ca-bundle.crt
+            # MinIO Configuration
+            - name: MINIO_ENDPOINT
+              value: "minio:9000"
+            - name: MINIO_ACCESS_KEY
+              value: "yossarian"
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: password
+            - name: MINIO_BUCKET
+              value: "yossarian-jobs"
+            - name: MINIO_USE_SSL
+              value: "false"
+            # Database Service
+            - name: AD_SERVICE_URL
+              value: "http://yossarian-db-service:8081"
+            # File Limits
+            - name: MAX_FILE_SIZE_MB
+              value: "50"
+            - name: MAX_FILE_COUNT
+              value: "10"
+            - name: MAX_TOTAL_UPLOAD_SIZE_MB
+              value: "500"
+          envFrom:
+            - configMapRef:
+                name: yossarian-go-config
+            - secretRef:
+                name: yossarian-go-secrets
+          volumeMounts:
+            - name: custom-ca
+              mountPath: /etc/ssl/certs/ca-bundle.crt
+              subPath: ca-bundle.crt
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+      volumes:
+        - name: custom-ca
+          configMap:
+            name: custom-ca-bundle
+            optional: true

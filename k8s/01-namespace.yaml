@@ -3,5 +3,7 @@ kind: Namespace
 metadata:
   name: yossarian-go
   labels:
-    kubernetes.io/metadata.name: yossarian-go
+    app: yossarian-go
     pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged

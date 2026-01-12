@@ -1,0 +1,60 @@
+---
+# Standard Kubernetes Ingress (for Nginx/Traefik/etc)
+# Use this if your cluster does NOT have Contour ingress controller
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: yossarian-go-ingress
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+  annotations:
+    # cert-manager annotation for automatic TLS certificate
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"  # Change to your ClusterIssuer name
+    
+    # Nginx-specific annotations (comment out if using different ingress controller)
+    nginx.ingress.kubernetes.io/proxy-body-size: "500m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "yossarian-affinity"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "3600"
+    
+    # Traefik-specific annotations (uncomment if using Traefik)
+    # traefik.ingress.kubernetes.io/router.middlewares: "default-ratelimit@kubernetescrd"
+spec:
+  ingressClassName: nginx  # Change to your ingress class: nginx, traefik, etc.
+  tls:
+    - hosts:
+        - yossarian-go.example.com  # CHANGE THIS to your domain
+      secretName: yossarian-go-tls  # Must match certificate secretName
+  rules:
+    - host: yossarian-go.example.com  # CHANGE THIS to your domain
+      http:
+        paths:
+          # Worker: Download endpoints (large files)
+          - path: /jobs/download
+            pathType: Prefix
+            backend:
+              service:
+                name: yossarian-worker
+                port:
+                  number: 8080
+          
+          # Worker: Report downloads
+          - path: /jobs/reports
+            pathType: Prefix
+            backend:
+              service:
+                name: yossarian-worker
+                port:
+                  number: 8080
+          
+          # Frontend: All other routes
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: yossarian-frontend
+                port:
+                  number: 8080

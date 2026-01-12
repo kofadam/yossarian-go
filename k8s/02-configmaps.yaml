@@ -1,0 +1,73 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yossarian-go-config
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+    component: config
+data:
+  # Application Settings
+  PORT: "8080"
+  
+  # MinIO Configuration (v0.13.0+)
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_BUCKET: "yossarian-jobs"
+  MINIO_ACCESS_KEY: "yossarian"
+  MINIO_USE_SSL: "false"
+  
+  # Database Service
+  AD_SERVICE_URL: "http://yossarian-db-service:8081"
+  DB_PATH: "/data/yossarian.db"
+  
+  # File Upload Limits
+  MAX_TOTAL_UPLOAD_SIZE_MB: "100"
+  MAX_FILE_SIZE_MB: "50"
+  MAX_ZIP_FILE_SIZE_MB: "10"
+  MAX_FILE_COUNT: "10"
+  
+  # Authentication Mode
+  # - Set to "false" for single-user mode (requires ADMIN_PASSWORD)
+  # - Set to "true" for multi-user mode (requires OIDC provider configuration below)
+  OIDC_ENABLED: "false"
+  
+  # OIDC/Keycloak Configuration (only required when OIDC_ENABLED: "true")
+  # Uncomment and configure these values for multi-user SSO:
+  # OIDC_CLIENT_ID: "yossarian-go"
+  # OIDC_ISSUER_URL: "https://keycloak.example.com/realms/your-realm"
+  # OIDC_REDIRECT_URL: "https://yossarian-go.example.com/auth/oidc/callback"
+  # OIDC_LOGOUT_URL: "https://keycloak.example.com/realms/your-realm/protocol/openid-connect/logout"
+  # AUTO_SSO_ENABLED: "true"
+  
+  # LDAP/Active Directory (optional - for AD account sanitization)
+  # Uncomment and configure if you want to replace AD accounts with USN tokens:
+  # LDAP_SERVER: "ldaps://dc01.example.com:636"
+  # LDAP_BIND_DN: "CN=svc-yossarian,DC=example,DC=com"
+  # LDAP_SEARCH_BASE: "DC=example,DC=com"
+  # DOMAIN_NETBIOS: "CORP"
+  # DOMAIN_FQDN: "example.com"
+  
+  # Organization Sensitive Terms (comma-separated)
+  SENSITIVE_TERMS: "ProjectApollo,ClientMegaCorp,confidential,classified,restricted,internal-only"
+  
+  # Server Prefixes for Pattern Detection (comma-separated)
+  SERVER_PREFIXES: "ABCDEFG"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-ca-bundle
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+    component: certificates
+data:
+  ca-bundle.crt: |
+    # Your Keycloak CA certificate + Domain Controller CA certificate
+    # Get Keycloak cert: echo | openssl s_client -connect keycloak.yourdomain.com:443 -showcerts
+    # Get DC cert: echo | openssl s_client -connect dc01.yourdomain.com:636 -showcerts
+    -----BEGIN CERTIFICATE-----
+    # REPLACE WITH YOUR ACTUAL CA CERTIFICATES
+    -----END CERTIFICATE-----

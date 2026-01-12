@@ -1,0 +1,286 @@
+---
+# Quick Start Configuration for Local Testing
+# This file provides a minimal configuration to test Yossarian Go locally without:
+# - OIDC/SSO (uses password authentication)
+# - LDAP/AD integration
+# - TLS/Ingress (uses NodePort for direct access)
+#
+# Usage:
+#   kubectl apply -f 00-quickstart-local.yaml
+#   kubectl get svc -n yossarian-go yossarian-frontend-local
+#   Access at: http://localhost:30080
+#
+# Default credentials: Administrator / Yossarian123
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: yossarian-go
+  labels:
+    app: yossarian-go
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yossarian-go-config-local
+  namespace: yossarian-go
+data:
+  PORT: "8080"
+  OIDC_ENABLED: "false"
+  AUTO_SSO_ENABLED: "false"
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_BUCKET: "yossarian-jobs"
+  MINIO_ACCESS_KEY: "yossarian"
+  MINIO_USE_SSL: "false"
+  AD_SERVICE_URL: "http://yossarian-db-service:8081"
+  MAX_TOTAL_UPLOAD_SIZE_MB: "100"
+  MAX_FILE_SIZE_MB: "50"
+  MAX_FILE_COUNT: "10"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: yossarian-go-secrets-local
+  namespace: yossarian-go
+type: Opaque
+stringData:
+  ADMIN_PASSWORD: "Yossarian123"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-secret-local
+  namespace: yossarian-go
+type: Opaque
+stringData:
+  password: "minio-local-password"
+
+---
+# MinIO Service (ClusterIP)
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: yossarian-go
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+  selector:
+    app: minio
+
+---
+# MinIO Deployment (for local testing - uses emptyDir, not persistent!)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: yossarian-go
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args:
+            - server
+            - /data
+          env:
+            - name: MINIO_ROOT_USER
+              value: yossarian
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret-local
+                  key: password
+          ports:
+            - containerPort: 9000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}  # Non-persistent for local testing
+
+---
+# DB Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: yossarian-db-service
+  namespace: yossarian-go
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+  selector:
+    app: yossarian-db-service
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yossarian-db-service
+  namespace: yossarian-go
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yossarian-db-service
+  template:
+    metadata:
+      labels:
+        app: yossarian-db-service
+    spec:
+      containers:
+        - name: yossarian-db-service
+          image: ghcr.io/kofadam/yossarian-go-db-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: yossarian-go-config-local
+            - secretRef:
+                name: yossarian-go-secrets-local
+          volumeMounts:
+            - name: database-storage
+              mountPath: /data
+      volumes:
+        - name: database-storage
+          emptyDir: {}  # Non-persistent for local testing
+
+---
+# Frontend Service (NodePort for local access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: yossarian-frontend-local
+  namespace: yossarian-go
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080  # Access at http://localhost:30080
+  selector:
+    app: yossarian
+    mode: frontend
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yossarian-frontend
+  namespace: yossarian-go
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yossarian
+      mode: frontend
+  template:
+    metadata:
+      labels:
+        app: yossarian
+        mode: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/kofadam/yossarian-go:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MODE
+              value: "frontend"
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret-local
+                  key: password
+          envFrom:
+            - configMapRef:
+                name: yossarian-go-config-local
+            - secretRef:
+                name: yossarian-go-secrets-local
+
+---
+# Worker Service (ClusterIP)
+apiVersion: v1
+kind: Service
+metadata:
+  name: yossarian-worker
+  namespace: yossarian-go
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: yossarian
+    mode: worker
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yossarian-worker
+  namespace: yossarian-go
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yossarian
+      mode: worker
+  template:
+    metadata:
+      labels:
+        app: yossarian
+        mode: worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/kofadam/yossarian-go:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MODE
+              value: "worker"
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret-local
+                  key: password
+          envFrom:
+            - configMapRef:
+                name: yossarian-go-config-local
+            - secretRef:
+                name: yossarian-go-secrets-local
+          volumeMounts:
+            - name: jobs
+              mountPath: /data/jobs
+      volumes:
+        - name: jobs
+          emptyDir: {}  # Non-persistent for local testing

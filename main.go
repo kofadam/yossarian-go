@@ -1209,8 +1209,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Session validation (if OIDC enabled)
-	if autoSSOEnabled && !isValidAdminSession(r) {
+	// Session validation (required for both OIDC and single-user mode)
+	if !isValidAdminSession(r) {
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error":   "session_expired",
@@ -1219,7 +1219,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get username for audit logging
+	// Get username from session (guaranteed to exist after validation above)
 	username := "anonymous"
 	if cookie, err := r.Cookie("admin_session"); err == nil {
 		sessionMutex.Lock()
@@ -1227,6 +1227,17 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			username = user
 		}
 		sessionMutex.Unlock()
+	}
+
+	if username == "anonymous" {
+		// This should never happen after session validation, but safety check
+		log.Printf("[ERROR] Session valid but username not found - rejecting upload")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "authentication_required",
+			"message": "Please log in to upload files.",
+		})
+		return
 	}
 
 	if parseErr := r.ParseMultipartForm(int64(maxTotalUploadSizeMB) << 20); parseErr != nil {
@@ -1756,6 +1767,9 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Show SSO button if OIDC enabled
 		ssoButton := ""
+		loginTitle := "Yossarian Admin Login"
+		loginInstructions := ""
+		
 		if oidcEnabled {
 			ssoButton = `<p style="text-align: center; margin: 20px 0;">
 				<a href="/auth/oidc/login" style="display: inline-block; padding: 10px 20px; background: #1976d2; color: white; text-decoration: none; border-radius: 4px;">
@@ -1763,19 +1777,26 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 				</a>
 			</p>
 			<p style="text-align: center;">OR</p>`
+		} else {
+			// Single-user mode
+			loginTitle = "Yossarian Login"
+			loginInstructions = `<p style="text-align: center; color: #666; margin-bottom: 20px;">
+				Single-user mode: Login with admin password
+			</p>`
 		}
 
 		fmt.Fprintf(w, `
-		<h1>Yossarian Admin Login</h1>
+		<h1>%s</h1>
+		%s
 		%s
 		<form method="post">
 			<p>
 				<label>Admin Password:</label><br>
 				<input type="password" name="password" required style="padding: 5px; width: 200px;">
 			</p>
-			<button type="submit">Login with Password</button>
+			<button type="submit">Login</button>
 		</form>
-		`, ssoButton)
+		`, loginTitle, loginInstructions, ssoButton)
 		return
 	}
 
@@ -2104,6 +2125,13 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 			showAccessDenied(w, r)
 			return
 		}
+	}
+
+	// Single-user mode: Require password login
+	if !oidcEnabled && !isValidAdminSession(r) {
+		log.Printf("Single-user mode: Redirecting to admin login")
+		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+		return
 	}
 
 	data := struct {

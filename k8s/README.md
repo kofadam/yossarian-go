@@ -1,306 +1,604 @@
-# Yossarian Go v0.10.0 - Fixed YAML Deployment Files
+# Yossarian Go - Kubernetes Deployment Guide
 
-## 🎯 Overview
+Enterprise log sanitization system with MinIO-backed batch processing for Kubernetes.
 
-These corrected YAML files fix issues from the original deployment and add **batch processing support (v0.10.0)**.
+**Version:** v0.13.3+ (Split Architecture)
 
-## ✅ Issues Fixed
+---
 
-| Issue | Before | After |
-|-------|--------|-------|
-| **Service Name** | `yossarian-service` | `yossarian-go-service` (consistent) |
-| **LDAP Password** | ❌ Missing | ✅ Added to secrets |
-| **CA Cert Path** | `dc-ca-bundle.crt` | `ca-bundle.crt` (consistent) |
-| **DB Storage** | 1Gi | 5Gi (room for batch metadata) |
-| **Batch Storage** | ❌ None | ✅ 100Gi PVC at `/data/jobs` |
-| **App Resources** | 256Mi/512Mi | 512Mi/2Gi (for batch processing) |
+## 📋 Prerequisites
 
-## 📦 What's New in v0.10.0
+### Required
 
-### Batch Processing Features
-- ✅ **100GB PVC** for batch job storage
-- ✅ **Background processor** for async ZIP processing
-- ✅ **Job tracking** with status API
-- ✅ **"My Jobs" page** for users
-- ✅ **Handles 300+ file ZIPs** easily
+- **Kubernetes cluster** (1.27+)
+- **kubectl** configured and connected to your cluster
+- **Storage**: Default StorageClass configured OR ability to specify custom StorageClass
+- **Ingress controller**: EITHER Contour (HTTPProxy) OR Nginx/Traefik (Ingress)
 
-### Architecture Changes
+### Optional
+
+- **cert-manager** (for automatic TLS certificates)
+- **OIDC provider** (Keycloak/Auth0/Azure AD) for multi-user mode
+- **LDAP/Active Directory** for AD account sanitization
+
+---
+
+## 🚀 Quick Start (Local Testing)
+
+**Get up and running in 2 minutes** with minimal configuration:
+
+```bash
+# 1. Apply quickstart configuration
+kubectl apply -f 00-quickstart-local.yaml
+
+# 2. Wait for pods to be ready
+kubectl wait --for=condition=ready pod -l app=yossarian -n yossarian-go --timeout=120s
+
+# 3. Access the application
+# For minikube/kind:
+kubectl port-forward -n yossarian-go svc/yossarian-frontend-local 8080:8080
+
+# For cloud providers with NodePort support:
+# Access at: http://<node-ip>:30080
 ```
-/data/
-├── yossarian.db           # SQLite database (on yossarian-db-pvc)
-└── jobs/                  # Batch job storage (on yossarian-batch-pvc)
-    └── {username}/
-        └── batch-{timestamp}/
-            ├── input.zip
-            └── output/
-                └── sanitized.zip
+
+**Default credentials:**
+- Username: `Administrator`
+- Password: `Yossarian123`
+
+**What this includes:**
+- ✅ Single-user mode (password authentication)
+- ✅ No OIDC/SSO required
+- ✅ No TLS/ingress (direct NodePort access)
+- ✅ Non-persistent storage (emptyDir)
+- ⚠️ **NOT for production** - Data will be lost on pod restart
+
+---
+
+## 🏗️ Production Deployment
+
+### Step 1: Clone and Prepare
+
+```bash
+# Download manifests
+git clone https://github.com/kofadam/yossarian-go.git
+cd yossarian-go/k8s
 ```
 
-## 🚀 Deployment Instructions
+### Step 2: Configure Secrets (REQUIRED)
 
-### Prerequisites
-- Kubernetes 1.19+
-- StorageClass configured (e.g., `default`)
-- Contour ingress controller
-- cert-manager (optional, for TLS)
-- Keycloak or OIDC provider
-- Active Directory / LDAP server
+Edit `03-secrets.yaml`:
 
-### Step 1: Update Configuration
+```bash
+# CRITICAL: Change default passwords!
+vi 03-secrets.yaml
+```
 
-#### Edit `02-configmap.yaml`:
+**Minimum required changes:**
 ```yaml
-# Update these values for your environment:
-OIDC_ISSUER_URL: "https://YOUR-KEYCLOAK.com/auth/realms/YOUR-REALM"
+stringData:
+  ADMIN_PASSWORD: "YourSecurePassword123!"  # CHANGE THIS
+  LDAP_BIND_PASSWORD: "changeme"            # Only if using LDAP
+  OIDC_CLIENT_SECRET: "changeme"            # Only if using OIDC
+```
+
+For MinIO password, edit `minio-secret`:
+```yaml
+stringData:
+  password: "YourSecureMinIOPassword123!"  # CHANGE THIS
+```
+
+### Step 3: Configure Storage (if needed)
+
+**If your cluster does NOT have a default StorageClass:**
+
+Edit `04-pvcs.yaml` and specify your StorageClass:
+
+```yaml
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard  # UNCOMMENT and set your StorageClass
+```
+
+Also edit `05-minio.yaml` line 74:
+
+```yaml
+volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      storageClassName: standard  # UNCOMMENT and set your StorageClass
+```
+
+**Check available StorageClasses:**
+```bash
+kubectl get storageclass
+```
+
+### Step 4: Choose Authentication Mode
+
+#### Option A: Single-User Mode (Default)
+
+**For:** Local testing, single-administrator deployments
+
+**Configuration:** Already set in `02-configmaps.yaml`:
+```yaml
+OIDC_ENABLED: "false"
+```
+
+**Credentials:** Set in `03-secrets.yaml`:
+```yaml
+ADMIN_PASSWORD: "Yossarian123"  # Change this!
+```
+
+**Access:** Login with username `Administrator` + your password
+
+---
+
+#### Option B: Multi-User Mode (OIDC/SSO)
+
+**For:** Enterprise deployments with multiple users
+
+**Prerequisites:**
+- OIDC provider (Keycloak/Auth0/Azure AD/Google) configured
+- Client ID and secret obtained
+- Redirect URL registered: `https://yossarian-go.yourdomain.com/auth/oidc/callback`
+
+**Configuration:** Edit `02-configmaps.yaml`:
+
+```yaml
+# Enable OIDC
+OIDC_ENABLED: "true"
+
+# Configure your OIDC provider
 OIDC_CLIENT_ID: "yossarian-go"
-OIDC_REDIRECT_URL: "https://YOUR-DOMAIN.com/auth/oidc/callback"
-LDAP_SERVER: "ldaps://YOUR-DC.com:636"
-LDAP_BIND_DN: "CN=YOUR-SERVICE-ACCOUNT,OU=Services,DC=company,DC=com"
-LDAP_SEARCH_BASE: "DC=company,DC=com"
-DOMAIN_NETBIOS: "YOUR-DOMAIN"
-DOMAIN_FQDN: "company.com"
+OIDC_ISSUER_URL: "https://keycloak.example.com/realms/your-realm"
+OIDC_REDIRECT_URL: "https://yossarian-go.example.com/auth/oidc/callback"
+OIDC_LOGOUT_URL: "https://keycloak.example.com/realms/your-realm/protocol/openid-connect/logout"
+AUTO_SSO_ENABLED: "true"
 ```
 
-#### Edit `03-secrets.yaml`:
-```bash
-# Generate base64 encoded secrets:
-echo -n "your-admin-password" | base64
-echo -n "your-oidc-client-secret" | base64
-echo -n "your-ldap-bind-password" | base64
-
-# Update the values in 03-secrets.yaml
-```
-
-#### Edit `04-ca-bundle-configmap.yaml`:
-```bash
-# Get your CA certificate:
-echo | openssl s_client -connect YOUR-KEYCLOAK.com:443 -showcerts 2>/dev/null | openssl x509 -outform PEM
-
-# Paste it into the configmap
-```
-
-#### Edit `08-httpproxy.yaml`:
+**And set client secret in `03-secrets.yaml`:**
 ```yaml
-# Update domain:
-fqdn: yossarian.YOUR-DOMAIN.com
+OIDC_CLIENT_SECRET: "your-client-secret-from-keycloak"
 ```
 
-#### Edit `09-certificate.yaml`:
+### Step 5: Choose Ingress Method
+
+You must choose **EITHER** HTTPProxy (Contour) OR Ingress (Nginx/Traefik).
+
+#### Option A: HTTPProxy (Contour)
+
+**Use if:** Your cluster has Contour ingress controller
+
+**Files needed:**
+- `09b-httpproxy.yaml` - Ingress routing
+- `10-certificate-certmanager.yaml` - TLS certificate (optional)
+
+**Configure:**
+
+1. Edit `09b-httpproxy.yaml`:
 ```yaml
-# Update issuer and domain:
-issuerRef:
-  name: YOUR-CLUSTER-ISSUER
-dnsNames:
-- yossarian.YOUR-DOMAIN.com
+spec:
+  virtualhost:
+    fqdn: yossarian-go.example.com  # CHANGE to your domain
 ```
 
-### Step 2: Deploy
+2. **For TLS**, choose one of:
+
+   **Option 1: cert-manager (recommended)**
+   ```bash
+   # Edit 10-certificate-certmanager.yaml
+   vi 10-certificate-certmanager.yaml
+   
+   # Change:
+   issuerRef:
+     name: letsencrypt-prod  # Your ClusterIssuer name
+   dnsNames:
+     - yossarian-go.example.com  # Your domain
+   ```
+
+   **Option 2: Manual certificate**
+   ```bash
+   kubectl create secret tls yossarian-go-tls \
+     --cert=path/to/tls.crt \
+     --key=path/to/tls.key \
+     -n yossarian-go
+   ```
+
+---
+
+#### Option B: Standard Ingress (Nginx/Traefik)
+
+**Use if:** Your cluster has Nginx, Traefik, or other standard ingress controller
+
+**Files needed:**
+- `09a-ingress.yaml` - Ingress routing
+- `10-certificate-certmanager.yaml` - TLS certificate (optional)
+
+**Configure:**
+
+1. Edit `09a-ingress.yaml`:
+```yaml
+spec:
+  ingressClassName: nginx  # Change to your ingress class
+  tls:
+    - hosts:
+        - yossarian-go.example.com  # CHANGE to your domain
+  rules:
+    - host: yossarian-go.example.com  # CHANGE to your domain
+```
+
+2. **For automatic TLS via cert-manager:**
+```yaml
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"  # Your ClusterIssuer
+```
+
+3. **Or create manual certificate** (same as HTTPProxy Option 2 above)
+
+### Step 6: Deploy
+
+**Deploy in order:**
 
 ```bash
-# Apply in order (numbered files):
+# 1. Namespace and base resources
 kubectl apply -f 01-namespace.yaml
-kubectl apply -f 02-configmap.yaml
+kubectl apply -f 02-configmaps.yaml
 kubectl apply -f 03-secrets.yaml
-kubectl apply -f 04-ca-bundle-configmap.yaml
-kubectl apply -f 05-pvcs.yaml
-kubectl apply -f 06-db-service-deployment.yaml
-kubectl apply -f 07-app-deployment.yaml
-kubectl apply -f 08-httpproxy.yaml
-kubectl apply -f 09-certificate.yaml
-kubectl apply -f 10-cronjob-ad-sync.yaml
+kubectl apply -f 04-pvcs.yaml
 
-# Or apply all at once:
-kubectl apply -f .
+# 2. Storage and databases
+kubectl apply -f 05-minio.yaml
+kubectl apply -f 06-db-service.yaml
+
+# 3. Application services
+kubectl apply -f 07-frontend.yaml
+kubectl apply -f 08-worker.yaml
+
+# 4. Ingress (choose ONE)
+kubectl apply -f 09a-ingress.yaml      # For Nginx/Traefik
+# OR
+kubectl apply -f 09b-httpproxy.yaml    # For Contour
+
+# 5. TLS certificate (optional)
+kubectl apply -f 10-certificate-certmanager.yaml
+
+# 6. Scheduled tasks (optional - for AD sync)
+kubectl apply -f 11-cronjob-ad-sync.yaml
 ```
 
-### Step 3: Verify Deployment
+**Or apply all at once:**
+```bash
+# For standard Ingress:
+kubectl apply -f 01-namespace.yaml,02-configmaps.yaml,03-secrets.yaml,04-pvcs.yaml,05-minio.yaml,06-db-service.yaml,07-frontend.yaml,08-worker.yaml,09a-ingress.yaml
+
+# For HTTPProxy:
+kubectl apply -f 01-namespace.yaml,02-configmaps.yaml,03-secrets.yaml,04-pvcs.yaml,05-minio.yaml,06-db-service.yaml,07-frontend.yaml,08-worker.yaml,09b-httpproxy.yaml
+```
+
+### Step 7: Verify Deployment
 
 ```bash
-# Check all resources
-kubectl get all -n yossarian-go
-
-# Check PVCs (should see 2 PVCs)
-kubectl get pvc -n yossarian-go
-# Expected:
-# yossarian-db-pvc      Bound   5Gi
-# yossarian-batch-pvc   Bound   100Gi
-
-# Check pods are running
+# Check all pods are running
 kubectl get pods -n yossarian-go
-# Expected:
-# yossarian-go-xxxxx              1/1   Running
-# yossarian-db-service-xxxxx      1/1   Running
 
-# Check logs
-kubectl logs -n yossarian-go -l app=yossarian-go --tail=50
-kubectl logs -n yossarian-go -l app=yossarian-db-service --tail=50
+# Expected output:
+# NAME                                    READY   STATUS    RESTARTS
+# minio-0                                 1/1     Running   0
+# yossarian-db-service-xxx                1/1     Running   0
+# yossarian-frontend-xxx                  1/1     Running   0
+# yossarian-worker-xxx                    1/1     Running   0
 
-# Look for:
-# - [BATCH] Background processor initialized ✅
-# - Server starting on port 8080 ✅
-# - Database service starting on port 8081 ✅
+# Check services
+kubectl get svc -n yossarian-go
+
+# Check ingress/httpproxy
+kubectl get ingress -n yossarian-go      # For Ingress
+kubectl get httpproxy -n yossarian-go    # For HTTPProxy
+
+# Check TLS certificate (if using cert-manager)
+kubectl get certificate -n yossarian-go
+kubectl describe certificate yossarian-go-tls -n yossarian-go
 ```
 
-### Step 4: Test
+### Step 8: Access Application
 
+**Via Ingress/HTTPProxy:**
+```
+https://yossarian-go.example.com
+```
+
+**Via Port Forward (testing):**
 ```bash
-# Access via ingress
-https://yossarian.YOUR-DOMAIN.com
-
-# Or port-forward for testing
-kubectl port-forward -n yossarian-go svc/yossarian-go-service 8080:80
-
-# Test health
-curl http://localhost:8080/health
-curl http://localhost:8081/health  # (requires separate port-forward)
-
-# Test online mode (small file)
-echo "Test from 192.168.1.1" > test.log
-curl -F "file=@test.log" http://localhost:8080/upload
-
-# Test batch mode (ZIP file)
-zip test.zip test.log
-curl -F "file=@test.zip" http://localhost:8080/upload
-# Should return: {"status": "batch_queued", "job_id": "..."}
+kubectl port-forward -n yossarian-go svc/yossarian-frontend 8080:8080
+# Access at: http://localhost:8080
 ```
 
-## 🔄 Upgrading from Previous Version
+**Default credentials (single-user mode):**
+- Username: `Administrator`
+- Password: `Yossarian123` (or your changed password)
 
-### If Upgrading from v0.9.x to v0.10.0:
+---
 
+## ⚙️ Optional: LDAP/AD Integration
+
+**Purpose:** Enables sanitization of Active Directory usernames to USN tokens (e.g., `CORP\john.doe` → `USN123456789`)
+
+**Prerequisites:**
+- Active Directory server accessible from Kubernetes
+- Service account with read access to AD
+- LDAPS (port 636) or StartTLS enabled
+
+**Configuration:**
+
+1. **Get your DC CA certificate:**
 ```bash
-# 1. Update images in deployment files
-# Already updated to v0.10.0 in these files
-
-# 2. Create new batch PVC
-kubectl apply -f 05-pvcs.yaml
-
-# 3. Update deployments (will restart pods)
-kubectl apply -f 06-db-service-deployment.yaml
-kubectl apply -f 07-app-deployment.yaml
-
-# 4. Verify batch storage mounted
-kubectl exec -n yossarian-go deployment/yossarian-go -- ls -la /data/jobs
-
-# 5. Update configmap and secrets if needed
-kubectl apply -f 02-configmap.yaml
-kubectl apply -f 03-secrets.yaml
-
-# 6. Restart pods to pick up changes
-kubectl rollout restart deployment/yossarian-go -n yossarian-go
-kubectl rollout restart deployment/yossarian-db-service -n yossarian-go
+echo | openssl s_client -connect dc01.example.com:636 -showcerts 2>/dev/null | \
+  sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' > dc-ca.crt
 ```
 
-### If You Already Have Running Deployment:
+2. **Edit `02-configmaps.yaml`:**
+```yaml
+# Uncomment and configure:
+LDAP_SERVER: "ldaps://dc01.example.com:636"
+LDAP_BIND_DN: "CN=svc-yossarian,DC=example,DC=com"
+LDAP_SEARCH_BASE: "DC=example,DC=com"
+DOMAIN_NETBIOS: "CORP"
+DOMAIN_FQDN: "example.com"
+```
 
+3. **Add CA certificate to `02-configmaps.yaml`:**
+```yaml
+data:
+  ca-bundle.crt: |
+    -----BEGIN CERTIFICATE-----
+    [Your DC CA certificate here]
+    -----END CERTIFICATE-----
+```
+
+4. **Set bind password in `03-secrets.yaml`:**
+```yaml
+LDAP_BIND_PASSWORD: "your-service-account-password"
+```
+
+5. **Deploy and test:**
 ```bash
-# Option 1: Replace resources (careful - will restart pods)
-kubectl replace -f .
+kubectl apply -f 02-configmaps.yaml,03-secrets.yaml
+kubectl rollout restart deployment -n yossarian-go
 
-# Option 2: Apply changes (safer - incremental updates)
-kubectl apply -f .
-
-# Option 3: Delete and recreate (cleanest - causes downtime)
-kubectl delete namespace yossarian-go
-kubectl apply -f .
+# Test LDAP connection
+kubectl exec -n yossarian-go deployment/yossarian-db-service -- \
+  wget -qO- http://localhost:8081/ldap/test
 ```
 
-## 🗂️ File Order & Purpose
+6. **Trigger manual sync:**
+```bash
+kubectl exec -n yossarian-go deployment/yossarian-db-service -- \
+  wget -qO- --post-data='' http://localhost:8081/ldap/sync-full
+```
 
-| File | Purpose | Required |
-|------|---------|----------|
-| `01-namespace.yaml` | Creates namespace | ✅ |
-| `02-configmap.yaml` | App configuration | ✅ |
-| `03-secrets.yaml` | Passwords & secrets | ✅ |
-| `04-ca-bundle-configmap.yaml` | Custom CA certs | Optional |
-| `05-pvcs.yaml` | Storage (DB + Batch) | ✅ |
-| `06-db-service-deployment.yaml` | Database service | ✅ |
-| `07-app-deployment.yaml` | Main application | ✅ |
-| `08-httpproxy.yaml` | Ingress (Contour) | Optional |
-| `09-certificate.yaml` | TLS cert | Optional |
-| `10-cronjob-ad-sync.yaml` | Daily AD sync | Optional |
+**Automatic daily sync** is configured via CronJob (`11-cronjob-ad-sync.yaml`)
+
+---
 
 ## 🔍 Troubleshooting
 
-### PVCs Not Binding
-```bash
-# Check if storageclass exists
-kubectl get storageclass
-
-# If using different storageclass, update in 05-pvcs.yaml:
-storageClassName: your-storage-class-name
-```
-
 ### Pods Not Starting
-```bash
-# Check events
-kubectl get events -n yossarian-go --sort-by='.lastTimestamp'
 
-# Describe pod
-kubectl describe pod -n yossarian-go <pod-name>
+```bash
+# Check pod status
+kubectl get pods -n yossarian-go
+
+# View pod events
+kubectl describe pod <pod-name> -n yossarian-go
 
 # Check logs
-kubectl logs -n yossarian-go <pod-name>
+kubectl logs -n yossarian-go deployment/yossarian-frontend
+kubectl logs -n yossarian-go deployment/yossarian-worker
+kubectl logs -n yossarian-go deployment/yossarian-db-service
 ```
 
-### Image Pull Failures
-```bash
-# If using private registry, create imagePullSecret:
-kubectl create secret docker-registry ghcr-secret \
-  --docker-server=ghcr.io \
-  --docker-username=YOUR-USERNAME \
-  --docker-password=YOUR-TOKEN \
-  -n yossarian-go
+### PVC Stuck in Pending
 
-# Add to deployments:
-spec:
-  template:
-    spec:
-      imagePullSecrets:
-      - name: ghcr-secret
+**Cause:** No default StorageClass or StorageClass not found
+
+**Solution:**
+```bash
+# Check available StorageClasses
+kubectl get storageclass
+
+# Edit PVCs and specify StorageClass
+vi 04-pvcs.yaml
+vi 05-minio.yaml  # Line 74
+```
+
+### TLS Certificate Not Working
+
+**For cert-manager:**
+```bash
+# Check certificate status
+kubectl describe certificate yossarian-go-tls -n yossarian-go
+
+# Check cert-manager logs
+kubectl logs -n cert-manager deployment/cert-manager
+
+# Check ACME challenge
+kubectl get challenges -n yossarian-go
+```
+
+### OIDC Login Failing
+
+1. **Verify OIDC configuration:**
+```bash
+kubectl get configmap yossarian-go-config -n yossarian-go -o yaml | grep OIDC
+```
+
+2. **Check redirect URL is registered in OIDC provider**
+
+3. **Verify client secret:**
+```bash
+kubectl get secret yossarian-go-secrets -n yossarian-go -o yaml
+```
+
+4. **Check frontend logs:**
+```bash
+kubectl logs -n yossarian-go deployment/yossarian-frontend | grep OIDC
 ```
 
 ### Batch Jobs Not Processing
+
+1. **Check worker is running:**
 ```bash
-# Check batch storage exists
-kubectl exec -n yossarian-go deployment/yossarian-go -- ls -la /data/jobs
-
-# Check background processor
-kubectl logs -n yossarian-go -l app=yossarian-go | grep BATCH
-
-# Check job status
-kubectl exec -n yossarian-go deployment/yossarian-db-service -- \
-  curl http://localhost:8081/jobs/list/USERNAME
+kubectl get pods -n yossarian-go -l mode=worker
 ```
 
-## 📊 Resource Requirements
+2. **Check worker logs:**
+```bash
+kubectl logs -n yossarian-go deployment/yossarian-worker -f
+```
 
-### Minimum (Development)
-- **App Pods**: 512Mi RAM, 250m CPU
-- **DB Service**: 128Mi RAM, 100m CPU
-- **Storage**: 5Gi (DB) + 10Gi (Batch)
+3. **Check MinIO connectivity:**
+```bash
+kubectl exec -n yossarian-go deployment/yossarian-worker -- \
+  wget -qO- http://minio:9000/minio/health/live
+```
 
-### Recommended (Production)
-- **App Pods**: 2Gi RAM, 1 CPU (for batch processing)
-- **DB Service**: 512Mi RAM, 200m CPU
-- **Storage**: 10Gi (DB) + 100-200Gi (Batch)
+4. **Check job status in database:**
+```bash
+kubectl exec -n yossarian-go deployment/yossarian-db-service -- \
+  wget -qO- http://localhost:8081/jobs/queued
+```
+
+---
+
+## 🧹 Cleanup
+
+**Remove everything:**
+```bash
+kubectl delete namespace yossarian-go
+```
+
+**Or remove components individually:**
+```bash
+kubectl delete -f 11-cronjob-ad-sync.yaml
+kubectl delete -f 10-certificate-certmanager.yaml
+kubectl delete -f 09a-ingress.yaml  # or 09b-httpproxy.yaml
+kubectl delete -f 08-worker.yaml
+kubectl delete -f 07-frontend.yaml
+kubectl delete -f 06-db-service.yaml
+kubectl delete -f 05-minio.yaml
+kubectl delete -f 04-pvcs.yaml
+kubectl delete -f 03-secrets.yaml
+kubectl delete -f 02-configmaps.yaml
+kubectl delete -f 01-namespace.yaml
+```
+
+**Note:** PVCs and their data will be preserved unless explicitly deleted.
+
+---
+
+## 📊 Architecture
+
+### Components
+
+- **Frontend** (3 replicas): Stateless web UI, handles uploads and user sessions
+- **Worker** (1 replica): Processes batch jobs, downloads from MinIO
+- **MinIO** (1 replica): Object storage for batch job files
+- **DB Service** (1 replica): SQLite database with HTTP API for job queue and metadata
+
+### Data Flow
+
+```
+User → Frontend → MinIO (input.zip)
+                ↓
+         Database (job record)
+                ↓
+Worker polls → Downloads from MinIO → Processes → Uploads results → MinIO
+                ↓
+User downloads ← Frontend ← MinIO (output.zip)
+```
+
+### Storage Requirements
+
+- **MinIO**: 100Gi (batch job files, 8-hour retention)
+- **Worker**: 50Gi (temporary processing space)
+- **Database**: 5Gi (job metadata, AD cache)
+
+---
 
 ## 🔐 Security Notes
 
-1. **Change default passwords** in `03-secrets.yaml`
-2. **Use proper secrets management** (Vault, Sealed Secrets, etc.)
-3. **Keep images updated** for security patches
-4. **Enable network policies** if required
-5. **Review RBAC** if needed
+### Default Credentials
+
+⚠️ **CRITICAL:** Change default passwords before production deployment!
+
+```yaml
+# In 03-secrets.yaml
+ADMIN_PASSWORD: "Yossarian123"  # CHANGE THIS!
+
+# In minio-secret
+password: "changeme-minio-password"  # CHANGE THIS!
+```
+
+### Authentication Modes
+
+| Mode | When to Use | Security Level |
+|------|-------------|----------------|
+| **Single-user (password)** | Local testing, single admin | ⚠️ Basic |
+| **Multi-user (OIDC/SSO)** | Production, multiple users | ✅ Enterprise |
+
+### Network Policies
+
+Consider adding NetworkPolicies to restrict pod-to-pod communication:
+- Frontend → MinIO, DB Service
+- Worker → MinIO, DB Service
+- DB Service → LDAP (if configured)
+
+---
 
 ## 📚 Additional Resources
 
-- **Main Repository**: https://github.com/kofadam/yossarian-go
-- **Helm Chart**: Use the provided Helm chart for easier deployment
-- **Documentation**: See project README.md
+- **GitHub**: https://github.com/kofadam/yossarian-go
+- **Docker Images**: 
+  - Frontend/Worker: `ghcr.io/kofadam/yossarian-go:latest`
+  - DB Service: `ghcr.io/kofadam/yossarian-go-db-service:latest`
+- **Architecture Docs**: See `ARCHITECTURE-v0.13.0.md` in repo
+
+---
 
 ## 🆘 Support
 
-For issues or questions:
-- GitHub Issues: https://github.com/kofadam/yossarian-go/issues
-- Check logs: `kubectl logs -n yossarian-go -l app=yossarian-go`
+**Issues:** https://github.com/kofadam/yossarian-go/issues
+
+**Version:** v0.13.3+  
+**Last Updated:** January 2026
+
+---
+
+## ✅ Quick Reference
+
+| File | Purpose | Must Edit? |
+|------|---------|------------|
+| `00-quickstart-local.yaml` | Local testing (all-in-one) | No |
+| `01-namespace.yaml` | Namespace creation | No |
+| `02-configmaps.yaml` | App configuration | Yes (for OIDC/LDAP) |
+| `03-secrets.yaml` | Passwords and secrets | **YES** |
+| `04-pvcs.yaml` | Storage claims | Maybe (StorageClass) |
+| `05-minio.yaml` | Object storage | Maybe (StorageClass) |
+| `06-db-service.yaml` | Database service | No |
+| `07-frontend.yaml` | Web UI | No |
+| `08-worker.yaml` | Batch processor | No |
+| `09a-ingress.yaml` | Standard ingress | Yes (domain) |
+| `09b-httpproxy.yaml` | Contour ingress | Yes (domain) |
+| `10-certificate-certmanager.yaml` | TLS cert | Yes (domain, issuer) |
+| `11-cronjob-ad-sync.yaml` | AD sync schedule | No |
+
+---
+
+**🛡️ Yossarian Go - Making logs safe to share, at any scale**
