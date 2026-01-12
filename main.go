@@ -1765,38 +1765,225 @@ func adminLoginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		w.Header().Set("Content-Type", "text/html")
 
-		// Show SSO button if OIDC enabled
+		// Determine mode and styling
 		ssoButton := ""
-		loginTitle := "Yossarian Admin Login"
-		loginInstructions := ""
-		
+		modeIndicator := `<div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: rgba(25, 118, 210, 0.1); border-radius: 20px; font-size: 13px; color: #1976d2; margin-bottom: 24px;">
+			<span>🔐</span>
+			<span>Single-User Mode</span>
+		</div>`
+
 		if oidcEnabled {
-			ssoButton = `<p style="text-align: center; margin: 20px 0;">
-				<a href="/auth/oidc/login" style="display: inline-block; padding: 10px 20px; background: #1976d2; color: white; text-decoration: none; border-radius: 4px;">
-					🔐 Login with SSO
-				</a>
-			</p>
-			<p style="text-align: center;">OR</p>`
-		} else {
-			// Single-user mode
-			loginTitle = "Yossarian Login"
-			loginInstructions = `<p style="text-align: center; color: #666; margin-bottom: 20px;">
-				Single-user mode: Login with admin password
-			</p>`
+			modeIndicator = `<div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: rgba(46, 125, 50, 0.1); border-radius: 20px; font-size: 13px; color: #2e7d32; margin-bottom: 24px;">
+				<span>🏢</span>
+				<span>Enterprise SSO</span>
+			</div>`
+			ssoButton = `<a href="/auth/oidc/login" class="sso-button">
+				🔐 Login with Enterprise SSO
+			</a>
+			<div class="divider"><span>OR</span></div>`
 		}
 
-		fmt.Fprintf(w, `
-		<h1>%s</h1>
-		%s
-		%s
-		<form method="post">
-			<p>
-				<label>Admin Password:</label><br>
-				<input type="password" name="password" required style="padding: 5px; width: 200px;">
-			</p>
-			<button type="submit">Login</button>
-		</form>
-		`, loginTitle, loginInstructions, ssoButton)
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Login - Yossarian Go</title>
+	<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+			background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%);
+			min-height: 100vh;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 20px;
+		}
+		
+		.login-container {
+			background: white;
+			border-radius: 16px;
+			box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+			width: 100%%;
+			max-width: 420px;
+			overflow: hidden;
+		}
+		
+		.login-header {
+			background: linear-gradient(135deg, #1976d2, #1565c0);
+			color: white;
+			padding: 40px 32px 32px;
+			text-align: center;
+		}
+		
+		.login-icon {
+			font-size: 56px;
+			margin-bottom: 16px;
+			display: block;
+		}
+		
+		.login-title {
+			font-size: 28px;
+			font-weight: 600;
+			margin-bottom: 8px;
+		}
+		
+		.login-subtitle {
+			font-size: 14px;
+			opacity: 0.9;
+		}
+		
+		.login-body {
+			padding: 32px;
+			text-align: center;
+		}
+		
+		.form-group {
+			text-align: left;
+			margin-bottom: 24px;
+		}
+		
+		.form-label {
+			display: block;
+			font-size: 14px;
+			font-weight: 500;
+			color: #424242;
+			margin-bottom: 8px;
+		}
+		
+		.form-input {
+			width: 100%%;
+			padding: 14px 16px;
+			border: 2px solid #e0e0e0;
+			border-radius: 8px;
+			font-size: 15px;
+			transition: all 0.2s;
+			font-family: inherit;
+		}
+		
+		.form-input:focus {
+			outline: none;
+			border-color: #1976d2;
+			box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
+		}
+		
+		.login-button {
+			width: 100%%;
+			padding: 14px 24px;
+			background: linear-gradient(135deg, #1976d2, #1565c0);
+			color: white;
+			border: none;
+			border-radius: 8px;
+			font-size: 15px;
+			font-weight: 500;
+			cursor: pointer;
+			transition: all 0.2s;
+			box-shadow: 0 2px 8px rgba(25, 118, 210, 0.3);
+		}
+		
+		.login-button:hover {
+			transform: translateY(-1px);
+			box-shadow: 0 4px 12px rgba(25, 118, 210, 0.4);
+		}
+		
+		.login-button:active {
+			transform: translateY(0);
+		}
+		
+		.login-footer {
+			padding: 16px 32px;
+			background: #f5f5f5;
+			text-align: center;
+			font-size: 12px;
+			color: #757575;
+		}
+		
+		.divider {
+			text-align: center;
+			color: #9e9e9e;
+			font-size: 13px;
+			margin: 16px 0;
+			position: relative;
+		}
+		
+		.divider span {
+			background: white;
+			padding: 0 12px;
+			position: relative;
+			z-index: 1;
+		}
+		
+		.divider::before {
+			content: '';
+			position: absolute;
+			top: 50%%;
+			left: 0;
+			right: 0;
+			height: 1px;
+			background: #e0e0e0;
+			z-index: 0;
+		}
+		
+		.sso-button {
+			display: block;
+			padding: 14px 24px;
+			background: linear-gradient(135deg, #1976d2, #1565c0);
+			color: white;
+			text-decoration: none;
+			border-radius: 8px;
+			font-weight: 500;
+			text-align: center;
+			margin-bottom: 16px;
+			box-shadow: 0 2px 8px rgba(25, 118, 210, 0.3);
+			transition: all 0.2s;
+		}
+		
+		.sso-button:hover {
+			transform: translateY(-1px);
+			box-shadow: 0 4px 12px rgba(25, 118, 210, 0.4);
+		}
+		
+		@media (max-width: 480px) {
+			.login-container { border-radius: 0; }
+			.login-header { padding: 32px 24px 24px; }
+			.login-body { padding: 24px; }
+		}
+	</style>
+</head>
+<body>
+	<div class="login-container">
+		<div class="login-header">
+			<span class="login-icon">🛡️</span>
+			<h1 class="login-title">Yossarian Go</h1>
+			<p class="login-subtitle">Secure Log Sanitization</p>
+		</div>
+		
+		<div class="login-body">
+			%s
+			
+			%s
+			
+			<form method="post">
+				<div class="form-group">
+					<label class="form-label">Admin Password</label>
+					<input type="password" name="password" class="form-input" placeholder="Enter password" required autofocus>
+				</div>
+				
+				<button type="submit" class="login-button">
+					🔓 Login
+				</button>
+			</form>
+		</div>
+		
+		<div class="login-footer">
+			🛡️ Yossarian Go - Secure Log Sanitization
+		</div>
+	</div>
+</body>
+</html>`, modeIndicator, ssoButton)
 		return
 	}
 

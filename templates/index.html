@@ -865,7 +865,7 @@
                 </a>
             </div>
             
-            <div class="nav-footer">
+                        <div class="nav-footer">
                 <div class="user-info">
                     <div class="user-avatar" id="userAvatar">U</div>
                     <div class="user-details">
@@ -873,10 +873,14 @@
                         <div class="user-role" id="userRole">Visitor</div>
                     </div>
                 </div>
-                <div style="padding: 8px 12px; margin-top: 8px;">
-                    <a href="/admin" style="text-decoration: none; color: var(--md-on-surface-variant); font-size: 12px; display: flex; align-items: center; gap: 8px;" id="adminLink">
+                <div style="padding: 8px 12px; margin-top: 8px; display: flex; flex-direction: column; gap: 4px;">
+                    <a href="/admin" style="text-decoration: none; color: var(--md-on-surface-variant); font-size: 12px; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; transition: background 0.2s;" id="adminLink" onmouseover="this.style.background='var(--md-surface-3)'" onmouseout="this.style.background='transparent'">
                         <span>⚙️</span>
                         <span>Admin Panel</span>
+                    </a>
+                    <a href="/admin/logout" style="text-decoration: none; color: #d32f2f; font-size: 12px; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; transition: background 0.2s;" onmouseover="this.style.background='#ffebee'" onmouseout="this.style.background='transparent'">
+                        <span>🚪</span>
+                        <span>Logout</span>
                     </a>
                 </div>
             </div>
