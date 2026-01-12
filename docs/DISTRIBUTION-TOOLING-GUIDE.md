@@ -51,7 +51,7 @@ annotations:
 
 ```bash
 # Install Distribution Tooling
-curl -L https://github.com/vmware-labs/distribution-tooling-for-helm/releases/latest/download/dt-linux-amd64.tar.gz | tar xz
+curl -L https://github.com/vmware-labs/distribution-tooling-for-helm/releases/download/v0.4.12/distribution-tooling-for-helm_0.4.12_linux_amd64.tar.gz | tar xz
 sudo mv dt /usr/local/bin/
 
 # Wrap the chart with all images
