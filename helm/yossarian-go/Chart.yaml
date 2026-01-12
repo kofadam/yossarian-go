@@ -1,31 +1,15 @@
 annotations:
   # Distribution Tooling for Helm (dt4h) annotations for air-gap support
   # See: https://github.com/vmware-labs/distribution-tooling-for-helm
-  distribution.carto.run/images: |
-    - name: yossarian-go
-      image: ghcr.io/kofadam/yossarian-go:v0.13.8
-      whitelisted: true
-    - name: yossarian-go-db-service
-      image: ghcr.io/kofadam/yossarian-go-db-service:v0.12.3
-      whitelisted: true
-    - name: minio
-      image: quay.io/minio/minio:RELEASE.2024-01-01T00-00-00Z
-      whitelisted: true
-    - name: curl
-      image: curlimages/curl:8.5.0
-      whitelisted: true
-  
-  # Legacy images annotation (for backwards compatibility)
   images: |
     - name: yossarian-go
       image: ghcr.io/kofadam/yossarian-go:v0.13.8
     - name: yossarian-go-db-service
       image: ghcr.io/kofadam/yossarian-go-db-service:v0.12.3
     - name: minio
-      image: quay.io/minio/minio:RELEASE.2024-01-01T00-00-00Z
+      image: quay.io/minio/minio:latest
     - name: curl
-      image: curlimages/curl:8.5.0
-  
+      image: curlimages/curl:latest
   # OCI annotations
   org.opencontainers.image.description: Enterprise log sanitization with pattern detection and batch processing
   org.opencontainers.image.licenses: MIT
