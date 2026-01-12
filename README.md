@@ -45,14 +45,13 @@ helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
 **📦 Air-Gap Installation** (using Distribution Tooling for Helm):
 ```bash
 # Wrap chart with all container images included
-dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8 -o /tmp/wrapped
+dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8
 
 # Push to air-gapped registry
-dt push /tmp/wrapped/yossarian-go-0.13.8.wrap.tgz \
-  oci://your-registry.local/yossarian-go:0.13.8
+dt unwrap yossarian-go-0.13.8.wrap.tgz your-registry.yourdomain.local/project/charts --yes
 
 # Install in air-gap environment
-helm install yossarian oci://your-registry.local/yossarian-go:0.13.8
+helm install yossarian oci://your-registry.yourdomain.local/project/charts/yossarian-go
 ```
 
 > **💡 New to Distribution Tooling?** It bundles all container images with the Helm chart for true air-gap deployment. Learn more: [Distribution Tooling Guide](docs/DISTRIBUTION-TOOLING-GUIDE.md)
