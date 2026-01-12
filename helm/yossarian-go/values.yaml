@@ -1,0 +1,262 @@
+# Default values for yossarian-go
+# This is a YAML-formatted file.
+
+# Ingress configuration
+ingress:
+  enabled: true
+  # Ingress class (nginx, traefik, contour, etc.)
+  className: ""
+  # Host for accessing the application
+  host: yossarian.example.com
+  # For Contour HTTPProxy (set to false for standard Ingress)
+  useContourHTTPProxy: true
+  # Annotations for standard Ingress (ignored if useContourHTTPProxy=true)
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  # TLS configuration
+  tls: []
+    # - secretName: yossarian-tls
+    #   hosts:
+    #     - yossarian.example.com
+
+# Authentication
+auth:
+  # Admin password (used if OIDC is disabled or as fallback)
+  adminPassword: "changeme"
+
+# OIDC configuration (Enterprise SSO)
+oidc:
+  enabled: false
+  # OIDC provider URL (examples below)
+  # Okta: https://your-domain.okta.com
+  # Auth0: https://your-domain.auth0.com
+  # Keycloak: https://keycloak.company.com/realms/myrealm
+  # Azure AD: https://login.microsoftonline.com/{tenant-id}/v2.0
+  issuerURL: ""
+  clientID: ""
+  clientSecret: ""
+  # Redirect URL (must match provider configuration)
+  redirectURL: ""  # https://yossarian.example.com/auth/oidc/callback
+  # Force all users to authenticate via OIDC
+  autoSSO: true
+
+# LDAP/Active Directory integration
+ldap:
+  enabled: false
+  server: ""  # ldaps://dc.company.com:636
+  bindDN: ""  # CN=svc-yossarian,OU=Service,DC=company,DC=com
+  bindPassword: ""
+  searchBase: ""  # DC=company,DC=com
+  syncInterval: 3600  # seconds (1 hour)
+  # Custom CA certificate for LDAPS (PEM format)
+  # Extract with: openssl s_client -showcerts -connect dc.company.com:636 </dev/null 2>/dev/null | openssl x509 -outform PEM
+  # This is separate from customCA.certificate (OIDC) - see README for details
+  caCert: ""
+  # caCert: |
+  #   -----BEGIN CERTIFICATE-----
+  #   MIIDXTCCAkWgAwIBAgIJAKZ...
+  #   -----END CERTIFICATE-----
+
+# Domain configuration (for AD account mapping)
+domain:
+  netbios: ""  # e.g., CORP
+  fqdn: ""     # e.g., company.com
+
+# Custom CA certificate (for OIDC providers with self-signed certs)
+# Extract with: openssl s_client -showcerts -connect keycloak.company.com:443 </dev/null 2>/dev/null | openssl x509 -outform PEM
+# This is used by frontend/worker for OIDC authentication (CA_CERT_PATH)
+# For Active Directory LDAPS, use ldap.caCert instead (DC_CA_CERT_PATH)
+customCA:
+  enabled: false
+  # CA certificate bundle in PEM format
+  certificate: ""
+  # certificate: |
+  #   -----BEGIN CERTIFICATE-----
+  #   MIIDXTCCAkWgAwIBAgIJAKZ...
+  #   -----END CERTIFICATE-----
+
+# Persistent storage
+persistence:
+  # MinIO storage (batch job files)
+  minio:
+    size: 100Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+  
+  # Database storage (SQLite)
+  database:
+    size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+  
+  # Worker processing storage
+  worker:
+    size: 50Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
+# MinIO configuration
+minio:
+  # Credentials
+  accessKey: "yossarian"
+  secretKey: ""  # Generate strong password (auto-generated if empty)
+  # Bucket name
+  bucket: "yossarian-jobs"
+  # Image
+  image:
+    repository: quay.io/minio/minio
+    tag: latest
+    pullPolicy: IfNotPresent
+  # Resources
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# Application images
+images:
+  # Frontend/Worker image
+  app:
+    repository: ghcr.io/kofadam/yossarian-go
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  # Database service image
+  database:
+    repository: ghcr.io/kofadam/yossarian-go-db-service
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  # CronJob curl image
+  curl:
+    repository: curlimages/curl
+    tag: latest
+    pullPolicy: IfNotPresent
+
+# Image pull secrets (if using private registry)
+imagePullSecrets: []
+
+# Frontend deployment
+frontend:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  # Node selector
+  nodeSelector: {}
+  # Tolerations
+  tolerations: []
+  # Affinity
+  affinity: {}
+
+# Worker deployment
+worker:
+  # Must be 1 (RWO PVC limitation)
+  replicas: 1
+  # Poll interval for job queue (seconds)
+  pollInterval: 5
+  # Job cancellation timeout (seconds) - cancel jobs stuck in processing
+  # Set to 0 to disable cancellation (not recommended)
+  cancellationTimeout: 3600  # 1 hour
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi  # Reduced from 512Mi (v0.13.8 optimization)
+    limits:
+      cpu: 1000m
+      memory: 512Mi  # Reduced from 2Gi (v0.13.8 optimization)
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Database service
+database:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# File upload limits
+limits:
+  maxTotalUploadSizeMB: 100
+  maxFileSizeMB: 50
+  maxZipFileSizeMB: 10
+  maxFileCount: 10
+
+# Organization settings
+organization:
+  # Custom sensitive terms (comma-separated)
+  sensitiveTerms: ""
+  # Server prefixes for detection (comma-separated)
+  serverPrefixes: ""
+
+# CronJob for AD sync
+cronjob:
+  enabled: true
+  # Daily at 1 AM
+  schedule: "0 1 * * *"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# Service configuration
+service:
+  type: ClusterIP
+  # Additional annotations
+  annotations: {}
+
+# Pod security context
+securityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+
+# Container security context
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+# Prometheus monitoring
+metrics:
+  enabled: true
+  # Service monitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    # Scrape interval
+    interval: 30s
+    # Scrape timeout
+    scrapeTimeout: 10s
+    # Namespace where ServiceMonitors should be created
+    # If empty, uses the release namespace
+    namespace: ""
+    # Additional labels for ServiceMonitor (for Prometheus discovery)
+    # Example: If your Prometheus uses serviceMonitorSelector: { prometheus: kube-prometheus }
+    # then set: additionalLabels: { prometheus: kube-prometheus }
+    additionalLabels: {}
+      # prometheus: kube-prometheus
+      # release: prometheus
+
+# Additional environment variables
+extraEnv: []
+  # - name: CUSTOM_VAR
+  #   value: "custom-value"

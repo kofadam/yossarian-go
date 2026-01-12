@@ -1,0 +1,59 @@
+---
+# MinIO storage PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}-minio-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  accessModes:
+    - {{ .Values.persistence.minio.accessMode }}
+  {{- if .Values.persistence.minio.storageClass }}
+  storageClassName: {{ .Values.persistence.minio.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.minio.size }}
+
+---
+# Database PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}-db-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  accessModes:
+    - {{ .Values.persistence.database.accessMode }}
+  {{- if .Values.persistence.database.storageClass }}
+  storageClassName: {{ .Values.persistence.database.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.database.size }}
+
+---
+# Worker jobs PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}-jobs-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  accessModes:
+    - {{ .Values.persistence.worker.accessMode }}
+  {{- if .Values.persistence.worker.storageClass }}
+  storageClassName: {{ .Values.persistence.worker.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.worker.size }}
