@@ -55,8 +55,7 @@ curl -L https://github.com/vmware-labs/distribution-tooling-for-helm/releases/do
 sudo mv dt /usr/local/bin/
 
 # Wrap the chart with all images
-dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8 \
-  --output-dir ./wrapped-charts
+dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8
 
 # Result: yossarian-go-0.13.8.wrap.tgz (chart + 4 container images)
 ```
@@ -65,22 +64,20 @@ dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8 \
 
 ```bash
 # Push wrapped chart to your internal registry
-dt push ./wrapped-charts/yossarian-go-0.13.8.wrap.tgz \
-  --to-registry registry.company.internal \
-  --to-repository yossarian-go
+dt unwrap yossarian-go-0.13.8.wrap.tgz registry.company.internal/project/charts --yes
 
 # Images will be automatically relocated to:
-# - registry.company.internal/yossarian-go/yossarian-go:v0.13.8
-# - registry.company.internal/yossarian-go/yossarian-go-db-service:v0.12.3
-# - registry.company.internal/yossarian-go/minio:RELEASE.2024-01-01T00-00-00Z
-# - registry.company.internal/yossarian-go/curl:8.5.0
+# - registry.company.internal/yossarian-go/project/charts/yossarian-go:v0.13.8
+# - registry.company.internal/yossarian-go/project/charts/yossarian-go-db-service:v0.12.3
+# - registry.company.internal/yossarian-go/project/charts/minio
+# - registry.company.internal/yossarian-go/project/charts/curl
 ```
 
 ### 3. Install from Air-Gap Registry
 
 ```bash
 # Install with automatic image relocation
-helm install yossarian oci://registry.company.internal/yossarian-go \
+helm install yossarian oci://registry.company.internal/project/charts/yossarian-go \
   --version 0.13.8 \
   -n yossarian-go --create-namespace \
   --set ingress.host=yossarian.company.com
