@@ -1,0 +1,220 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yossarian-tour-config
+  namespace: yossarian-go
+  labels:
+    app: yossarian-go
+    component: tour
+data:
+  tour-en.json: |
+    {
+      "meta": {
+        "version": "1.0",
+        "language": "en",
+        "direction": "ltr"
+      },
+      "config": {
+        "autoStartForNewUsers": true,
+        "overlayOpacity": 0.75,
+        "animationDuration": 300,
+        "storageKey": "yossarian_tour_completed"
+      },
+      "steps": [
+        {
+          "id": "welcome",
+          "type": "modal",
+          "title": "Welcome to Yossarian Go! 🛡️",
+          "content": "This tool helps you <strong>sanitize log files</strong> before sharing them with external vendors or support teams.<br><br>⚠️ <strong>Important:</strong> You are responsible for exporting logs using the correct procedures and paths. This tool only removes sensitive content from the files you provide."
+        },
+        {
+          "id": "nav-overview",
+          "target": ".nav-items",
+          "title": "Navigation",
+          "content": "<strong>Secure Files</strong> - Upload and sanitize logs<br><strong>My Words</strong> - Add custom terms to redact<br><strong>My Jobs</strong> - Track batch processing<br><strong>Help</strong> - Documentation & tips",
+          "position": "right"
+        },
+        {
+          "id": "dropzone",
+          "target": "#dropZone",
+          "title": "Step 1: Upload Files",
+          "content": "Drag & drop your log files here, or click to browse.<br><br>Supports: <code>.log</code>, <code>.txt</code>, <code>.zip</code>, <code>.tar.gz</code>, <code>.json</code>, <code>.xml</code>, <code>.csv</code>",
+          "position": "bottom"
+        },
+        {
+          "id": "preview",
+          "target": "#previewPanel",
+          "title": "Pattern Preview",
+          "content": "After selecting files, a preview appears showing detected sensitive patterns: IP addresses, AD accounts, tokens, passwords, and your custom terms.",
+          "position": "top",
+          "note": "This panel appears after file selection"
+        },
+        {
+          "id": "detailed-report",
+          "target": "#detailedReportCheckbox",
+          "title": "Detailed Replacement Report",
+          "content": "Enable this option to generate a CSV showing <strong>exactly what was replaced</strong>: line numbers, original values, and replacement tokens.<br><br>Useful for auditing and learning what the tool detects.",
+          "position": "top"
+        },
+        {
+          "id": "process-button",
+          "target": "#processBtn",
+          "title": "Step 2: Process Files",
+          "content": "Click here to start sanitization. Processing happens on the server - your files never leave the organization's network.",
+          "position": "top"
+        },
+        {
+          "id": "save-warning",
+          "type": "modal",
+          "title": "⚠️ Critical: Save Your Results!",
+          "content": "After processing completes, you <strong>MUST download and save</strong> all files and reports immediately.<br><br>❌ <strong>Reports cannot be retrieved later</strong> - they are automatically deleted after your session ends.<br><br>✅ Always save:<br>• Sanitized files (.zip)<br>• Mapping report (for reference)<br>• Detailed CSV report (if enabled)"
+        },
+        {
+          "id": "my-words",
+          "target": "[data-panel='my-words']",
+          "title": "Custom Sensitive Terms",
+          "content": "Add organization-specific terms that should be redacted: project names, client names, or internal codenames.<br><br>These are stored encrypted in your browser.",
+          "position": "right"
+        },
+        {
+          "id": "my-jobs",
+          "target": "[data-panel='my-jobs']",
+          "title": "Batch Job Tracking",
+          "content": "When processing ZIP files with many logs, track progress here. Download results when jobs complete.",
+          "position": "right"
+        },
+        {
+          "id": "user-info",
+          "target": ".user-info",
+          "title": "Your Session",
+          "content": "View your current session info and logout when done.<br><br>Remember: all temporary files are deleted on logout.",
+          "position": "top"
+        },
+        {
+          "id": "complete",
+          "type": "modal",
+          "title": "You're Ready! 🎉",
+          "content": "You can restart this tour anytime from the <strong>Help</strong> section or the language selector below.<br><br>Questions? Check the Help page for detailed documentation."
+        }
+      ],
+      "ui": {
+        "buttons": {
+          "next": "Next →",
+          "prev": "← Back",
+          "skip": "Skip Tour",
+          "finish": "Let's Go!"
+        },
+        "accessibility": {
+          "closeLabel": "Close",
+          "stepOf": "Step {current} of {total}"
+        },
+        "tourButton": "🎯 Start Tour",
+        "languageLabel": "Language"
+      }
+    }
+  tour-he.json: |
+    {
+      "meta": {
+        "version": "1.0",
+        "language": "he",
+        "direction": "ltr"
+      },
+      "config": {
+        "autoStartForNewUsers": true,
+        "overlayOpacity": 0.75,
+        "animationDuration": 300,
+        "storageKey": "yossarian_tour_completed"
+      },
+      "steps": [
+        {
+          "id": "welcome",
+          "type": "modal",
+          "title": "!Yossarian Go-ברוכים הבאים ל 🛡️",
+          "content": "כלי זה מסייע לך <strong>לנקות קבצי לוג</strong> לפני שיתופם עם ספקים חיצוניים או צוותי תמיכה.<br><br>⚠️ <strong>חשוב:</strong> באחריותך לייצא לוגים בהתאם לנהלים ולנתיבים הנכונים. כלי זה רק מסיר תוכן רגיש מהקבצים שאתה מספק."
+        },
+        {
+          "id": "nav-overview",
+          "target": ".nav-items",
+          "title": "ניווט",
+          "content": "<strong>אבטח קבצים</strong> - העלה ונקה לוגים<br><strong>המילים שלי</strong> - הוסף מונחים מותאמים להסרה<br><strong>העבודות שלי</strong> - עקוב אחר עיבוד אצווה<br><strong>עזרה</strong> - תיעוד וטיפים",
+          "position": "right"
+        },
+        {
+          "id": "dropzone",
+          "target": "#dropZone",
+          "title": "שלב 1: העלאת קבצים",
+          "content": "גרור ושחרר קבצי לוג כאן, או לחץ לעיון.<br><br>:תומך ב <code>.log</code>, <code>.txt</code>, <code>.zip</code>, <code>.tar.gz</code>, <code>.json</code>, <code>.xml</code>, <code>.csv</code>",
+          "position": "bottom"
+        },
+        {
+          "id": "preview",
+          "target": "#previewPanel",
+          "title": "תצוגה מקדימה של תבניות",
+          "content": "לאחר בחירת קבצים, תופיע תצוגה מקדימה של תבניות רגישות שזוהו: כתובות IP, חשבונות AD, טוקנים, סיסמאות, והמונחים המותאמים שלך.",
+          "position": "top",
+          "note": "לוח זה מופיע לאחר בחירת קבצים"
+        },
+        {
+          "id": "detailed-report",
+          "target": "#detailedReportCheckbox",
+          "title": "דוח החלפות מפורט",
+          "content": "הפעל אפשרות זו ליצירת CSV המציג <strong>בדיוק מה הוחלף</strong>: מספרי שורות, ערכים מקוריים, וטוקני החלפה.<br><br>שימושי לביקורת וללמידה מה הכלי מזהה.",
+          "position": "top"
+        },
+        {
+          "id": "process-button",
+          "target": "#processBtn",
+          "title": "שלב 2: עיבוד קבצים",
+          "content": "לחץ כאן להתחלת הניקוי. העיבוד מתבצע בשרת - הקבצים שלך לעולם לא עוזבים את רשת הארגון.",
+          "position": "top"
+        },
+        {
+          "id": "save-warning",
+          "type": "modal",
+          "title": "⚠️ קריטי: שמור את התוצאות!",
+          "content": "לאחר סיום העיבוד, <strong>חובה להוריד ולשמור</strong> את כל הקבצים והדוחות מיד.<br><br>❌ <strong>לא ניתן לשחזר דוחות מאוחר יותר</strong> - הם נמחקים אוטומטית בסיום ההפעלה.<br><br>✅ תמיד שמור:<br>• קבצים מנוקים (zip.)<br>• דוח מיפוי (לעיון)<br>• דוח CSV מפורט (אם הופעל)"
+        },
+        {
+          "id": "my-words",
+          "target": "[data-panel='my-words']",
+          "title": "מונחים רגישים מותאמים",
+          "content": "הוסף מונחים ספציפיים לארגון שיש להסיר: שמות פרויקטים, שמות לקוחות, או שמות קוד פנימיים.<br><br>אלה מאוחסנים מוצפנים בדפדפן שלך.",
+          "position": "right"
+        },
+        {
+          "id": "my-jobs",
+          "target": "[data-panel='my-jobs']",
+          "title": "מעקב עבודות אצווה",
+          "content": "בעת עיבוד קבצי ZIP עם לוגים רבים, עקוב אחר ההתקדמות כאן. הורד תוצאות כשהעבודות מסתיימות.",
+          "position": "right"
+        },
+        {
+          "id": "user-info",
+          "target": ".user-info",
+          "title": "ההפעלה שלך",
+          "content": "צפה בפרטי ההפעלה הנוכחית והתנתק בסיום.<br><br>זכור: כל הקבצים הזמניים נמחקים בהתנתקות.",
+          "position": "top"
+        },
+        {
+          "id": "complete",
+          "type": "modal",
+          "title": "!אתה מוכן 🎉",
+          "content": "תוכל להפעיל מחדש סיור זה בכל עת מאזור <strong>העזרה</strong> או מבורר השפה למטה.<br><br>שאלות? בדוק את דף העזרה לתיעוד מפורט."
+        }
+      ],
+      "ui": {
+        "buttons": {
+          "next": "← הבא",
+          "prev": "הקודם →",
+          "skip": "דלג על הסיור",
+          "finish": "!בוא נתחיל"
+        },
+        "accessibility": {
+          "closeLabel": "סגור",
+          "stepOf": "שלב {current} מתוך {total}"
+        },
+        "tourButton": "🎯 התחל סיור",
+        "languageLabel": "שפה"
+      }
+    }

@@ -2808,6 +2808,12 @@ func generateProcessingSummary(filepath string, jobID string, fileCount int, sta
 }
 
 func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	// Require authentication for report downloads
+	if !isValidAdminSession(r) {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
 	// Parse URL: /jobs/reports/{job_id}/{report_type}
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/reports/"), "/")
 	if len(pathParts) != 2 {
@@ -2818,8 +2824,8 @@ func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	jobID := pathParts[0]
 	reportType := pathParts[1]
 
-	// Get username for audit logging
-	username := "anonymous"
+	// Get username from validated session
+	username := "Administrator" // Default for single-user mode
 	if cookie, err := r.Cookie("admin_session"); err == nil {
 		sessionMutex.Lock()
 		if user, exists := sessionUsers[cookie.Value]; exists {
@@ -3798,6 +3804,43 @@ func generateProcessingSummaryInMemory(jobID string, fileCount int, stats map[st
 	return string(data)
 }
 
+// tourContentHandler serves tour content JSON from ConfigMap
+func tourContentHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract language from path: /api/tour/en or /api/tour/he
+	lang := strings.TrimPrefix(r.URL.Path, "/api/tour/")
+	if lang == "" {
+		lang = "en" // default to English
+	}
+
+	// Validate language
+	if lang != "en" && lang != "he" {
+		http.Error(w, "Unsupported language. Use 'en' or 'he'", http.StatusBadRequest)
+		return
+	}
+
+	// Try to read from ConfigMap mount path
+	tourConfigPath := os.Getenv("TOUR_CONFIG_PATH")
+	if tourConfigPath == "" {
+		tourConfigPath = "/config/tour" // default mount path
+	}
+
+	filePath := fmt.Sprintf("%s/tour-%s.json", tourConfigPath, lang)
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		// If file not found, return embedded fallback (minimal tour)
+		log.Printf("[TOUR] Config file not found at %s, returning fallback", filePath)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fallback := `{"meta":{"version":"1.0","language":"` + lang + `"},"steps":[],"ui":{"buttons":{"next":"Next","prev":"Back","skip":"Skip","finish":"Done"},"tourButton":"Start Tour"}}`
+		w.Write([]byte(fallback))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=3600") // Cache for 1 hour
+	w.Write(content)
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -3889,6 +3932,9 @@ func main() {
 	http.HandleFunc("/admin/api/org-settings/list", adminRequired(proxyOrgSettingsList))
 	http.HandleFunc("/admin/api/org-settings/update", adminRequired(proxyOrgSettingsUpdate))
 	http.HandleFunc("/api/org-settings/public", proxyOrgSettingsPublic) // No auth required - public endpoint
+
+	// Tour content endpoint (no auth required - public endpoint)
+	http.HandleFunc("/api/tour/", tourContentHandler)
 
 	// Debug route
 	http.HandleFunc("/debug", debugHandler)

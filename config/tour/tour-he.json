@@ -1,0 +1,96 @@
+{
+  "meta": {
+    "version": "1.0",
+    "language": "he",
+    "direction": "ltr"
+  },
+  "config": {
+    "autoStartForNewUsers": true,
+    "overlayOpacity": 0.75,
+    "animationDuration": 300,
+    "storageKey": "yossarian_tour_completed"
+  },
+  "steps": [
+    {
+      "id": "welcome",
+      "type": "modal",
+      "title": "!Yossarian Go-ברוכים הבאים ל 🛡️",
+      "content": "כלי זה מסייע לך <strong>לנקות קבצי לוג</strong> לפני שיתופם עם ספקים חיצוניים או צוותי תמיכה.<br><br>⚠️ <strong>חשוב:</strong> באחריותך לייצא לוגים בהתאם לנהלים ולנתיבים הנכונים. כלי זה רק מסיר תוכן רגיש מהקבצים שאתה מספק."
+    },
+    {
+      "id": "nav-overview",
+      "target": ".nav-items",
+      "title": "ניווט",
+      "content": "<strong>אבטח קבצים</strong> - העלה ונקה לוגים<br><strong>המילים שלי</strong> - הוסף מונחים מותאמים להסרה<br><strong>העבודות שלי</strong> - עקוב אחר עיבוד אצווה<br><strong>עזרה</strong> - תיעוד וטיפים",
+      "position": "right"
+    },
+    {
+      "id": "dropzone",
+      "target": "#dropZone",
+      "title": "שלב 1: העלאת קבצים",
+      "content": "גרור ושחרר קבצי לוג כאן, או לחץ לעיון.<br><br>:תומך ב <code>.log</code>, <code>.txt</code>, <code>.zip</code>, <code>.tar.gz</code>, <code>.json</code>, <code>.xml</code>, <code>.csv</code>",
+      "position": "bottom"
+    },
+    {
+      "id": "detailed-report",
+      "target": "#detailedReportCheckbox",
+      "title": "דוח החלפות מפורט",
+      "content": "הפעל אפשרות זו ליצירת CSV המציג <strong>בדיוק מה הוחלף</strong>: מספרי שורות, ערכים מקוריים, וטוקני החלפה.<br><br>שימושי לביקורת וללמידה מה הכלי מזהה.",
+      "position": "top"
+    },
+    {
+      "id": "process-button",
+      "target": "#processBtn",
+      "title": "שלב 2: עיבוד קבצים",
+      "content": "לחץ כאן להתחלת הניקוי. העיבוד מתבצע בשרת - הקבצים שלך לעולם לא עוזבים את רשת הארגון.",
+      "position": "top"
+    },
+    {
+      "id": "save-warning",
+      "type": "modal",
+      "title": "⚠️ קריטי: שמור את התוצאות!",
+      "content": "לאחר סיום העיבוד, <strong>חובה להוריד ולשמור</strong> את כל הקבצים והדוחות מיד.<br><br>❌ <strong>לא ניתן לשחזר דוחות מאוחר יותר</strong> - הם נמחקים אוטומטית בסיום ההפעלה.<br><br>✅ תמיד שמור:<br>• קבצים מנוקים (zip.)<br>• דוח מיפוי (לעיון)<br>• דוח CSV מפורט (אם הופעל)"
+    },
+    {
+      "id": "my-words",
+      "target": "[data-panel='my-words']",
+      "title": "מונחים רגישים מותאמים",
+      "content": "הוסף מונחים ספציפיים לארגון שיש להסיר: שמות פרויקטים, שמות לקוחות, או שמות קוד פנימיים.<br><br>אלה מאוחסנים מוצפנים בדפדפן שלך.",
+      "position": "right"
+    },
+    {
+      "id": "my-jobs",
+      "target": "[data-panel='my-jobs']",
+      "title": "מעקב עבודות אצווה",
+      "content": "בעת עיבוד קבצי ZIP עם לוגים רבים, עקוב אחר ההתקדמות כאן. הורד תוצאות כשהעבודות מסתיימות.",
+      "position": "right"
+    },
+    {
+      "id": "user-info",
+      "target": ".user-info",
+      "title": "ההפעלה שלך",
+      "content": "צפה בפרטי ההפעלה הנוכחית והתנתק בסיום.<br><br>זכור: כל הקבצים הזמניים נמחקים בהתנתקות.",
+      "position": "top"
+    },
+    {
+      "id": "complete",
+      "type": "modal",
+      "title": "!אתה מוכן 🎉",
+      "content": "תוכל להפעיל מחדש סיור זה בכל עת מאזור <strong>העזרה</strong> או מבורר השפה למטה.<br><br>שאלות? בדוק את דף העזרה לתיעוד מפורט."
+    }
+  ],
+  "ui": {
+    "buttons": {
+      "next": "→ הבא",
+      "prev": "הקודם ←",
+      "skip": "דלג על הסיור",
+      "finish": "!בוא נתחיל"
+    },
+    "accessibility": {
+      "closeLabel": "סגור",
+      "stepOf": "שלב {current} מתוך {total}"
+    },
+    "tourButton": "🎯 התחל סיור",
+    "languageLabel": "שפה"
+  }
+}

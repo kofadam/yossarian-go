@@ -86,6 +86,9 @@ spec:
               mountPath: /etc/ssl/certs/ca-bundle.crt
               subPath: ca-bundle.crt
               readOnly: true
+            - name: tour-config
+              mountPath: /config/tour
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /health
@@ -109,4 +112,8 @@ spec:
         - name: custom-ca
           configMap:
             name: custom-ca-bundle
+            optional: true
+        - name: tour-config
+          configMap:
+            name: yossarian-tour-config
             optional: true

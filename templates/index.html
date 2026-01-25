@@ -829,6 +829,282 @@
         .btn-report:hover {
             background: #bbdefb;
         }
+
+        /* ==================== SPOTLIGHT TOUR STYLES ==================== */
+        .tour-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            z-index: 9998;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .tour-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .tour-overlay.modal-active {
+            background: rgba(0, 0, 0, 0.75);
+        }
+
+        .tour-spotlight {
+            position: absolute;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.8);
+            border-radius: 8px;
+            z-index: 9999;
+            transition: all 0.3s ease;
+            pointer-events: none;
+            background: transparent;
+        }
+
+        .tour-spotlight.active {
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid var(--md-primary);
+        }
+
+        .tour-tooltip {
+            position: absolute;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            max-width: 380px;
+            min-width: 300px;
+            z-index: 10000;
+            animation: tourFadeIn 0.3s ease;
+        }
+
+        @keyframes tourFadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .tour-tooltip-header {
+            padding: 20px 24px 12px;
+            border-bottom: 1px solid var(--md-outline-variant);
+        }
+
+        .tour-tooltip-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--md-on-surface);
+            margin: 0;
+        }
+
+        .tour-tooltip-step {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+            margin-top: 4px;
+        }
+
+        .tour-tooltip-content {
+            padding: 16px 24px;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--md-on-surface);
+        }
+
+        .tour-tooltip-content code {
+            background: var(--md-surface-3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .tour-tooltip-footer {
+            padding: 16px 24px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .tour-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tour-btn-primary {
+            background: var(--md-primary);
+            color: white;
+        }
+
+        .tour-btn-primary:hover {
+            background: #1565c0;
+        }
+
+        .tour-btn-secondary {
+            background: transparent;
+            color: var(--md-primary);
+        }
+
+        .tour-btn-secondary:hover {
+            background: var(--md-primary-container);
+        }
+
+        .tour-btn-skip {
+            background: transparent;
+            color: var(--md-on-surface-variant);
+            font-size: 13px;
+        }
+
+        .tour-btn-skip:hover {
+            color: var(--md-on-surface);
+        }
+
+        .tour-progress {
+            display: flex;
+            gap: 6px;
+            justify-content: center;
+            padding: 0 24px 16px;
+        }
+
+        .tour-progress-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--md-outline-variant);
+            transition: all 0.2s ease;
+        }
+
+        .tour-progress-dot.active {
+            background: var(--md-primary);
+            width: 24px;
+            border-radius: 4px;
+        }
+
+        .tour-progress-dot.completed {
+            background: var(--md-primary);
+        }
+
+        /* Modal style for centered dialogs */
+        .tour-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+            max-width: 480px;
+            width: 90%;
+            z-index: 10000;
+            animation: tourModalIn 0.3s ease;
+        }
+
+        @keyframes tourModalIn {
+            from { opacity: 0; transform: translate(-50%, -50%) scale(0.95); }
+            to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        }
+
+        .tour-modal .tour-tooltip-header {
+            padding: 28px 32px 16px;
+            border-bottom: none;
+            text-align: center;
+        }
+
+        .tour-modal .tour-tooltip-title {
+            font-size: 22px;
+        }
+
+        .tour-modal .tour-tooltip-content {
+            padding: 8px 32px 24px;
+            text-align: center;
+        }
+
+        .tour-modal .tour-tooltip-footer {
+            padding: 0 32px 28px;
+            justify-content: center;
+        }
+
+        /* Tour trigger buttons */
+        .tour-start-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background: var(--md-primary-container);
+            color: var(--md-on-primary-container);
+            border: none;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tour-start-btn:hover {
+            background: var(--md-primary);
+            color: white;
+        }
+
+        /* Language selector */
+        .lang-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .lang-selector select {
+            padding: 6px 12px;
+            border: 1px solid var(--md-outline-variant);
+            border-radius: 8px;
+            background: var(--md-surface-1);
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .lang-selector select:focus {
+            outline: none;
+            border-color: var(--md-primary);
+        }
+
+        /* Tooltip arrow */
+        .tour-tooltip::before {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background: white;
+            transform: rotate(45deg);
+        }
+
+        .tour-tooltip.position-bottom::before {
+            top: -8px;
+            left: 50%;
+            margin-left: -8px;
+        }
+
+        .tour-tooltip.position-top::before {
+            bottom: -8px;
+            left: 50%;
+            margin-left: -8px;
+        }
+
+        .tour-tooltip.position-left::before {
+            right: -8px;
+            top: 50%;
+            margin-top: -8px;
+        }
+
+        .tour-tooltip.position-right::before {
+            left: -8px;
+            top: 50%;
+            margin-top: -8px;
+        }
     </style>
 </head>
 <body>
@@ -873,6 +1149,18 @@
                         <div class="user-role" id="userRole">Visitor</div>
                     </div>
                 </div>
+                <!-- Language & Tour Controls -->
+                <div class="lang-selector" style="border-bottom: 1px solid var(--md-outline-variant); margin-bottom: 8px; padding-bottom: 12px;">
+                    <span id="langLabel">🌐</span>
+                    <select id="langSelect" onchange="window.yossarianTour.setLanguage(this.value)">
+                        <option value="en">English</option>
+                        <option value="he">עברית</option>
+                    </select>
+                    <button class="tour-start-btn" style="margin-left: auto; padding: 6px 12px; font-size: 12px;" onclick="window.yossarianTour.start()">
+                        🎯 <span id="navTourBtnText">Tour</span>
+                    </button>
+                </div>
+
                 <div style="padding: 8px 12px; margin-top: 8px; display: flex; flex-direction: column; gap: 4px;">
                     <a href="/admin" style="text-decoration: none; color: var(--md-on-surface-variant); font-size: 12px; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; transition: background 0.2s;" id="adminLink" onmouseover="this.style.background='var(--md-surface-3)'" onmouseout="this.style.background='transparent'">
                         <span>⚙️</span>
@@ -1039,6 +1327,20 @@
                     <p class="panel-subtitle">Learn how to use Yossarian Go effectively</p>
                 </div>
 
+                <!-- Tour Start Card -->
+                <div class="md-card" style="background: linear-gradient(135deg, var(--md-primary-container), #bbdefb); margin-bottom: 24px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+                        <div>
+                            <h3 style="margin: 0 0 8px 0; color: var(--md-on-primary-container);">🎯 Interactive Tour</h3>
+                            <p style="margin: 0; color: var(--md-on-primary-container); opacity: 0.9; font-size: 14px;">New here? Take a quick guided tour of the application.</p>
+                        </div>
+                        <button class="tour-start-btn" onclick="window.yossarianTour.start()">
+                            <span>🎯</span>
+                            <span id="tourBtnText">Start Tour</span>
+                        </button>
+                    </div>
+                </div>
+
                 <div class="md-card">
                     <h3 style="margin-bottom: 16px;">🎯 What Does Yossarian Do?</h3>
                     <p style="margin-bottom: 24px;">
@@ -1164,8 +1466,8 @@
                             <button onclick="deleteJob('${job.job_id}')" class="md-button md-button-text" style="background: #ffebee; color: var(--md-error); font-size: 12px; padding: 6px 12px;">🗑️ Delete Job</button>
                         </div>
                         <div class="report-downloads">
-                            <a href="/jobs/reports/${job.job_id}/ip-mappings.csv" class="btn-report">📊 IP Mappings</a>
-                            <a href="/jobs/reports/${job.job_id}/summary.json" class="btn-report">📄 Summary</a>
+                            <button onclick="downloadReport('${job.job_id}', 'ip-mappings.csv')" class="btn-report">📊 IP Mappings</button>
+                            <button onclick="downloadReport('${job.job_id}', 'summary.json')" class="btn-report">📄 Summary</button>
                         </div>
                         <div class="security-warning">
                             ⚠️ <strong>Security Notice:</strong> Reports contain mapping details and should <strong>NOT</strong> be shared externally. Only share the sanitized ZIP file.
@@ -2325,10 +2627,373 @@
             updateProcessButton();
             fetch('/clear-download-cache', { method: 'POST' }).catch(() => {});
         }
+
+        // Download report with proper authentication
+        async function downloadReport(jobID, reportType) {
+            try {
+                const response = await fetch(`/jobs/reports/${jobID}/${reportType}`);
+                
+                if (response.status === 401) {
+                    alert('Session expired. Please refresh the page and log in again.');
+                    window.location.reload();
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`Download failed: ${response.status}`);
+                }
+                
+                // Get filename from Content-Disposition header or use default
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = reportType;
+                if (contentDisposition) {
+                    const match = contentDisposition.match(/filename="?([^"]+)"?/);
+                    if (match) filename = match[1];
+                }
+                
+                // Download the file
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+            } catch (error) {
+                console.error('Download error:', error);
+                alert(`Failed to download report: ${error.message}`);
+            }
+        }
         
         // Wire up buttons
         document.getElementById('processBtn').addEventListener('click', processFiles);
         document.getElementById('clearBtn').addEventListener('click', clearFiles);
+
+        // ==================== SPOTLIGHT TOUR ENGINE ====================
+        window.yossarianTour = (function() {
+            let tourData = null;
+            let currentStep = 0;
+            let isActive = false;
+            let currentLang = localStorage.getItem('yossarian_tour_lang') || 'en';
+
+            // DOM elements (created on init)
+            let overlay, spotlight, tooltip;
+
+            async function loadTourData(lang) {
+                try {
+                    const response = await fetch(`/api/tour/${lang}`);
+                    if (!response.ok) throw new Error('Failed to load tour');
+                    tourData = await response.json();
+                    updateUIText();
+                    return true;
+                } catch (error) {
+                    console.error('Tour load error:', error);
+                    return false;
+                }
+            }
+
+            function updateUIText() {
+                if (!tourData || !tourData.ui) return;
+                const ui = tourData.ui;
+                
+                // Update button texts
+                const tourBtnText = document.getElementById('tourBtnText');
+                const navTourBtnText = document.getElementById('navTourBtnText');
+                if (tourBtnText) tourBtnText.textContent = ui.tourButton || 'Start Tour';
+                if (navTourBtnText) navTourBtnText.textContent = 'Tour';
+            }
+
+            function createElements() {
+                // Overlay
+                overlay = document.createElement('div');
+                overlay.className = 'tour-overlay';
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) end();
+                });
+                document.body.appendChild(overlay);
+
+                // Spotlight
+                spotlight = document.createElement('div');
+                spotlight.className = 'tour-spotlight';
+                document.body.appendChild(spotlight);
+
+                // Tooltip container
+                tooltip = document.createElement('div');
+                tooltip.className = 'tour-tooltip';
+                document.body.appendChild(tooltip);
+            }
+
+            function destroyElements() {
+                if (overlay) overlay.remove();
+                if (spotlight) spotlight.remove();
+                if (tooltip) tooltip.remove();
+                overlay = spotlight = tooltip = null;
+            }
+
+            function positionTooltip(targetRect, position) {
+                const tooltipRect = tooltip.getBoundingClientRect();
+                const padding = 16;
+                let top, left;
+
+                // Remove old position classes
+                tooltip.className = 'tour-tooltip';
+
+                switch (position) {
+                    case 'bottom':
+                        top = targetRect.bottom + padding;
+                        left = targetRect.left + (targetRect.width / 2) - (tooltipRect.width / 2);
+                        tooltip.classList.add('position-bottom');
+                        break;
+                    case 'top':
+                        top = targetRect.top - tooltipRect.height - padding;
+                        left = targetRect.left + (targetRect.width / 2) - (tooltipRect.width / 2);
+                        tooltip.classList.add('position-top');
+                        break;
+                    case 'left':
+                        top = targetRect.top + (targetRect.height / 2) - (tooltipRect.height / 2);
+                        left = targetRect.left - tooltipRect.width - padding;
+                        tooltip.classList.add('position-left');
+                        break;
+                    case 'right':
+                        top = targetRect.top + (targetRect.height / 2) - (tooltipRect.height / 2);
+                        left = targetRect.right + padding;
+                        tooltip.classList.add('position-right');
+                        break;
+                    default:
+                        top = targetRect.bottom + padding;
+                        left = targetRect.left;
+                }
+
+                // Keep tooltip in viewport
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+
+                if (left < padding) left = padding;
+                if (left + tooltipRect.width > viewportWidth - padding) {
+                    left = viewportWidth - tooltipRect.width - padding;
+                }
+                if (top < padding) top = padding;
+                if (top + tooltipRect.height > viewportHeight - padding) {
+                    top = viewportHeight - tooltipRect.height - padding;
+                }
+
+                tooltip.style.top = `${top}px`;
+                tooltip.style.left = `${left}px`;
+            }
+
+            function showStep(index) {
+                if (!tourData || index < 0 || index >= tourData.steps.length) return;
+
+                const step = tourData.steps[index];
+                const ui = tourData.ui;
+                const totalSteps = tourData.steps.length;
+
+                // Progress dots HTML
+                const progressDots = tourData.steps.map((_, i) => {
+                    let cls = 'tour-progress-dot';
+                    if (i < index) cls += ' completed';
+                    if (i === index) cls += ' active';
+                    return `<div class="${cls}"></div>`;
+                }).join('');
+
+                // Step indicator text
+                const stepOf = (ui.accessibility?.stepOf || 'Step {current} of {total}')
+                    .replace('{current}', index + 1)
+                    .replace('{total}', totalSteps);
+
+                // Button labels
+                const btnNext = ui.buttons?.next || 'Next →';
+                const btnPrev = ui.buttons?.prev || '← Back';
+                const btnSkip = ui.buttons?.skip || 'Skip Tour';
+                const btnFinish = ui.buttons?.finish || "Let's Go!";
+
+                const isFirst = index === 0;
+                const isLast = index === totalSteps - 1;
+
+                // Footer buttons
+                const footerHTML = `
+                    <button class="tour-btn tour-btn-skip" onclick="window.yossarianTour.end()">${btnSkip}</button>
+                    <div style="display: flex; gap: 8px;">
+                        ${!isFirst ? `<button class="tour-btn tour-btn-secondary" onclick="window.yossarianTour.prev()">${btnPrev}</button>` : ''}
+                        <button class="tour-btn tour-btn-primary" onclick="window.yossarianTour.${isLast ? 'end()' : 'next()'}">${isLast ? btnFinish : btnNext}</button>
+                    </div>
+                `;
+
+                if (step.type === 'modal') {
+                    // Center modal
+                    spotlight.style.display = 'none';
+                    spotlight.classList.remove('active');
+                    overlay.classList.add('modal-active');
+                    tooltip.className = 'tour-modal';
+                    tooltip.innerHTML = `
+                        <div class="tour-tooltip-header">
+                            <h3 class="tour-tooltip-title">${step.title}</h3>
+                            <div class="tour-tooltip-step">${stepOf}</div>
+                        </div>
+                        <div class="tour-tooltip-content">${step.content}</div>
+                        <div class="tour-progress">${progressDots}</div>
+                        <div class="tour-tooltip-footer">${footerHTML}</div>
+                    `;
+                    tooltip.style.top = '';
+                    tooltip.style.left = '';
+                } else {
+                    // Targeted tooltip
+                    overlay.classList.remove('modal-active');
+                    const target = document.querySelector(step.target);
+                    if (!target) {
+                        console.warn(`Tour target not found: ${step.target}`);
+                        next();
+                        return;
+                    }
+
+                    // Scroll target into view if needed
+                    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+                    setTimeout(() => {
+                        const rect = target.getBoundingClientRect();
+                        const spotlightPadding = 8;
+
+                        // Position spotlight (getBoundingClientRect already gives viewport-relative coords)
+                        spotlight.style.display = 'block';
+                        spotlight.classList.add('active');
+                        spotlight.style.position = 'fixed';
+                        spotlight.style.top = `${rect.top - spotlightPadding}px`;
+                        spotlight.style.left = `${rect.left - spotlightPadding}px`;
+                        spotlight.style.width = `${rect.width + spotlightPadding * 2}px`;
+                        spotlight.style.height = `${rect.height + spotlightPadding * 2}px`;
+
+                        // Render tooltip
+                        tooltip.className = 'tour-tooltip';
+                        tooltip.innerHTML = `
+                            <div class="tour-tooltip-header">
+                                <h3 class="tour-tooltip-title">${step.title}</h3>
+                                <div class="tour-tooltip-step">${stepOf}</div>
+                            </div>
+                            <div class="tour-tooltip-content">${step.content}</div>
+                            <div class="tour-progress">${progressDots}</div>
+                            <div class="tour-tooltip-footer">${footerHTML}</div>
+                        `;
+
+                        // Position tooltip
+                        positionTooltip(rect, step.position || 'bottom');
+                    }, 100);
+                }
+            }
+
+            async function start() {
+                if (isActive) return;
+
+                // Load tour data if not loaded
+                if (!tourData) {
+                    const loaded = await loadTourData(currentLang);
+                    if (!loaded) {
+                        alert('Could not load tour. Please try again later.');
+                        return;
+                    }
+                }
+
+                isActive = true;
+                currentStep = 0;
+
+                createElements();
+                overlay.classList.add('active');
+                showStep(currentStep);
+            }
+
+            function next() {
+                if (!isActive) return;
+                if (currentStep < tourData.steps.length - 1) {
+                    currentStep++;
+                    showStep(currentStep);
+                } else {
+                    end();
+                }
+            }
+
+            function prev() {
+                if (!isActive) return;
+                if (currentStep > 0) {
+                    currentStep--;
+                    showStep(currentStep);
+                }
+            }
+
+            function end() {
+                if (!isActive) return;
+                isActive = false;
+                overlay.classList.remove('active');
+                
+                setTimeout(() => {
+                    destroyElements();
+                }, 300);
+
+                // Mark tour as completed
+                localStorage.setItem(tourData?.config?.storageKey || 'yossarian_tour_completed', 'true');
+            }
+
+            async function setLanguage(lang) {
+                currentLang = lang;
+                localStorage.setItem('yossarian_tour_lang', lang);
+                
+                // Update language selector
+                const langSelect = document.getElementById('langSelect');
+                if (langSelect) langSelect.value = lang;
+
+                // Reload tour data with new language
+                const loaded = await loadTourData(lang);
+                
+                // If tour is active, refresh current step with new language
+                if (isActive && loaded) {
+                    showStep(currentStep);
+                }
+            }
+
+            function checkAutoStart() {
+                const storageKey = 'yossarian_tour_completed';
+                const hasSeenTour = localStorage.getItem(storageKey);
+                
+                if (!hasSeenTour) {
+                    // Auto-start tour for new users after a short delay
+                    setTimeout(() => {
+                        start();
+                    }, 1000);
+                }
+            }
+
+            // Initialize
+            async function init() {
+                // Set language selector to saved value
+                const langSelect = document.getElementById('langSelect');
+                if (langSelect) langSelect.value = currentLang;
+
+                // Pre-load tour data
+                await loadTourData(currentLang);
+
+                // Check for auto-start
+                if (tourData?.config?.autoStartForNewUsers) {
+                    checkAutoStart();
+                }
+            }
+
+            // Run init when DOM is ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', init);
+            } else {
+                init();
+            }
+
+            // Public API
+            return {
+                start,
+                next,
+                prev,
+                end,
+                setLanguage
+            };
+        })();
     </script>
 </body>
 </html>
