@@ -3,283 +3,746 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Yossarian Admin Panel</title>
+    <title>Admin Panel - Yossarian Go</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
     <style>
+        /* Material Design 3 - Matching SPA */
         :root {
             --md-primary: #1976d2;
-            --md-primary-dark: #1565c0;
-            --md-surface: #ffffff;
-            --md-surface-variant: #f5f5f5;
-            --md-on-surface: #1c1b1f;
-            --md-on-surface-variant: #49454f;
+            --md-primary-container: #d3e4f7;
+            --md-on-primary: #ffffff;
+            --md-on-primary-container: #001d36;
+            
+            --md-secondary: #535f70;
+            --md-secondary-container: #d7e3f7;
+            
+            --md-surface: #fdfbff;
+            --md-surface-1: #f4f8fd;
+            --md-surface-2: #eff3f9;
+            --md-surface-3: #eaeef4;
+            --md-surface-4: #e8ecf2;
+            --md-surface-5: #e5e9ef;
+            
+            --md-on-surface: #1a1c1e;
+            --md-on-surface-variant: #42474e;
+            
+            --md-outline: #72777f;
+            --md-outline-variant: #c2c7cf;
+            
             --md-success: #2e7d32;
             --md-warning: #f57c00;
-            --md-error: #d32f2f;
-            --md-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            --md-error: #ba1a1a;
+            
+            --md-elevation-1: 0 1px 2px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.1);
+            --md-elevation-2: 0 1px 3px rgba(0,0,0,0.05), 0 2px 6px rgba(0,0,0,0.1);
+            --md-elevation-3: 0 4px 8px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
-            background-color: var(--md-surface-variant);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--md-surface);
             color: var(--md-on-surface);
             line-height: 1.5;
+            overflow-x: hidden;
         }
 
-        .app-bar {
+        /* Layout Container */
+        .app-container {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            min-height: 100vh;
+        }
+
+        /* Navigation Rail */
+        .nav-rail {
+            background: var(--md-surface-1);
+            border-right: 1px solid var(--md-outline-variant);
+            display: flex;
+            flex-direction: column;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            z-index: 100;
+        }
+
+        .nav-header {
+            padding: 24px 20px;
+            border-bottom: 1px solid var(--md-outline-variant);
+        }
+
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 20px;
+            font-weight: 500;
+            color: var(--md-primary);
+        }
+
+        .nav-brand-icon { font-size: 32px; }
+
+        .nav-brand-badge {
+            background: var(--md-error);
+            color: white;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .nav-items {
+            flex: 1;
+            padding: 16px 8px;
+            overflow-y: auto;
+        }
+
+        .nav-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--md-on-surface-variant);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 16px 16px 8px;
+            margin-top: 8px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 16px;
+            margin-bottom: 4px;
+            border-radius: 28px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
+            color: var(--md-on-surface-variant);
+            font-size: 14px;
+            font-weight: 500;
+            text-decoration: none;
+            user-select: none;
+        }
+
+        .nav-item:hover { background: var(--md-surface-3); }
+
+        .nav-item.active {
+            background: var(--md-secondary-container);
+            color: var(--md-on-primary-container);
+        }
+
+        .nav-item-icon {
+            font-size: 24px;
+            width: 24px;
+            text-align: center;
+        }
+
+        .nav-footer {
+            padding: 16px;
+            border-top: 1px solid var(--md-outline-variant);
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 12px;
+            background: var(--md-surface-2);
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
             background: var(--md-primary);
             color: white;
-            padding: 16px 24px;
-            box-shadow: var(--md-shadow);
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            justify-content: center;
+            font-weight: 600;
         }
 
-        .app-bar h1 { font-size: 20px; font-weight: 500; }
-        .app-bar .subtitle { font-size: 14px; opacity: 0.87; margin-top: 4px; }
+        .user-details { flex: 1; min-width: 0; }
 
-        .nav-links { display: flex; gap: 16px; }
-        .nav-links a {
-            color: white;
-            text-decoration: none;
-            padding: 8px 16px;
-            border-radius: 20px;
-            background: rgba(255,255,255,0.1);
+        .user-name {
             font-size: 14px;
-            transition: background 0.2s;
-        }
-        .nav-links a:hover { background: rgba(255,255,255,0.2); }
-
-        .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
-
-        .card {
-            background: var(--md-surface);
-            border-radius: 12px;
-            box-shadow: var(--md-shadow);
-            margin-bottom: 24px;
+            font-weight: 500;
+            white-space: nowrap;
             overflow: hidden;
+            text-overflow: ellipsis;
         }
 
-        .card-header {
-            padding: 20px 24px 16px;
-            border-bottom: 1px solid #e0e0e0;
+        .user-role {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
         }
 
-        .card-title { font-size: 18px; font-weight: 500; margin: 0; }
-        .card-subtitle { font-size: 14px; color: var(--md-on-surface-variant); margin-top: 4px; }
-        .card-content { padding: 24px; }
+        /* Main Content Area */
+        .main-content {
+            background: var(--md-surface);
+            position: relative;
+        }
 
-        .admin-banner {
-            background: linear-gradient(135deg, var(--md-success), #388e3c);
-            color: white;
-            padding: 20px 24px;
-            border-radius: 12px;
+        .panel {
+            display: none;
+            animation: fadeIn 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            padding: 40px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .panel.active { display: block; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .panel-header { margin-bottom: 32px; }
+
+        .panel-title {
+            font-size: 32px;
+            font-weight: 400;
+            margin-bottom: 8px;
+            color: var(--md-on-surface);
+        }
+
+        .panel-subtitle {
+            font-size: 16px;
+            color: var(--md-on-surface-variant);
+        }
+
+        /* Material Cards */
+        .md-card {
+            background: var(--md-surface-1);
+            border-radius: 16px;
+            padding: 24px;
             margin-bottom: 24px;
+            box-shadow: var(--md-elevation-1);
+            transition: box-shadow 0.2s;
         }
 
+        .md-card:hover { box-shadow: var(--md-elevation-2); }
+
+        .md-card-header {
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--md-outline-variant);
+        }
+
+        .md-card-title {
+            font-size: 18px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .md-card-subtitle {
+            font-size: 14px;
+            color: var(--md-on-surface-variant);
+        }
+
+        /* Stats Grid */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
-            margin-bottom: 24px;
+            margin-bottom: 32px;
         }
 
         .stat-card {
             background: white;
             padding: 24px;
-            border-radius: 12px;
-            box-shadow: var(--md-shadow);
-            text-align: center;
+            border-radius: 16px;
             border-left: 4px solid var(--md-primary);
+            box-shadow: var(--md-elevation-1);
+            transition: all 0.2s;
         }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--md-elevation-2);
+        }
+
+        .stat-card.success { border-left-color: var(--md-success); }
+        .stat-card.warning { border-left-color: var(--md-warning); }
+        .stat-card.error { border-left-color: var(--md-error); }
 
         .stat-icon { font-size: 32px; margin-bottom: 12px; }
-        .stat-value { font-size: 24px; font-weight: 700; color: var(--md-primary); margin-bottom: 8px; }
-        .stat-label { font-size: 14px; color: var(--md-on-surface-variant); font-weight: 500; }
 
-        .nav-tabs {
-            display: flex;
-            border-bottom: 2px solid #e0e0e0;
-            margin-bottom: 24px;
-            background: white;
-            border-radius: 12px 12px 0 0;
-            overflow: hidden;
-            box-shadow: var(--md-shadow);
-        }
-
-        .nav-tab {
-            flex: 1;
-            padding: 16px 24px;
-            text-align: center;
-            background: white;
-            border: none;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            color: var(--md-on-surface-variant);
-            transition: all 0.2s;
-            position: relative;
-        }
-
-        .nav-tab.active {
+        .stat-value {
+            font-size: 28px;
+            font-weight: 600;
             color: var(--md-primary);
-            background: var(--md-surface-variant);
+            margin-bottom: 4px;
         }
 
-        .nav-tab.active::after {
-            content: '';
-            position: absolute;
-            bottom: 0; left: 0; right: 0;
-            height: 3px;
-            background: var(--md-primary);
+        .stat-label {
+            font-size: 12px;
+            color: var(--md-on-surface-variant);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-
-        .table-container {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: var(--md-shadow);
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .table { width: 100%; border-collapse: collapse; }
-        .table th, .table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e0e0e0; }
-        .table th { background: var(--md-surface-variant); font-weight: 500; font-size: 14px; }
-        .table td { font-size: 14px; }
-        .table tr:hover { background: #f9f9f9; }
-
-        .btn {
-            padding: 8px 16px;
+        /* Buttons */
+        .md-button {
+            padding: 12px 24px;
             border: none;
             border-radius: 20px;
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
-            text-decoration: none;
+            transition: all 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 8px;
+            text-decoration: none;
+            font-family: inherit;
         }
 
-        .btn-primary { background: var(--md-primary); color: white; }
-        .btn-secondary { background: transparent; color: var(--md-primary); border: 1px solid var(--md-primary); }
-        .btn-success { background: var(--md-success); color: white; }
-        .btn-warning { background: var(--md-warning); color: white; }
-        .btn-error { background: var(--md-error); color: white; }
+        .md-button-filled {
+            background: var(--md-primary);
+            color: var(--md-on-primary);
+            box-shadow: var(--md-elevation-1);
+        }
 
+        .md-button-filled:hover {
+            background: #1565c0;
+            box-shadow: var(--md-elevation-2);
+        }
+
+        .md-button-outlined {
+            background: transparent;
+            color: var(--md-primary);
+            border: 1px solid var(--md-outline);
+        }
+
+        .md-button-outlined:hover {
+            background: var(--md-primary-container);
+        }
+
+        .md-button-success {
+            background: var(--md-success);
+            color: white;
+        }
+
+        .md-button-success:hover { background: #1b5e20; }
+
+        .md-button-warning {
+            background: var(--md-warning);
+            color: white;
+        }
+
+        .md-button-warning:hover { background: #e65100; }
+
+        .md-button-error {
+            background: var(--md-error);
+            color: white;
+        }
+
+        .md-button-error:hover { background: #7f0000; }
+
+        .md-button-sm {
+            padding: 8px 16px;
+            font-size: 12px;
+        }
+
+        /* Health Indicators */
         .health-indicator {
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 12px;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 13px;
             font-weight: 500;
         }
 
-        .health-indicator.healthy { background: #e8f5e8; color: var(--md-success); }
+        .health-indicator.healthy { background: #e8f5e9; color: var(--md-success); }
         .health-indicator.warning { background: #fff3e0; color: var(--md-warning); }
         .health-indicator.error { background: #ffebee; color: var(--md-error); }
         .health-indicator.info { background: #e3f2fd; color: var(--md-primary); }
 
-        .status-message {
-            padding: 12px;
-            border-radius: 8px;
-            margin: 12px 0;
-            font-size: 14px;
-            display: none;
+        /* Tables */
+        .table-container {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: var(--md-elevation-1);
+            max-height: 400px;
+            overflow-y: auto;
         }
 
-        .status-message.visible { display: block; }
-        .status-message.success { background: #e8f5e8; color: var(--md-success); border-left: 4px solid var(--md-success); }
-        .status-message.error { background: #ffebee; color: var(--md-error); border-left: 4px solid var(--md-error); }
+        .md-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
 
-        .loading { text-align: center; padding: 20px; color: var(--md-on-surface-variant); }
+        .md-table th, .md-table td {
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--md-outline-variant);
+        }
 
-        @media (max-width: 768px) {
-            .container { padding: 16px; }
-            .app-bar { flex-direction: column; gap: 12px; align-items: flex-start; }
-            .nav-links { flex-wrap: wrap; }
-            .stats-grid { grid-template-columns: 1fr; }
-            .nav-tabs { flex-direction: column; }
+        .md-table th {
+            background: var(--md-surface-2);
+            font-weight: 500;
+            font-size: 13px;
+            color: var(--md-on-surface-variant);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            position: sticky;
+            top: 0;
+        }
+
+        .md-table td { font-size: 14px; }
+
+        .md-table tbody tr:hover { background: var(--md-surface-1); }
+
+        .md-table code {
+            background: var(--md-surface-3);
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+        }
+
+        /* Form Controls */
+        .form-group { margin-bottom: 20px; }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--md-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid var(--md-outline-variant);
+            border-radius: 12px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s;
+            background: white;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--md-primary);
+            box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
+        }
+
+        .form-input::placeholder { color: var(--md-outline); }
+
+        textarea.form-input {
+            resize: vertical;
+            min-height: 120px;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+
+        .form-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+            padding: 8px 0;
+        }
+
+        .form-checkbox input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            accent-color: var(--md-primary);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            align-items: end;
+        }
+
+        /* Status Messages */
+        .status-message {
+            padding: 14px 16px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            display: none;
+            animation: slideIn 0.3s ease;
+        }
+
+        .status-message.visible { display: flex; align-items: center; gap: 12px; }
+
+        .status-message.success {
+            background: #e8f5e9;
+            color: var(--md-success);
+            border-left: 4px solid var(--md-success);
+        }
+
+        .status-message.error {
+            background: #ffebee;
+            color: var(--md-error);
+            border-left: 4px solid var(--md-error);
+        }
+
+        .status-message.info {
+            background: #e3f2fd;
+            color: var(--md-primary);
+            border-left: 4px solid var(--md-primary);
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        /* System Info Grid */
+        .system-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+
+        .system-section {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: var(--md-elevation-1);
+        }
+
+        .system-section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--md-on-surface-variant);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--md-outline-variant);
+        }
+
+        .system-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--md-surface-3);
+        }
+
+        .system-item:last-child { border-bottom: none; }
+
+        .system-item-label {
+            font-size: 13px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .system-item-value {
+            font-size: 13px;
+            font-weight: 500;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+
+        /* Button Groups */
+        .button-group {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 24px;
+        }
+
+        /* Preview Box */
+        .preview-box {
+            background: white;
+            border: 2px solid var(--md-primary);
+            border-radius: 12px;
+            padding: 24px;
+            margin-top: 24px;
+        }
+
+        .preview-box-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--md-primary);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--md-on-surface-variant);
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border: 3px solid var(--md-surface-3);
+            border-top-color: var(--md-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 12px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .app-container {
+                grid-template-columns: 1fr;
+            }
+
+            .nav-rail {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                height: auto;
+                flex-direction: row;
+                border-right: none;
+                border-top: 1px solid var(--md-outline-variant);
+                z-index: 1000;
+            }
+
+            .nav-header, .nav-footer { display: none; }
+
+            .nav-items {
+                display: flex;
+                justify-content: space-around;
+                padding: 8px;
+                overflow-x: auto;
+            }
+
+            .nav-item {
+                flex-direction: column;
+                padding: 8px 12px;
+                font-size: 11px;
+                gap: 4px;
+                border-radius: 12px;
+            }
+
+            .nav-item-icon { font-size: 20px; }
+
+            .main-content { padding-bottom: 80px; }
+
+            .panel { padding: 20px; }
+
+            .stats-grid { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
 <body>
-    <header class="app-bar">
-        <div>
-            <h1>⚙️ Yossarian Admin Panel</h1>
-            <div class="subtitle">System Configuration & Management</div>
-        </div>
-        <nav class="nav-links">
-            <a href="/">🏠 Main App</a>
-            <a href="/health">📊 Health</a>
-            <a href="/admin/logout">🚪 Logout</a>
+    <div class="app-container">
+        <!-- Navigation Rail -->
+        <nav class="nav-rail">
+            <div class="nav-header">
+                <div class="nav-brand">
+                    <span class="nav-brand-icon">🛡️</span>
+                    <span>Yossarian</span>
+                    <span class="nav-brand-badge">ADMIN</span>
+                </div>
+            </div>
+            
+            <div class="nav-items">
+                <a class="nav-item active" data-panel="dashboard">
+                    <span class="nav-item-icon">📊</span>
+                    <span>Dashboard</span>
+                </a>
+                <a class="nav-item" data-panel="ad-accounts">
+                    <span class="nav-item-icon">👥</span>
+                    <span>AD Accounts</span>
+                </a>
+                <a class="nav-item" data-panel="sensitive-terms">
+                    <span class="nav-item-icon">🔒</span>
+                    <span>Sensitive Terms</span>
+                </a>
+                <a class="nav-item" data-panel="organization">
+                    <span class="nav-item-icon">🏢</span>
+                    <span>Organization</span>
+                </a>
+                
+                <div class="nav-section-title">System</div>
+                
+                <a class="nav-item" data-panel="system">
+                    <span class="nav-item-icon">⚙️</span>
+                    <span>System Info</span>
+                </a>
+                <a class="nav-item" data-panel="api-keys">
+                    <span class="nav-item-icon">🔑</span>
+                    <span>API Keys</span>
+                </a>
+            </div>
+            
+            <div class="nav-footer">
+                <div class="user-info">
+                    <div class="user-avatar" id="userAvatar">A</div>
+                    <div class="user-details">
+                        <div class="user-name" id="userName">Administrator</div>
+                        <div class="user-role" id="userRole">Admin</div>
+                    </div>
+                </div>
+                <div style="margin-top: 12px; display: flex; gap: 8px;">
+                    <a href="/" class="md-button md-button-outlined md-button-sm" style="flex: 1; justify-content: center;">
+                        🏠 Main App
+                    </a>
+                    <a href="/admin/logout" class="md-button md-button-outlined md-button-sm" style="flex: 1; justify-content: center;">
+                        🚪 Logout
+                    </a>
+                </div>
+            </div>
         </nav>
-    </header>
 
-    <div class="container">
-        <!-- Admin Banner -->
-        <div class="admin-banner">
-            <div style="font-size: 16px; font-weight: 500; margin-bottom: 8px;">👤 Administrator Access</div>
-            <div id="adminInfo">Loading user information...</div>
-        </div>
-
-        <!-- System Stats -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-icon">🗺️</div>
-                <div class="stat-value" id="statIPMappings">-</div>
-                <div class="stat-label">Active IP Mappings</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon">👥</div>
-                <div class="stat-value">
-                    <span id="statUsers">-</span> + <span id="statComputers">-</span>
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Dashboard Panel -->
+            <div id="dashboard" class="panel active">
+                <div class="panel-header">
+                    <h1 class="panel-title">Dashboard</h1>
+                    <p class="panel-subtitle">System overview and quick actions</p>
                 </div>
-                <div class="stat-label">Users + Computers</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon">🔒</div>
-                <div class="stat-value" id="statSensitiveTerms">-</div>
-                <div class="stat-label">Sensitive Terms</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon">🔐</div>
-                <div class="stat-value">
-                    <span class="health-indicator healthy" id="authStatus">● SSO Active</span>
-                </div>
-                <div class="stat-label">Authentication</div>
-            </div>
-        </div>
 
-        <!-- Navigation Tabs -->
-        <div class="nav-tabs">
-            <button class="nav-tab active" onclick="showTab('overview')">📊 Overview</button>
-            <button class="nav-tab" onclick="showTab('ad-accounts')">👥 AD Accounts</button>
-            <button class="nav-tab" onclick="showTab('sensitive-terms')">🔒 Sensitive Terms</button>
-            <button class="nav-tab" onclick="showTab('org-settings')">🏢 Organization</button>
-            <button class="nav-tab" onclick="showTab('system')">⚙️ System</button>
-        </div>
-
-        <!-- Overview Tab -->
-        <div id="overview" class="tab-content active">
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">📈 System Status</h2>
-                    <div class="card-subtitle">Real-time system information</div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">🗺️</div>
+                        <div class="stat-value" id="statIPMappings">-</div>
+                        <div class="stat-label">Active IP Mappings</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">👤</div>
+                        <div class="stat-value" id="statUsers">-</div>
+                        <div class="stat-label">AD Users</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">💻</div>
+                        <div class="stat-value" id="statComputers">-</div>
+                        <div class="stat-label">AD Computers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🔒</div>
+                        <div class="stat-value" id="statSensitiveTerms">-</div>
+                        <div class="stat-label">Sensitive Terms</div>
+                    </div>
                 </div>
-                <div class="card-content">
+
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h2 class="md-card-title">System Status</h2>
+                        <p class="md-card-subtitle">Real-time service health and connectivity</p>
+                    </div>
+
                     <div class="stats-grid">
-                        <div class="stat-card">
+                        <div class="stat-card success">
                             <div class="stat-icon">🏥</div>
                             <div class="stat-value">
                                 <span class="health-indicator healthy" id="healthStatus">● Healthy</span>
@@ -289,9 +752,16 @@
                         <div class="stat-card">
                             <div class="stat-icon">🔗</div>
                             <div class="stat-value">
-                                <span class="health-indicator" id="ldapStatus">● Unknown</span>
+                                <span class="health-indicator info" id="ldapStatus">● Checking...</span>
                             </div>
                             <div class="stat-label">LDAP Connection</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">🔐</div>
+                            <div class="stat-value">
+                                <span class="health-indicator info" id="authStatus">● Checking...</span>
+                            </div>
+                            <div class="stat-label">Authentication</div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-icon">📊</div>
@@ -299,269 +769,412 @@
                             <div class="stat-label">Version</div>
                         </div>
                     </div>
-                    
-                    <div style="margin-top: 24px;">
-                        <button class="btn btn-success" onclick="syncAD()">🔄 Sync AD Accounts</button>
-                        <button class="btn btn-warning" onclick="testLDAP()">🧪 Test LDAP</button>
-                        <button class="btn btn-primary" onclick="exportMappings()">📤 Export IP Mappings</button>
+
+                    <div class="status-message" id="dashboardStatus"></div>
+
+                    <div class="button-group">
+                        <button class="md-button md-button-success" onclick="syncAD()">🔄 Sync AD Accounts</button>
+                        <button class="md-button md-button-warning" onclick="testLDAP()">🧪 Test LDAP</button>
+                        <button class="md-button md-button-filled" onclick="exportMappings()">📤 Export IP Mappings</button>
+                        <a href="/docs" target="_blank" class="md-button md-button-outlined">📚 API Docs</a>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- AD Accounts Tab -->
-        <div id="ad-accounts" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">👥 Active Directory Accounts</h2>
-                    <div class="card-subtitle">Live AD account mappings (<span id="accountCount">0</span> total)</div>
+            <!-- AD Accounts Panel -->
+            <div id="ad-accounts" class="panel">
+                <div class="panel-header">
+                    <h1 class="panel-title">AD Accounts</h1>
+                    <p class="panel-subtitle">Active Directory user and computer account mappings (<span id="accountCount">0</span> total)</p>
                 </div>
-                <div class="card-content">
-                    <div class="status-message" id="adStatus"></div>
-                    
-                    <div style="margin-bottom: 16px;">
-                        <button class="btn btn-primary" onclick="refreshADAccounts()">🔄 Refresh</button>
-                        <button class="btn btn-secondary" onclick="exportADAccounts()">📤 Export CSV</button>
+
+                <div class="status-message" id="adStatus"></div>
+
+                <div class="button-group">
+                    <button class="md-button md-button-filled" onclick="refreshADAccounts()">🔄 Refresh</button>
+                    <button class="md-button md-button-outlined" onclick="exportADAccounts()">📤 Export CSV</button>
+                    <button class="md-button md-button-success" onclick="syncAD()">⚡ Full Sync</button>
+                </div>
+
+                <div class="table-container">
+                    <table class="md-table">
+                        <thead>
+                            <tr>
+                                <th>Account</th>
+                                <th>USN</th>
+                                <th>Type</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adAccountsTable">
+                            <tr><td colspan="3" class="loading"><span class="loading-spinner"></span>Loading AD accounts...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Sensitive Terms Panel -->
+            <div id="sensitive-terms" class="panel">
+                <div class="panel-header">
+                    <h1 class="panel-title">Sensitive Terms</h1>
+                    <p class="panel-subtitle">Organization-wide patterns to sanitize (<span id="termsCount">0</span> total)</p>
+                </div>
+
+                <div class="status-message" id="termsStatus"></div>
+
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h2 class="md-card-title">Add New Term</h2>
+                        <p class="md-card-subtitle">Define a pattern and its replacement text</p>
                     </div>
 
-                    <div class="table-container">
-                        <table class="table">
-                            <thead>
-                                <tr>
-                                    <th>Account</th>
-                                    <th>USN</th>
-                                    <th>Type</th>
-                                </tr>
-                            </thead>
-                            <tbody id="adAccountsTable">
-                                <tr><td colspan="3" class="loading">Loading AD accounts...</td></tr>
-                            </tbody>
-                        </table>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Sensitive Term</label>
+                            <input type="text" id="newTerm" class="form-input" placeholder="e.g., ProjectApollo">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Replacement</label>
+                            <input type="text" id="newReplacement" class="form-input" placeholder="[SENSITIVE]">
+                        </div>
+                        <div class="form-group">
+                            <button class="md-button md-button-filled" onclick="addSensitiveTerm()">➕ Add Term</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button class="md-button md-button-filled" onclick="refreshSensitiveTerms()">🔄 Refresh</button>
+                    <button class="md-button md-button-outlined" onclick="exportSensitiveTerms()">📤 Export CSV</button>
+                    <button class="md-button md-button-success" onclick="importSensitiveTerms()">📥 Import CSV</button>
+                </div>
+
+                <div class="table-container">
+                    <table class="md-table">
+                        <thead>
+                            <tr>
+                                <th>Term</th>
+                                <th>Replacement</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sensitiveTermsTable">
+                            <tr><td colspan="3" class="loading"><span class="loading-spinner"></span>Loading sensitive terms...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Organization Panel -->
+            <div id="organization" class="panel">
+                <div class="panel-header">
+                    <h1 class="panel-title">Organization Settings</h1>
+                    <p class="panel-subtitle">Configure organization-wide disclaimer and documentation links</p>
+                </div>
+
+                <div class="status-message" id="orgStatus"></div>
+
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h2 class="md-card-title">⚠️ Disclaimer Settings</h2>
+                        <p class="md-card-subtitle">Display a warning banner on the main application</p>
+                    </div>
+
+                    <label class="form-checkbox">
+                        <input type="checkbox" id="disclaimerEnabled">
+                        <span>Show disclaimer on main page</span>
+                    </label>
+
+                    <div class="form-group">
+                        <label class="form-label">Disclaimer Text</label>
+                        <textarea id="disclaimerText" class="form-input" placeholder="**Warning**: This system processes sensitive data..."></textarea>
+                        <p style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 8px;">
+                            💡 Supports Markdown: **bold**, *italic*, [links](url)
+                        </p>
+                    </div>
+                </div>
+
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h2 class="md-card-title">📚 Documentation Settings</h2>
+                        <p class="md-card-subtitle">Link to your organization's documentation</p>
+                    </div>
+
+                    <label class="form-checkbox">
+                        <input type="checkbox" id="docsEnabled">
+                        <span>Show documentation link on main page</span>
+                    </label>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Documentation Title</label>
+                            <input type="text" id="docsTitle" class="form-input" placeholder="User Guide">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Documentation URL</label>
+                            <input type="url" id="docsUrl" class="form-input" placeholder="https://docs.example.com/yossarian">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button class="md-button md-button-filled" onclick="saveOrgSettings()">💾 Save All Settings</button>
+                </div>
+
+                <div class="preview-box">
+                    <div class="preview-box-title">👁️ Preview</div>
+                    <div id="orgPreview">
+                        <p style="color: var(--md-on-surface-variant);">Enable settings above to see preview...</p>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Sensitive Terms Tab -->
-        <div id="sensitive-terms" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">🔒 Organization Sensitive Terms</h2>
-                    <div class="card-subtitle">Manage organization-wide sensitive patterns (<span id="termsCount">0</span> total)</div>
+            <!-- System Panel -->
+            <div id="system" class="panel">
+                <div class="panel-header">
+                    <h1 class="panel-title">System Information</h1>
+                    <p class="panel-subtitle">Configuration, environment, and runtime details</p>
                 </div>
-                <div class="card-content">
-                    <div class="status-message" id="termsStatus"></div>
-                    
-                    <!-- Add New Term -->
-                    <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 16px; align-items: end; margin-bottom: 16px;">
-                        <div>
-                            <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 8px;">SENSITIVE TERM</label>
-                            <input type="text" id="newTerm" placeholder="ProjectApollo" style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px;">
+
+                <div class="system-grid" id="systemInfo">
+                    <div class="system-section">
+                        <div class="system-section-title">🏷️ Version Information</div>
+                        <div class="system-item">
+                            <span class="system-item-label">Version</span>
+                            <span class="system-item-value" id="sysVersion">-</span>
                         </div>
-                        <div>
-                            <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 8px;">REPLACEMENT</label>
-                            <input type="text" id="newReplacement" placeholder="[SENSITIVE]" style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px;">
+                        <div class="system-item">
+                            <span class="system-item-label">Build Time</span>
+                            <span class="system-item-value" id="sysBuildTime">-</span>
                         </div>
-                        <button class="btn btn-primary" onclick="addSensitiveTerm()">➕ Add Term</button>
-                    </div>
-
-                    <div style="margin-bottom: 16px;">
-                        <button class="btn btn-primary" onclick="refreshSensitiveTerms()">🔄 Refresh</button>
-                        <button class="btn btn-secondary" onclick="exportSensitiveTerms()">📤 Export CSV</button>
-                        <button class="btn btn-success" onclick="importSensitiveTerms()">📥 Import CSV</button>
-                    </div>
-
-                    <div class="table-container">
-                        <table class="table">
-                            <thead>
-                                <tr>
-                                    <th>Term</th>
-                                    <th>Replacement</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="sensitiveTermsTable">
-                                <tr><td colspan="3" class="loading">Loading sensitive terms...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Organization Settings Tab -->
-        <div id="org-settings" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">🏢 Organization Settings</h2>
-                    <div class="card-subtitle">Configure organization-wide disclaimer and documentation</div>
-                </div>
-                <div class="card-content">
-                    <div class="status-message" id="orgStatus"></div>
-
-                    <!-- Disclaimer Section -->
-                    <div style="background: var(--md-surface-variant); padding: 20px; border-radius: 8px; margin-bottom: 24px;">
-                        <h3 style="font-size: 16px; font-weight: 500; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
-                            ⚠️ Disclaimer Settings
-                        </h3>
-                        
-                        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; cursor: pointer;">
-                            <input type="checkbox" id="disclaimerEnabled" style="width: 18px; height: 18px;">
-                            <span style="font-weight: 500;">Show disclaimer on main page</span>
-                        </label>
-
-                        <div>
-                            <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 8px;">
-                                DISCLAIMER TEXT (Markdown supported)
-                            </label>
-                            <textarea 
-                                id="disclaimerText" 
-                                rows="6"
-                                placeholder="**Warning**: This system processes sensitive data..."
-                                style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-family: monospace; font-size: 13px;"
-                            ></textarea>
-                            <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 8px;">
-                                💡 Supports Markdown: **bold**, *italic*, [links](url), lists, etc.
-                            </div>
+                        <div class="system-item">
+                            <span class="system-item-label">Git Commit</span>
+                            <span class="system-item-value" id="sysGitCommit">-</span>
                         </div>
-
-                        <button class="btn btn-primary" onclick="saveOrgSettings()" style="margin-top: 12px;">
-                            💾 Save Disclaimer
-                        </button>
                     </div>
 
-                    <!-- Documentation Section -->
-                    <div style="background: var(--md-surface-variant); padding: 20px; border-radius: 8px;">
-                        <h3 style="font-size: 16px; font-weight: 500; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
-                            📚 Documentation Settings
-                        </h3>
-                        
-                        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; cursor: pointer;">
-                            <input type="checkbox" id="docsEnabled" style="width: 18px; height: 18px;">
-                            <span style="font-weight: 500;">Show documentation link on main page</span>
-                        </label>
-
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
-                            <div>
-                                <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 8px;">
-                                    DOCUMENTATION TITLE
-                                </label>
-                                <input 
-                                    type="text" 
-                                    id="docsTitle" 
-                                    placeholder="User Guide"
-                                    style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px;"
-                                />
-                            </div>
-                            <div>
-                                <label style="display: block; font-size: 12px; font-weight: 500; color: var(--md-primary); margin-bottom: 8px;">
-                                    DOCUMENTATION URL
-                                </label>
-                                <input 
-                                    type="url" 
-                                    id="docsUrl" 
-                                    placeholder="https://docs.example.com/yossarian"
-                                    style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px;"
-                                />
-                            </div>
+                    <div class="system-section">
+                        <div class="system-section-title">🔐 Authentication</div>
+                        <div class="system-item">
+                            <span class="system-item-label">Mode</span>
+                            <span class="system-item-value" id="sysAuthMode">-</span>
                         </div>
-
-                        <button class="btn btn-primary" onclick="saveOrgSettings()" style="margin-top: 12px;">
-                            💾 Save Documentation
-                        </button>
+                        <div class="system-item">
+                            <span class="system-item-label">OIDC Enabled</span>
+                            <span class="system-item-value" id="sysOIDC">-</span>
+                        </div>
+                        <div class="system-item">
+                            <span class="system-item-label">Auto SSO</span>
+                            <span class="system-item-value" id="sysAutoSSO">-</span>
+                        </div>
                     </div>
 
-                    <!-- Preview Section -->
-                    <div style="margin-top: 24px; padding: 20px; background: white; border: 2px solid var(--md-primary); border-radius: 8px;">
-                        <h3 style="font-size: 16px; font-weight: 500; margin-bottom: 16px;">
-                            👁️ Preview (How it will appear on main page)
-                        </h3>
-                        <div id="orgPreview" style="min-height: 100px; color: var(--md-on-surface-variant);">
-                            Settings will preview here...
+                    <div class="system-section">
+                        <div class="system-section-title">📁 File Limits</div>
+                        <div class="system-item">
+                            <span class="system-item-label">Max Total Upload</span>
+                            <span class="system-item-value" id="sysMaxTotal">-</span>
+                        </div>
+                        <div class="system-item">
+                            <span class="system-item-label">Max File Size</span>
+                            <span class="system-item-value" id="sysMaxFile">-</span>
+                        </div>
+                        <div class="system-item">
+                            <span class="system-item-label">Max File Count</span>
+                            <span class="system-item-value" id="sysMaxCount">-</span>
+                        </div>
+                    </div>
+
+                    <div class="system-section">
+                        <div class="system-section-title">🔗 LDAP Configuration</div>
+                        <div class="system-item">
+                            <span class="system-item-label">Status</span>
+                            <span class="system-item-value" id="sysLdapStatus">-</span>
+                        </div>
+                        <div class="system-item">
+                            <span class="system-item-label">Server</span>
+                            <span class="system-item-value" id="sysLdapServer">-</span>
+                        </div>
+                        <div class="system-item">
+                            <span class="system-item-label">Sync Interval</span>
+                            <span class="system-item-value" id="sysLdapInterval">-</span>
+                        </div>
+                    </div>
+
+                    <div class="system-section">
+                        <div class="system-section-title">📦 MinIO Storage</div>
+                        <div class="system-item">
+                            <span class="system-item-label">Endpoint</span>
+                            <span class="system-item-value" id="sysMinioEndpoint">-</span>
+                        </div>
+                        <div class="system-item">
+                            <span class="system-item-label">Bucket</span>
+                            <span class="system-item-value" id="sysMinioBucket">-</span>
+                        </div>
+                        <div class="system-item">
+                            <span class="system-item-label">SSL</span>
+                            <span class="system-item-value" id="sysMinioSSL">-</span>
+                        </div>
+                    </div>
+
+                    <div class="system-section">
+                        <div class="system-section-title">🌐 Services</div>
+                        <div class="system-item">
+                            <span class="system-item-label">AD Service</span>
+                            <span class="system-item-value" id="sysADService">-</span>
+                        </div>
+                        <div class="system-item">
+                            <span class="system-item-label">Mode</span>
+                            <span class="system-item-value" id="sysRunMode">-</span>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- System Tab -->
-        <div id="system" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">⚙️ System Information</h2>
-                    <div class="card-subtitle">Configuration and environment details</div>
+            <!-- API Keys Panel -->
+            <div id="api-keys" class="panel">
+                <div class="panel-header">
+                    <h1 class="panel-title">API Keys</h1>
+                    <p class="panel-subtitle">Manage API keys for pipeline and automation access</p>
                 </div>
-                <div class="card-content">
-                    <div id="systemInfo">
-                        <div class="loading">Loading system information...</div>
+
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h2 class="md-card-title">🔑 API Key Management</h2>
+                        <p class="md-card-subtitle">Create and manage API keys for automated systems</p>
+                    </div>
+
+                    <div style="text-align: center; padding: 60px 20px; color: var(--md-on-surface-variant);">
+                        <div style="font-size: 64px; margin-bottom: 20px;">🚧</div>
+                        <h3 style="font-size: 20px; margin-bottom: 12px; color: var(--md-on-surface);">Coming Soon</h3>
+                        <p style="max-width: 400px; margin: 0 auto; line-height: 1.6;">
+                            API key authentication for pipeline integration will be available in a future release.
+                            <br><br>
+                            For now, you can use session-based authentication or OIDC service accounts.
+                        </p>
+                        <a href="/docs" target="_blank" class="md-button md-button-outlined" style="margin-top: 24px;">
+                            📚 View API Documentation
+                        </a>
                     </div>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
 
     <script>
+        // ============================================
+        // Navigation
+        // ============================================
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const panelId = item.dataset.panel;
+                if (!panelId) return;
+
+                // Update nav
+                document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+                item.classList.add('active');
+
+                // Update panels
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                document.getElementById(panelId).classList.add('active');
+
+                // Load data for specific panels
+                if (panelId === 'system') loadSystemInfo();
+                if (panelId === 'organization') loadOrgSettings();
+            });
+        });
+
+        // ============================================
         // Utility Functions
+        // ============================================
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
         }
-        // Tab Management
-        function showTab(tabName) {
-            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-            document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
-            document.getElementById(tabName).classList.add('active');
-            event.target.classList.add('active');
+
+        function showStatus(type, message, elementId) {
+            const el = document.getElementById(elementId);
+            if (el) {
+                el.className = `status-message visible ${type}`;
+                el.innerHTML = `<span>${type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ'}</span> ${message}`;
+                setTimeout(() => el.classList.remove('visible'), 5000);
+            }
         }
 
-        // Load Dynamic Data
+        // ============================================
+        // Load Initial Data
+        // ============================================
         function loadDynamicData() {
-            // Load organization settings
+            loadHealthStatus();
+            loadADStatus();
+            loadADAccounts();
+            loadSensitiveTerms();
+            loadUserInfo();
             loadOrgSettings();
-            
-            // Load health status
+        }
+
+        function loadHealthStatus() {
             fetch('/health')
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('versionInfo').textContent = data.version || 'Unknown';
                     document.getElementById('healthStatus').className = 'health-indicator healthy';
                     document.getElementById('healthStatus').textContent = '● Healthy';
+                    
+                    // Determine auth mode
+                    const authStatus = document.getElementById('authStatus');
+                    // We'll update this from userinfo
                 })
                 .catch(e => {
                     document.getElementById('healthStatus').className = 'health-indicator error';
                     document.getElementById('healthStatus').textContent = '● Error';
                 });
+        }
 
-            // Load user info
+        function loadUserInfo() {
             fetch('/api/userinfo')
                 .then(r => r.json())
                 .then(data => {
                     if (data.authenticated) {
-                        document.getElementById('adminInfo').textContent = 
-                            `Logged in as: ${data.username} • Authentication: Enterprise SSO`;
+                        document.getElementById('userName').textContent = data.username || 'Administrator';
+                        document.getElementById('userAvatar').textContent = (data.username || 'A')[0].toUpperCase();
+                        
+                        // Update auth status indicator
+                        const authStatus = document.getElementById('authStatus');
+                        if (data.username === 'Administrator') {
+                            authStatus.className = 'health-indicator warning';
+                            authStatus.textContent = '● Password';
+                            document.getElementById('userRole').textContent = 'Local Admin';
+                        } else {
+                            authStatus.className = 'health-indicator healthy';
+                            authStatus.textContent = '● SSO Active';
+                            document.getElementById('userRole').textContent = 'Enterprise SSO';
+                        }
                     }
                 })
                 .catch(e => console.log('User info failed:', e));
-
-            // Load AD service status
-            loadADStatus();
-            loadADAccounts();
-            loadSensitiveTerms();
         }
 
         function loadADStatus() {
             fetch('/admin/api/ldap/status')
                 .then(r => r.json())
                 .then(data => {
-                    document.getElementById('statADAccounts').textContent = data.account_count || 0;
+                    document.getElementById('statUsers').textContent = data.user_count || 0;
+                    document.getElementById('statComputers').textContent = data.computer_count || 0;
                     document.getElementById('accountCount').textContent = data.account_count || 0;
-                    document.getElementById('ldapStatus').className = 'health-indicator healthy';
-                    document.getElementById('ldapStatus').textContent = '● Connected';
+                    
+                    const ldapStatus = document.getElementById('ldapStatus');
+                    if (data.ldap_configured) {
+                        ldapStatus.className = 'health-indicator healthy';
+                        ldapStatus.textContent = '● Connected';
+                    } else {
+                        ldapStatus.className = 'health-indicator warning';
+                        ldapStatus.textContent = '● Not Configured';
+                    }
                 })
                 .catch(e => {
                     document.getElementById('ldapStatus').className = 'health-indicator error';
-                    document.getElementById('ldapStatus').textContent = '● Disconnected';
+                    document.getElementById('ldapStatus').textContent = '● Unavailable';
                 });
         }
 
@@ -573,7 +1186,7 @@
                 .then(data => {
                     tbody.innerHTML = '';
                     if (data.accounts && Object.keys(data.accounts).length > 0) {
-                        Object.entries(data.accounts).slice(0, 50).forEach(([account, usn]) => {
+                        Object.entries(data.accounts).slice(0, 100).forEach(([account, usn]) => {
                             const type = account.includes('$') ? 'Computer' : 
                                         account.includes('@') ? 'UPN' : 
                                         account.includes('\\') ? 'Domain' : 'Username';
@@ -581,14 +1194,14 @@
                             
                             tbody.innerHTML += `
                                 <tr>
-                                    <td><code>${account}</code></td>
-                                    <td><code>${usn}</code></td>
+                                    <td><code>${escapeHtml(account)}</code></td>
+                                    <td><code>${escapeHtml(usn)}</code></td>
                                     <td><span class="health-indicator ${typeClass}">${type}</span></td>
                                 </tr>
                             `;
                         });
                     } else {
-                        tbody.innerHTML = '<tr><td colspan="3" class="loading">No AD accounts found</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="3" class="loading">No AD accounts found. Run LDAP sync to import accounts.</td></tr>';
                     }
                 })
                 .catch(e => {
@@ -596,31 +1209,132 @@
                 });
         }
 
+        function loadSensitiveTerms() {
+            const tbody = document.getElementById('sensitiveTermsTable');
+            
+            fetch('/admin/api/sensitive/list')
+                .then(r => r.json())
+                .then(data => {
+                    tbody.innerHTML = '';
+                    document.getElementById('statSensitiveTerms').textContent = data.total || 0;
+                    document.getElementById('termsCount').textContent = data.total || 0;
+                    
+                    if (data.terms && Object.keys(data.terms).length > 0) {
+                        Object.entries(data.terms).forEach(([term, replacement]) => {
+                            tbody.innerHTML += `
+                                <tr>
+                                    <td><code>${escapeHtml(term)}</code></td>
+                                    <td><code>${escapeHtml(replacement)}</code></td>
+                                    <td>
+                                        <button class="md-button md-button-error md-button-sm" onclick="deleteSensitiveTerm('${escapeHtml(term)}')">
+                                            🗑️ Delete
+                                        </button>
+                                    </td>
+                                </tr>
+                            `;
+                        });
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="3" class="loading">No sensitive terms configured</td></tr>';
+                    }
+                })
+                .catch(e => {
+                    tbody.innerHTML = '<tr><td colspan="3" class="loading">Failed to load sensitive terms</td></tr>';
+                });
+        }
+
+        // ============================================
+        // System Info
+        // ============================================
+        function loadSystemInfo() {
+            // Load health for version info
+            fetch('/health')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('sysVersion').textContent = data.version || 'Unknown';
+                    document.getElementById('sysBuildTime').textContent = data.build_time || 'Unknown';
+                    document.getElementById('sysGitCommit').textContent = data.commit || 'Unknown';
+                })
+                .catch(e => console.log('Health fetch failed'));
+
+            // Load config limits
+            fetch('/api/config')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('sysMaxTotal').textContent = (data.max_total_upload_size_mb || '-') + ' MB';
+                    document.getElementById('sysMaxFile').textContent = (data.max_file_size_mb || '-') + ' MB';
+                    document.getElementById('sysMaxCount').textContent = data.max_file_count || '-';
+                })
+                .catch(e => console.log('Config fetch failed'));
+
+            // Load LDAP status
+            fetch('/admin/api/ldap/status')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('sysLdapStatus').textContent = data.ldap_configured ? 'Configured' : 'Not Configured';
+                    document.getElementById('sysLdapServer').textContent = data.ldap_server || 'N/A';
+                    document.getElementById('sysLdapInterval').textContent = data.sync_interval ? (data.sync_interval + 's') : 'N/A';
+                })
+                .catch(e => console.log('LDAP status fetch failed'));
+
+            // Determine auth mode from user info
+            fetch('/api/userinfo')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.username === 'Administrator') {
+                        document.getElementById('sysAuthMode').textContent = 'Password';
+                        document.getElementById('sysOIDC').textContent = 'No';
+                        document.getElementById('sysAutoSSO').textContent = 'N/A';
+                    } else {
+                        document.getElementById('sysAuthMode').textContent = 'Enterprise SSO';
+                        document.getElementById('sysOIDC').textContent = 'Yes';
+                        document.getElementById('sysAutoSSO').textContent = 'Yes';
+                    }
+                })
+                .catch(e => console.log('Userinfo fetch failed'));
+
+            // These would need backend endpoints to expose - showing placeholders
+            document.getElementById('sysMinioEndpoint').textContent = 'minio:9000';
+            document.getElementById('sysMinioBucket').textContent = 'yossarian-jobs';
+            document.getElementById('sysMinioSSL').textContent = 'No';
+            document.getElementById('sysADService').textContent = 'http://yossarian-db-service:8081';
+            document.getElementById('sysRunMode').textContent = 'Frontend';
+        }
+
+        // ============================================
         // Actions
+        // ============================================
         function syncAD() {
+            showStatus('info', 'Starting AD synchronization...', 'dashboardStatus');
             showStatus('info', 'Starting AD synchronization...', 'adStatus');
+            
             fetch('/admin/api/ldap/sync', { method: 'POST' })
                 .then(r => r.json())
                 .then(data => {
-                    showStatus('success', `AD sync completed. ${data.accounts_imported || 0} accounts imported.`, 'adStatus');
+                    const msg = `AD sync completed. ${data.accounts_imported || 0} accounts imported.`;
+                    showStatus('success', msg, 'dashboardStatus');
+                    showStatus('success', msg, 'adStatus');
                     loadADStatus();
                     loadADAccounts();
                 })
-                .catch(e => showStatus('error', 'AD sync failed: ' + e.message, 'adStatus'));
+                .catch(e => {
+                    showStatus('error', 'AD sync failed: ' + e.message, 'dashboardStatus');
+                    showStatus('error', 'AD sync failed: ' + e.message, 'adStatus');
+                });
         }
 
         function testLDAP() {
-            showStatus('info', 'Testing LDAP connection...', 'adStatus');
+            showStatus('info', 'Testing LDAP connection...', 'dashboardStatus');
+            
             fetch('/admin/api/ldap/test')
                 .then(r => r.json())
                 .then(data => {
                     if (data.status === 'success') {
-                        showStatus('success', `LDAP test successful. Found ${data.users_found || 0} users.`, 'adStatus');
+                        showStatus('success', `LDAP test successful. Found ${data.users_found || 0} users.`, 'dashboardStatus');
                     } else {
-                        showStatus('error', 'LDAP test failed: ' + data.message, 'adStatus');
+                        showStatus('error', 'LDAP test failed: ' + data.message, 'dashboardStatus');
                     }
                 })
-                .catch(e => showStatus('error', 'LDAP test failed: ' + e.message, 'adStatus'));
+                .catch(e => showStatus('error', 'LDAP test failed: ' + e.message, 'dashboardStatus'));
         }
 
         function refreshADAccounts() {
@@ -641,50 +1355,14 @@
                             .map(([account, usn]) => `"${account}","${usn}"`)
                             .join('\n');
                     
-                    const blob = new Blob([csv], { type: 'text/csv' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `ad-accounts-${new Date().toISOString().split('T')[0]}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
+                    downloadFile(csv, `ad-accounts-${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
                 })
                 .catch(e => showStatus('error', 'Export failed: ' + e.message, 'adStatus'));
         }
 
-        function loadSensitiveTerms() {
-            const tbody = document.getElementById('sensitiveTermsTable');
-            
-            fetch('/admin/api/sensitive/list')
-                .then(r => r.json())
-                .then(data => {
-                    tbody.innerHTML = '';
-                    document.getElementById('statSensitiveTerms').textContent = data.total || 0;
-                    document.getElementById('termsCount').textContent = data.total || 0;
-                    
-                    if (data.terms && Object.keys(data.terms).length > 0) {
-                        Object.entries(data.terms).forEach(([term, replacement]) => {
-                            tbody.innerHTML += `
-                                <tr>
-                                    <td><code>${term}</code></td>
-                                    <td><code>${replacement}</code></td>
-                                    <td>
-                                        <button class="btn btn-error" onclick="deleteSensitiveTerm('${term}')">🗑️ Delete</button>
-                                    </td>
-                                </tr>
-                            `;
-                        });
-                    } else {
-                        tbody.innerHTML = '<tr><td colspan="3" class="loading">No sensitive terms found</td></tr>';
-                    }
-                })
-                .catch(e => {
-                    tbody.innerHTML = '<tr><td colspan="3" class="loading">Failed to load sensitive terms</td></tr>';
-                });
-        }
-
+        // ============================================
+        // Sensitive Terms
+        // ============================================
         function addSensitiveTerm() {
             const term = document.getElementById('newTerm').value.trim();
             const replacement = document.getElementById('newReplacement').value.trim() || '[SENSITIVE]';
@@ -735,15 +1413,7 @@
                             .map(([term, replacement]) => `"${term}","${replacement}"`)
                             .join('\n');
                     
-                    const blob = new Blob([csv], { type: 'text/csv' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `sensitive-terms-${new Date().toISOString().split('T')[0]}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
+                    downloadFile(csv, `sensitive-terms-${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
                 })
                 .catch(e => showStatus('error', 'Export failed: ' + e.message, 'termsStatus'));
         }
@@ -762,9 +1432,8 @@
                         const csv = e.target.result;
                         const lines = csv.split('\n');
                         let imported = 0;
-                        let errors = 0;
+                        let promises = [];
                         
-                        // Skip header line
                         for (let i = 1; i < lines.length; i++) {
                             const line = lines[i].trim();
                             if (!line) continue;
@@ -775,22 +1444,21 @@
                                 const replacement = matches[2].replace(/"/g, '').trim() || '[SENSITIVE]';
                                 
                                 if (term) {
-                                    fetch('/admin/api/sensitive/add', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ term, replacement })
-                                    })
-                                    .then(r => r.json())
-                                    .then(data => imported++)
-                                    .catch(e => errors++);
+                                    promises.push(
+                                        fetch('/admin/api/sensitive/add', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ term, replacement })
+                                        }).then(() => imported++)
+                                    );
                                 }
                             }
                         }
                         
-                        setTimeout(() => {
-                            showStatus('success', `Import completed: ${imported} terms added, ${errors} errors`, 'termsStatus');
+                        Promise.all(promises).then(() => {
+                            showStatus('success', `Import completed: ${imported} terms added`, 'termsStatus');
                             loadSensitiveTerms();
-                        }, 1000);
+                        });
                         
                     } catch (error) {
                         showStatus('error', 'Invalid CSV format', 'termsStatus');
@@ -801,30 +1469,17 @@
             input.click();
         }
 
-        function showStatus(type, message, elementId) {
-            const statusElement = document.getElementById(elementId);
-            if (statusElement) {
-                statusElement.className = `status-message visible ${type}`;
-                statusElement.textContent = message;
-                setTimeout(() => statusElement.classList.remove('visible'), 5000);
-            }
-        }
-
-        // Initialize
-        document.addEventListener('DOMContentLoaded', loadDynamicData);
-
-        // Organization Settings Functions
+        // ============================================
+        // Organization Settings
+        // ============================================
         function loadOrgSettings() {
             fetch('/admin/api/org-settings/list')
                 .then(r => r.json())
                 .then(data => {
                     const settings = data.settings || {};
                     
-                    // Load disclaimer settings
                     document.getElementById('disclaimerEnabled').checked = settings.disclaimer_enabled === 'true';
                     document.getElementById('disclaimerText').value = settings.disclaimer_text || '';
-                    
-                    // Load documentation settings
                     document.getElementById('docsEnabled').checked = settings.docs_enabled === 'true';
                     document.getElementById('docsTitle').value = settings.docs_title || 'Documentation';
                     document.getElementById('docsUrl').value = settings.docs_url || '';
@@ -832,7 +1487,7 @@
                     updateOrgPreview();
                 })
                 .catch(e => {
-                    showStatus('error', 'Failed to load organization settings: ' + e.message, 'orgStatus');
+                    showStatus('error', 'Failed to load organization settings', 'orgStatus');
                 });
         }
 
@@ -871,22 +1526,22 @@
 
             if (disclaimerEnabled && disclaimerText) {
                 preview += `
-                    <div style="background: #fff3e0; border-left: 4px solid #f57c00; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
-                        <div style="font-weight: 500; margin-bottom: 8px;">⚠️ NOTICE</div>
-                        <div style="font-size: 14px;">${escapeHtml(disclaimerText)}</div>
+                    <div style="background: linear-gradient(135deg, #fff3e0, #ffe0b2); border-left: 4px solid var(--md-warning); padding: 16px; border-radius: 12px; margin-bottom: 16px;">
+                        <div style="font-weight: 500; margin-bottom: 8px; color: #e65100;">⚠️ NOTICE</div>
+                        <div style="font-size: 14px; color: #ef6c00;">${escapeHtml(disclaimerText)}</div>
                     </div>
                 `;
             }
 
             if (docsEnabled && docsUrl) {
                 preview += `
-                    <div style="background: linear-gradient(135deg, #e3f2fd, #bbdefb); border-left: 4px solid #1976d2; padding: 16px; border-radius: 8px;">
+                    <div style="background: linear-gradient(135deg, #e3f2fd, #bbdefb); border-left: 4px solid var(--md-primary); padding: 16px; border-radius: 12px;">
                         <div style="display: flex; align-items: center; justify-content: space-between;">
                             <div>
                                 <div style="font-weight: 500; margin-bottom: 4px;">📚 ${escapeHtml(docsTitle)}</div>
                                 <div style="font-size: 13px; color: #1565c0;">${escapeHtml(docsUrl)}</div>
                             </div>
-                            <div style="padding: 8px 16px; background: #1976d2; color: white; border-radius: 20px; font-size: 13px;">
+                            <div style="padding: 8px 16px; background: var(--md-primary); color: white; border-radius: 20px; font-size: 13px;">
                                 View Documentation →
                             </div>
                         </div>
@@ -895,16 +1550,35 @@
             }
 
             if (!preview) {
-                preview = '<div style="color: var(--md-on-surface-variant);">No settings enabled. Check the boxes above to enable disclaimer or documentation.</div>';
+                preview = '<p style="color: var(--md-on-surface-variant);">Enable settings above to see preview...</p>';
             }
 
             document.getElementById('orgPreview').innerHTML = preview;
         }
 
-        // Add event listeners for live preview
+        // ============================================
+        // Utilities
+        // ============================================
+        function downloadFile(content, filename, type) {
+            const blob = new Blob([content], { type });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // ============================================
+        // Event Listeners
+        // ============================================
         document.addEventListener('DOMContentLoaded', function() {
-            const orgFields = ['disclaimerEnabled', 'disclaimerText', 'docsEnabled', 'docsTitle', 'docsUrl'];
-            orgFields.forEach(id => {
+            loadDynamicData();
+            
+            // Live preview for org settings
+            ['disclaimerEnabled', 'disclaimerText', 'docsEnabled', 'docsTitle', 'docsUrl'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('input', updateOrgPreview);
