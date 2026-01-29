@@ -43,7 +43,8 @@
     <div class="custom-header">
         <span class="logo">🛡️</span>
         <span class="title">Yossarian Go API</span>
-        <span class="version">v0.13.12</span>
+        <span class="version" id="app-version">...</span>
+        <script>fetch('/health').then(r=>r.json()).then(d=>document.getElementById('app-version').textContent=d.version)</script>
         <a href="/" class="back-link">← Back to App</a>
     </div>
     <div id="swagger-ui"></div>

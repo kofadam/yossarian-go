@@ -27,7 +27,7 @@ info:
     Currently supports session-based authentication (OIDC/password).
     API key authentication planned for v0.14.0 (see `X-API-Key` header).
     
-  version: 0.13.12
+  version: "0.0.0-dev"
   contact:
     name: Yossarian Go Support
     url: https://github.com/kofadam/yossarian-go

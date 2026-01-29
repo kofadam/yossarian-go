@@ -3300,7 +3300,9 @@ func tourContentHandler(w http.ResponseWriter, r *http.Request) {
 func openapiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-yaml")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Write(openapiSpec)
+	// Inject build version into OpenAPI spec
+	spec := strings.Replace(string(openapiSpec), "0.0.0-dev", Version, 1)
+	w.Write([]byte(spec))
 }
 
 // Swagger UI HTML handler
