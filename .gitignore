@@ -47,3 +47,9 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+# Development artifacts
+cookies.txt
+docker-compose.dev.yml
+*.old
+test/
+test.txt
