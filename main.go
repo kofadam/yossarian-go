@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"mime/multipart"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
