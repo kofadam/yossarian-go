@@ -3,9 +3,9 @@
 ![Go Version](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)
 ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-Native-326CE5?logo=kubernetes)
-![Helm](https://img.shields.io/badge/Helm-v0.13.8-0F1689?logo=helm)
+![Helm](https://img.shields.io/badge/Helm-v0.13.17-0F1689?logo=helm)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-v0.13.8-blue)
+![Version](https://img.shields.io/badge/Version-v0.13.17-blue)
 
 🛡️ **Enterprise log sanitization with MinIO-backed batch processing**
 
@@ -22,8 +22,8 @@ Automatically detects and replaces sensitive information in log files with anony
 - **🌐 IP Addresses** → `[IP-001]` with consistent mapping
 - **👤 AD Accounts** → USN format via LDAP (`CORP\user` → `USN123456789`)
 - **🎫 JWT Tokens** → `[JWT-REDACTED]`
-- **🔐 Private Keys** → `[PRIVATE-KEY-REDACTED]`
-- **🔑 Passwords** → `[PASSWORD-REDACTED]`
+- **🔑 Private Keys** → `[PRIVATE-KEY-REDACTED]`
+- **🔒 Passwords** → `[PASSWORD-REDACTED]`
 - **🏢 Custom Terms** → Admin-configured organizational patterns
 
 ---
@@ -35,7 +35,7 @@ Automatically detects and replaces sensitive information in log files with anony
 ```bash
 # Standard installation
 helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
-  --version 0.13.8 \
+  --version 0.13.17 \
   --namespace yossarian-go \
   --create-namespace \
   --set ingress.host=yossarian.example.com \
@@ -45,10 +45,10 @@ helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
 **📦 Air-Gap Installation** (using Distribution Tooling for Helm):
 ```bash
 # Wrap chart with all container images included
-dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8
+dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.17
 
 # Push to air-gapped registry
-dt unwrap yossarian-go-0.13.8.wrap.tgz your-registry.yourdomain.local/project/charts --yes
+dt unwrap yossarian-go-0.13.17.wrap.tgz your-registry.yourdomain.local/project/charts --yes
 
 # Install in air-gap environment
 helm install yossarian oci://your-registry.yourdomain.local/project/charts/yossarian-go
@@ -58,6 +58,7 @@ helm install yossarian oci://your-registry.yourdomain.local/project/charts/yossa
 
 **📚 Documentation:**
 - [Complete Helm Chart Documentation](helm/yossarian-go/README.md)
+- [API Integration Guide](docs/API-INTEGRATION-GUIDE.md)
 - [Air-Gap Installation Guide](docs/DISTRIBUTION-TOOLING-GUIDE.md)
 - [Certificate Configuration](docs/CERTIFICATE-CONFIGURATION-GUIDE.md)
 - [Technical Architecture](docs/ARCHITECTURE.md)
@@ -76,24 +77,52 @@ open http://localhost:8080
 ## 🎯 Key Features
 
 ### ⚡ Scalable Architecture
-- **Split Architecture**: Horizontally scalable frontend + dedicated worker
+- **Split Architecture**: Horizontally scalable frontend + workers
 - **MinIO Storage**: Centralized object storage for batch jobs
 - **Async Processing**: Upload large files and download results later
-- **Job Cancellation**: Cancel queued/processing jobs (v0.13.8+)
+- **Job Cancellation**: Cancel queued/processing jobs
 - **Auto-Cleanup**: 8-hour retention policy for completed jobs
-- **Memory Optimized**: Streaming architecture prevents OOM crashes (v0.13.8)
+- **Memory Optimized**: Streaming architecture prevents OOM crashes
 
 ### 🔒 Security & Compliance
 - **Zero Persistence**: No data retained after download
 - **Air-Gap Ready**: No external dependencies required
 - **Enterprise SSO**: OIDC/Keycloak integration
+- **API Key Auth**: Stateless authentication for pipelines
 - **Audit Trails**: Complete IP mapping exports
 
 ### 📊 Monitoring & Observability
 - **Prometheus Metrics**: `/metrics` endpoint on all components
 - **Grafana Dashboards**: Pre-built overview and worker detail dashboards
-- **ServiceMonitor**: Native Prometheus Operator integration (v0.13.8+)
+- **ServiceMonitor**: Native Prometheus Operator integration
 - **Performance Tracking**: Cache hit rates, processing times, queue depth
+
+---
+
+## 🔌 API Integration
+
+Integrate Yossarian Go into your CI/CD pipelines and automation workflows:
+
+```bash
+# Create an API key in Admin Panel → API Keys
+export API_KEY="yoss_your_key_here"
+
+# Upload and sanitize a ZIP file
+curl -X POST "https://yossarian.example.com/upload" \
+  -H "X-API-Key: $API_KEY" \
+  -F "file=@logs.zip"
+
+# Check job status
+curl -H "X-API-Key: $API_KEY" \
+  "https://yossarian.example.com/api/jobs/status/batch-user-20260129-120000"
+
+# Download results
+curl -H "X-API-Key: $API_KEY" \
+  "https://yossarian.example.com/jobs/download/batch-user-20260129-120000" \
+  -o sanitized.zip
+```
+
+See the [API Integration Guide](docs/API-INTEGRATION-GUIDE.md) for complete documentation with examples in Bash, Python, and Jenkins.
 
 ---
 
@@ -102,7 +131,7 @@ open http://localhost:8080
 - **Single File**: 3MB file with 35K patterns in 2.6 seconds
 - **Batch Processing**: 4-file ZIP in 0.2 seconds
 - **AD Lookup Caching**: 23x performance boost (98%+ cache hit rate)
-- **Scalability**: Frontend scales 1-10+ pods, worker handles queue-based processing
+- **Scalability**: Frontend scales 1-10+ pods, workers scale horizontally
 
 ---
 
@@ -125,11 +154,10 @@ auth:
     autoSSO: true  # Force SSO login
 
 # Active Directory Integration
-database:
-  ldap:
-    enabled: true
-    server: ldaps://dc.example.com:636
-    bindDN: CN=svc-yossarian,OU=Service,DC=example,DC=com
+ldap:
+  enabled: true
+  server: ldaps://dc.example.com:636
+  bindDN: CN=svc-yossarian,OU=Service,DC=example,DC=com
 
 # Monitoring
 metrics:
@@ -143,9 +171,10 @@ minio:
   persistence:
     size: 100Gi
 worker:
+  replicas: 2  # Horizontally scalable
   resources:
     requests:
-      memory: 256Mi  # Optimized in v0.13.8
+      memory: 256Mi
 ```
 
 See [complete values.yaml documentation](helm/yossarian-go/README.md#configuration) for all options.
@@ -159,7 +188,7 @@ See [complete values.yaml documentation](helm/yossarian-go/README.md#configurati
 ```bash
 # Enable ServiceMonitor in Helm values
 helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
-  --version 0.13.8 \
+  --version 0.13.17 \
   --reuse-values \
   --set metrics.serviceMonitor.enabled=true \
   --set metrics.serviceMonitor.additionalLabels.prometheus=kube-prometheus
@@ -185,21 +214,21 @@ helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
 
 ## 🔄 Upgrading
 
-### From v0.13.3 to v0.13.8
+### From v0.13.8 to v0.13.17
 
 ```bash
 helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
-  --version 0.13.8 \
+  --version 0.13.17 \
   --namespace yossarian-go \
   --reuse-values
 ```
 
-**What's New in v0.13.8:**
-- ✅ ServiceMonitor for Prometheus Operator
-- ✅ Distribution Tooling annotations (air-gap support)
-- ✅ Memory optimization (worker: 2Gi → 512Mi limit)
-- ✅ Job cancellation (1-hour timeout)
-- ✅ Certificate configuration fix (OIDC vs LDAPS)
+**What's New in v0.13.17:**
+- ✅ **API Key Authentication** - Stateless auth for pipelines and automation
+- ✅ **Horizontal Worker Scaling** - Workers now scale (MinIO-backed, no PVC)
+- ✅ **Helm Chart Fixes** - MinIO Deployment, tour ConfigMap, TLS handling
+- ✅ **Interactive Tour** - Multi-language onboarding (EN/HE)
+- ✅ **API Documentation** - Complete integration guide with examples
 
 **Breaking Changes:** None (fully backwards compatible)
 
@@ -212,6 +241,7 @@ See [CHANGELOG](helm/yossarian-go/CHANGELOG.md) for complete version history.
 | Document | Description |
 |----------|-------------|
 | [Helm Chart README](helm/yossarian-go/README.md) | Complete installation and configuration guide |
+| [API Integration Guide](docs/API-INTEGRATION-GUIDE.md) | REST API for pipelines and automation |
 | [Distribution Tooling Guide](docs/DISTRIBUTION-TOOLING-GUIDE.md) | Air-gap deployment with bundled images |
 | [Certificate Configuration](docs/CERTIFICATE-CONFIGURATION-GUIDE.md) | OIDC and LDAPS certificate setup |
 | [Technical Architecture](docs/ARCHITECTURE.md) | System design and component details |
@@ -227,7 +257,7 @@ git clone https://github.com/kofadam/yossarian-go.git
 cd yossarian-go
 
 # Build images
-./build.sh v0.13.8
+./build.sh v0.13.17
 ./build-db-service.sh v0.12.3
 
 # Run locally
@@ -256,7 +286,7 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 - **Issues**: [GitHub Issues](https://github.com/kofadam/yossarian-go/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/kofadam/yossarian-go/discussions)
-- **Version**: v0.13.8
+- **Version**: v0.13.17
 - **Last Updated**: January 2026
 
 ---

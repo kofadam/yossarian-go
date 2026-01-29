@@ -13,6 +13,7 @@ Yossarian Go automatically detects and replaces sensitive information (IP addres
 - 📊 Prometheus metrics + Grafana dashboards
 - 🌐 Air-gap ready (no external dependencies)
 - 🗑️ Auto-cleanup (8-hour retention)
+- 🔑 API key authentication for pipeline integration
 
 ## Prerequisites
 
@@ -32,31 +33,31 @@ This chart supports **Distribution Tooling for Helm** for air-gap environments:
 # See: https://github.com/vmware-labs/distribution-tooling-for-helm
 
 # 1. Wrap the chart with all images
-dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8 \
+dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.17 \
   --output-dir ./wrapped-charts
 
 # 2. Push to your air-gap registry
-dt push ./wrapped-charts/yossarian-go-0.13.8.wrap.tgz \
+dt push ./wrapped-charts/yossarian-go-0.13.17.wrap.tgz \
   --to-registry your-registry.local
 
 # 3. Install from air-gap registry
 helm install yossarian oci://your-registry.local/yossarian-go \
-  --version 0.13.8 \
+  --version 0.13.17 \
   -n yossarian-go --create-namespace
 ```
 
 **Images included:**
-- `ghcr.io/kofadam/yossarian-go:v0.13.8` - Main application
+- `ghcr.io/kofadam/yossarian-go:v0.13.17` - Main application
 - `ghcr.io/kofadam/yossarian-go-db-service:v0.12.3` - Database service
-- `quay.io/minio/minio:RELEASE.2024-01-01T00-00-00Z` - Object storage
-- `curlimages/curl:8.5.0` - CronJob utility
+- `quay.io/minio/minio:latest` - Object storage
+- `curlimages/curl:latest` - CronJob utility
 
 ## Quick Start
 
 ```bash
 # Install directly from GitHub Container Registry (OCI)
 helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
-  --version 0.13.3 \
+  --version 0.13.17 \
   --namespace yossarian-go \
   --create-namespace \
   --set ingress.host=yossarian.example.com \
@@ -78,7 +79,7 @@ auth:
 
 ```bash
 helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
-  --version 0.13.3 \
+  --version 0.13.17 \
   -f minimal-values.yaml \
   -n yossarian-go --create-namespace
 ```
@@ -323,9 +324,6 @@ persistence:
   
   database:
     size: 5Gi
-  
-  worker:
-    size: 50Gi
 ```
 
 ## Resource Limits
@@ -342,21 +340,21 @@ frontend:
       memory: 2Gi
 
 worker:
-  replicas: 1  # Must be 1
+  replicas: 2  # Horizontally scalable (MinIO-backed)
   resources:
     requests:
       cpu: 250m
-      memory: 512Mi
+      memory: 256Mi
     limits:
       cpu: 1000m
-      memory: 2Gi
+      memory: 512Mi
 ```
 
 ## Upgrading
 
 ```bash
 helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
-  --version 0.13.3 \
+  --version 0.13.17 \
   -n yossarian-go \
   -f custom-values.yaml
 ```
@@ -382,9 +380,9 @@ kubectl delete pvc -n yossarian-go -l app.kubernetes.io/instance=yossarian
 | `oidc.issuerURL` | OIDC provider URL | `""` |
 | `ldap.enabled` | Enable LDAP/AD integration | `false` |
 | `persistence.minio.size` | MinIO storage size | `100Gi` |
-| `persistence.worker.size` | Worker storage size | `50Gi` |
+| `persistence.database.size` | Database storage size | `5Gi` |
 | `frontend.replicas` | Frontend pod count | `3` |
-| `worker.replicas` | Worker pod count (must be 1) | `1` |
+| `worker.replicas` | Worker pod count (scalable) | `2` |
 
 See [values.yaml](values.yaml) for all available options.
 
@@ -439,7 +437,6 @@ metrics:
 **Metrics endpoints:**
 - Frontend: `http://yossarian-frontend:8080/metrics`
 - Worker: `http://yossarian-worker:8080/metrics`
-- Database: `http://yossarian-db-service:8081/health`
 
 ### Grafana Dashboards
 
@@ -514,6 +511,39 @@ spec:
           annotations:
             summary: "AD cache hit rate below 80%"
 ```
+
+## API Integration
+
+Yossarian Go provides a REST API for automated pipelines and CI/CD integration.
+
+**Authentication:** API keys (recommended) or session cookies
+
+```bash
+# Create API key via Admin Panel → API Keys
+# Use in requests:
+curl -H "X-API-Key: yoss_your_key_here" \
+  -F "file=@logs.zip" \
+  https://yossarian.example.com/upload
+```
+
+**Key endpoints:**
+- `POST /upload` - Upload files for sanitization
+- `GET /api/jobs/status/{job_id}` - Check job status
+- `GET /api/jobs/list` - List all jobs for authenticated user
+- `GET /jobs/download/{job_id}` - Download sanitized output
+- `GET /jobs/reports/{job_id}/ip-mappings.csv` - Download IP mappings
+- `GET /jobs/reports/{job_id}/summary.json` - Download processing summary
+- `POST /api/jobs/cancel/{job_id}` - Cancel a job
+- `DELETE /api/jobs/delete/{job_id}` - Delete a job
+
+**API Key Scopes:**
+| Scope | Permissions |
+|-------|-------------|
+| `read` | Download files, reports, job status |
+| `write` | Upload files, create/cancel/delete jobs |
+| `admin` | Access other users' jobs |
+
+See [API Integration Guide](../docs/API-INTEGRATION-GUIDE.md) for complete documentation with examples in Bash, Python, and Jenkins.
 
 ## Support
 
