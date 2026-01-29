@@ -13,7 +13,8 @@ Automatically detects and replaces sensitive information in log files with anony
 
 **Named after the Catch-22 character who censored letters** - Yossarian Go sanitizes your logs so you can safely share them with external support teams, vendors, or less-secure storage.
 
-<img width="1799" alt="Main Interface" src="https://github.com/user-attachments/assets/ee2a3bc4-f713-4398-b1bc-7a69c80429ef" />
+<img width="1675" height="860" alt="image" src="https://github.com/user-attachments/assets/2f63923c-7f18-47a2-8d52-48e56d25a39c" />
+<img width="1675" height="794" alt="image" src="https://github.com/user-attachments/assets/9ec20333-009a-4222-9c47-b4c1de9b4709" />
 
 ---
 
