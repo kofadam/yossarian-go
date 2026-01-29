@@ -42,7 +42,7 @@ dt push ./wrapped-charts/yossarian-go-0.13.18.wrap.tgz \
 
 # 3. Install from air-gap registry
 helm install yossarian oci://your-registry.local/yossarian-go \
-  --version 0.13.17 \
+  --version 0.13.18 \
   -n yossarian-go --create-namespace
 ```
 
@@ -57,7 +57,7 @@ helm install yossarian oci://your-registry.local/yossarian-go \
 ```bash
 # Install directly from GitHub Container Registry (OCI)
 helm install yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
-  --version 0.13.17 \
+  --version 0.13.18 \
   --namespace yossarian-go \
   --create-namespace \
   --set ingress.host=yossarian.example.com \
@@ -79,7 +79,7 @@ auth:
 
 ```bash
 helm install yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
-  --version 0.13.17 \
+  --version 0.13.18 \
   -f minimal-values.yaml \
   -n yossarian-go --create-namespace
 ```
@@ -354,7 +354,7 @@ worker:
 
 ```bash
 helm upgrade yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
-  --version 0.13.17 \
+  --version 0.13.18 \
   -n yossarian-go \
   -f custom-values.yaml
 ```
