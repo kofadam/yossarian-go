@@ -40,7 +40,6 @@ import (
 )
 
 // Embedded static files for API documentation
-//
 //go:embed openapi.yaml
 var openapiSpec []byte
 
