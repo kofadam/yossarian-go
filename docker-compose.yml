@@ -22,7 +22,7 @@ services:
 
   # Frontend (with built-in db-service functionality)
   db-service:
-    image: ghcr.io/kofadam/yossarian-go-db-service:v0.12.3
+    image: ghcr.io/kofadam/yossarian-go-db-service:v0.12.4
     container_name: yossarian-db-service
     environment:
       PORT: 8081
@@ -38,7 +38,7 @@ services:
 
   # Frontend
   frontend:
-    image: yossarian-go/yossarian-go:v0.13.13
+    image: ghcr.io/kofadam/yossarian-go:v0.13.17
     container_name: yossarian-frontend
     environment:
       MODE: frontend
@@ -73,7 +73,7 @@ services:
 
 # Worker (processes batch jobs) - stateless, can scale horizontally
   worker:
-    image: yossarian-go/yossarian-go:v0.13.13
+    image: ghcr.io/kofadam/yossarian-go:v0.13.17
     container_name: yossarian-worker
     environment:
       MODE: worker
