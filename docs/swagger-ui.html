@@ -1,0 +1,74 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yossarian Go API Documentation</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+    <link rel="stylesheet" type="text/css" href="/docs/swagger-ui.css">
+    <style>
+        html { box-sizing: border-box; overflow-y: scroll; }
+        *, *:before, *:after { box-sizing: inherit; }
+        body { margin: 0; background: #fafafa; }
+        .swagger-ui .topbar { display: none; }
+        .swagger-ui .info .title { font-size: 2em; }
+        .custom-header {
+            background: linear-gradient(135deg, #1976d2, #1565c0);
+            color: white;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .custom-header .logo { font-size: 32px; }
+        .custom-header .title { font-size: 20px; font-weight: 600; }
+        .custom-header .version { 
+            background: rgba(255,255,255,0.2); 
+            padding: 4px 12px; 
+            border-radius: 12px; 
+            font-size: 13px;
+            margin-left: auto;
+        }
+        .custom-header .back-link {
+            color: white;
+            text-decoration: none;
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        .custom-header .back-link:hover { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="custom-header">
+        <span class="logo">🛡️</span>
+        <span class="title">Yossarian Go API</span>
+        <span class="version">v0.13.12</span>
+        <a href="/" class="back-link">← Back to App</a>
+    </div>
+    <div id="swagger-ui"></div>
+    <script src="/docs/swagger-ui-bundle.js" charset="UTF-8"></script>
+    <script src="/docs/swagger-ui-standalone-preset.js" charset="UTF-8"></script>
+    <script>
+        window.onload = function() {
+            const ui = SwaggerUIBundle({
+                url: "/api/openapi.yaml",
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                plugins: [
+                    SwaggerUIBundle.plugins.DownloadUrl
+                ],
+                layout: "StandaloneLayout",
+                defaultModelsExpandDepth: -1,
+                docExpansion: "list",
+                filter: true
+            });
+            window.ui = ui;
+        };
+    </script>
+</body>
+</html>

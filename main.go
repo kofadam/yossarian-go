@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"embed"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -37,6 +38,23 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// Embedded static files for API documentation
+//
+//go:embed openapi.yaml
+var openapiSpec []byte
+
+//go:embed docs/swagger-ui.html
+var swaggerUIHTML []byte
+
+//go:embed docs/swagger-ui.css
+var swaggerUICSS []byte
+
+//go:embed docs/swagger-ui-bundle.js
+var swaggerUIBundleJS []byte
+
+//go:embed docs/swagger-ui-standalone-preset.js
+var swaggerUIPresetJS []byte
 
 // User info structure for future OIDC
 type UserInfo struct {
@@ -3279,6 +3297,38 @@ func tourContentHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(content)
 }
 
+// OpenAPI spec handler
+func openapiHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write(openapiSpec)
+}
+
+// Swagger UI HTML handler
+func swaggerUIHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(swaggerUIHTML)
+}
+
+// Swagger UI static assets handler
+func swaggerUIAssetsHandler(w http.ResponseWriter, r *http.Request) {
+	asset := strings.TrimPrefix(r.URL.Path, "/docs/")
+
+	switch asset {
+	case "swagger-ui.css":
+		w.Header().Set("Content-Type", "text/css")
+		w.Write(swaggerUICSS)
+	case "swagger-ui-bundle.js":
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Write(swaggerUIBundleJS)
+	case "swagger-ui-standalone-preset.js":
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Write(swaggerUIPresetJS)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -3373,6 +3423,11 @@ func main() {
 
 	// Tour content endpoint (no auth required - public endpoint)
 	http.HandleFunc("/api/tour/", tourContentHandler)
+
+	// API Documentation (OpenAPI + Swagger UI)
+	http.HandleFunc("/api/openapi.yaml", openapiHandler)
+	http.HandleFunc("/docs", swaggerUIHandler)
+	http.HandleFunc("/docs/", swaggerUIAssetsHandler)
 
 	// Debug route
 	http.HandleFunc("/debug", debugHandler)
