@@ -38,7 +38,7 @@ services:
 
   # Frontend
   frontend:
-    image: yossarian-go/yossarian-go:v0.13.11-dev
+    image: yossarian-go/yossarian-go:v0.13.13
     container_name: yossarian-frontend
     environment:
       MODE: frontend
@@ -73,7 +73,7 @@ services:
 
 # Worker (processes batch jobs) - stateless, can scale horizontally
   worker:
-    image: yossarian-go/yossarian-go:v0.13.11-dev
+    image: yossarian-go/yossarian-go:v0.13.13
     container_name: yossarian-worker
     environment:
       MODE: worker
