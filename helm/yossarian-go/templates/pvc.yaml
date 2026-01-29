@@ -37,23 +37,3 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.database.size }}
-
----
-# Worker jobs PVC
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ include "yossarian-go.fullname" . }}-jobs-pvc
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "yossarian-go.labels" . | nindent 4 }}
-    app.kubernetes.io/component: worker
-spec:
-  accessModes:
-    - {{ .Values.persistence.worker.accessMode }}
-  {{- if .Values.persistence.worker.storageClass }}
-  storageClassName: {{ .Values.persistence.worker.storageClass }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.persistence.worker.size }}

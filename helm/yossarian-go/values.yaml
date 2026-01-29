@@ -88,12 +88,6 @@ persistence:
     size: 5Gi
     storageClass: ""
     accessMode: ReadWriteOnce
-  
-  # Worker processing storage
-  worker:
-    size: 50Gi
-    storageClass: ""
-    accessMode: ReadWriteOnce
 
 # MinIO configuration
 minio:
@@ -158,8 +152,8 @@ frontend:
 
 # Worker deployment
 worker:
-  # Must be 1 (RWO PVC limitation)
-  replicas: 1
+  # Horizontally scalable (MinIO-backed, no local storage)
+  replicas: 2
   # Poll interval for job queue (seconds)
   pollInterval: 5
   # Job cancellation timeout (seconds) - cancel jobs stuck in processing
@@ -254,6 +248,15 @@ metrics:
     additionalLabels: {}
       # prometheus: kube-prometheus
       # release: prometheus
+
+# Service account configuration
+serviceAccount:
+  # Create a service account
+  create: false
+  # Name of the service account (auto-generated if empty)
+  name: ""
+  # Annotations for the service account
+  annotations: {}
 
 # Additional environment variables
 extraEnv: []

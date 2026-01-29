@@ -20,7 +20,7 @@ spec:
 
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: {{ include "yossarian-go.fullname" . }}-minio
   namespace: {{ .Release.Namespace }}
@@ -28,8 +28,9 @@ metadata:
     {{- include "yossarian-go.labels" . | nindent 4 }}
     app.kubernetes.io/component: minio
 spec:
-  serviceName: {{ include "yossarian-go.fullname" . }}-minio
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "yossarian-go.selectorLabels" . | nindent 6 }}

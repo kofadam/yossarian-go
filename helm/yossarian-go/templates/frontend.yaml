@@ -83,6 +83,8 @@ spec:
             - name: CA_CERT_PATH
               value: /etc/ssl/certs/ca-bundle.crt
             {{- end }}
+            - name: TOUR_CONFIG_PATH
+              value: /config/tour
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -91,13 +93,16 @@ spec:
                 name: {{ include "yossarian-go.fullname" . }}-config
             - secretRef:
                 name: {{ include "yossarian-go.fullname" . }}-secrets
-          {{- if .Values.customCA.enabled }}
           volumeMounts:
+            - name: tour-config
+              mountPath: /config/tour
+              readOnly: true
+            {{- if .Values.customCA.enabled }}
             - name: custom-ca
               mountPath: /etc/ssl/certs/ca-bundle.crt
               subPath: ca-bundle.crt
               readOnly: true
-          {{- end }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -124,9 +129,13 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.customCA.enabled }}
       volumes:
+        - name: tour-config
+          configMap:
+            name: {{ include "yossarian-go.fullname" . }}-tour-config
+            optional: true
+        {{- if .Values.customCA.enabled }}
         - name: custom-ca
           configMap:
             name: {{ include "yossarian-go.fullname" . }}-ca-bundle
-      {{- end }}
+        {{- end }}

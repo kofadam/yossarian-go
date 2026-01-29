@@ -30,7 +30,10 @@ metadata:
 spec:
   replicas: {{ .Values.worker.replicas }}
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       {{- include "yossarian-go.selectorLabels" . | nindent 6 }}
@@ -95,15 +98,13 @@ spec:
                 name: {{ include "yossarian-go.fullname" . }}-config
             - secretRef:
                 name: {{ include "yossarian-go.fullname" . }}-secrets
+          {{- if .Values.customCA.enabled }}
           volumeMounts:
-            - name: jobs
-              mountPath: /data/jobs
-            {{- if .Values.customCA.enabled }}
             - name: custom-ca
               mountPath: /etc/ssl/certs/ca-bundle.crt
               subPath: ca-bundle.crt
               readOnly: true
-            {{- end }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -130,12 +131,9 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.customCA.enabled }}
       volumes:
-        - name: jobs
-          persistentVolumeClaim:
-            claimName: {{ include "yossarian-go.fullname" . }}-jobs-pvc
-        {{- if .Values.customCA.enabled }}
         - name: custom-ca
           configMap:
             name: {{ include "yossarian-go.fullname" . }}-ca-bundle
-        {{- end }}
+      {{- end }}
