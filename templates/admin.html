@@ -1031,28 +1031,131 @@
             </div>
 
             <!-- API Keys Panel -->
-            <div id="api-keys" class="panel">
+			<div id="api-keys" class="panel">
                 <div class="panel-header">
                     <h1 class="panel-title">API Keys</h1>
                     <p class="panel-subtitle">Manage API keys for pipeline and automation access</p>
                 </div>
 
+                <div id="apiKeysStatus" class="status-message"></div>
+
+                <!-- Create New Key -->
                 <div class="md-card">
                     <div class="md-card-header">
-                        <h2 class="md-card-title">🔑 API Key Management</h2>
-                        <p class="md-card-subtitle">Create and manage API keys for automated systems</p>
+                        <h2 class="md-card-title">➕ Create New API Key</h2>
+                        <p class="md-card-subtitle">Generate a new key for automated access</p>
                     </div>
 
-                    <div style="text-align: center; padding: 60px 20px; color: var(--md-on-surface-variant);">
-                        <div style="font-size: 64px; margin-bottom: 20px;">🚧</div>
-                        <h3 style="font-size: 20px; margin-bottom: 12px; color: var(--md-on-surface);">Coming Soon</h3>
-                        <p style="max-width: 400px; margin: 0 auto; line-height: 1.6;">
-                            API key authentication for pipeline integration will be available in a future release.
-                            <br><br>
-                            For now, you can use session-based authentication or OIDC service accounts.
-                        </p>
-                        <a href="/docs" target="_blank" class="md-button md-button-outlined" style="margin-top: 24px;">
-                            📚 View API Documentation
+                    <div class="form-group">
+                        <label class="form-label">Key Name *</label>
+                        <input type="text" id="apiKeyName" class="form-input" placeholder="e.g., CI/CD Pipeline, Monitoring Script">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Scopes</label>
+                        <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;">
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="scopeRead" checked> Read
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="scopeWrite" checked> Write
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="scopeAdmin"> Admin
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Expiry (optional)</label>
+                        <select id="apiKeyExpiry" class="form-input">
+                            <option value="0">Never expires</option>
+                            <option value="24">24 hours</option>
+                            <option value="168">7 days</option>
+                            <option value="720">30 days</option>
+                            <option value="2160">90 days</option>
+                            <option value="8760">1 year</option>
+                        </select>
+                    </div>
+
+                    <div class="button-group">
+                        <button onclick="createAPIKey()" class="md-button md-button-filled">🔑 Generate API Key</button>
+                    </div>
+
+                    <!-- New Key Display (hidden by default) -->
+                    <div id="newKeyDisplay" style="display: none; margin-top: 24px; padding: 20px; background: linear-gradient(135deg, #fff3e0, #ffe0b2); border-radius: 12px; border: 2px solid var(--md-warning);">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--md-warning);">
+                            <span style="font-size: 24px;">⚠️</span>
+                            <strong>Save this key now - it won't be shown again!</strong>
+                        </div>
+                        <div style="background: white; padding: 12px 16px; border-radius: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 14px; word-break: break-all; margin-bottom: 12px;">
+                            <code id="newKeyValue"></code>
+                        </div>
+                        <button onclick="copyAPIKey()" class="md-button md-button-outlined" style="width: 100%;">
+                            📋 Copy to Clipboard
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Existing Keys -->
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h2 class="md-card-title">🔑 Active API Keys</h2>
+                        <p class="md-card-subtitle" id="apiKeyCount">Loading...</p>
+                    </div>
+
+                    <div class="button-group" style="margin-bottom: 16px;">
+                        <button onclick="loadAPIKeys()" class="md-button md-button-outlined">🔄 Refresh</button>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Key Prefix</th>
+                                    <th>User</th>
+                                    <th>Scopes</th>
+                                    <th>Created</th>
+                                    <th>Last Used</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="apiKeysTableBody">
+                                <tr>
+                                    <td colspan="8" style="text-align: center; padding: 40px; color: var(--md-on-surface-variant);">
+                                        Loading API keys...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Usage Instructions -->
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h2 class="md-card-title">📖 Usage Instructions</h2>
+                        <p class="md-card-subtitle">How to use API keys in your scripts</p>
+                    </div>
+
+                    <div style="background: var(--md-surface-3); padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                        <div style="font-weight: 500; margin-bottom: 8px;">HTTP Header Authentication:</div>
+                        <code style="display: block; background: var(--md-surface-1); padding: 12px; border-radius: 6px; font-family: 'SF Mono', Monaco, monospace; font-size: 13px;">
+X-API-Key: yoss_your_api_key_here</code>
+                    </div>
+
+                    <div style="background: var(--md-surface-3); padding: 16px; border-radius: 8px;">
+                        <div style="font-weight: 500; margin-bottom: 8px;">Example curl request:</div>
+                        <code style="display: block; background: var(--md-surface-1); padding: 12px; border-radius: 6px; font-family: 'SF Mono', Monaco, monospace; font-size: 13px; white-space: pre-wrap;">curl -X POST https://yossarian.example.com/upload \
+  -H "X-API-Key: yoss_xxx..." \
+  -F "file=@logfile.log"</code>
+                    </div>
+
+                    <div style="margin-top: 16px;">
+                        <a href="/docs" target="_blank" class="md-button md-button-outlined">
+                            📚 View Full API Documentation
                         </a>
                     </div>
                 </div>
@@ -1080,6 +1183,7 @@
                 // Load data for specific panels
                 if (panelId === 'system') loadSystemInfo();
                 if (panelId === 'organization') loadOrgSettings();
+                if (panelId === 'api-keys') loadAPIKeys();
             });
         });
 
@@ -1569,6 +1673,166 @@
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+        }
+
+        // ============================================
+        // API Key Management
+        // ============================================
+        function loadAPIKeys() {
+            fetch('/admin/api/api-keys/list/')
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.getElementById('apiKeysTableBody');
+                    const keys = data.keys || [];
+                    
+                    document.getElementById('apiKeyCount').textContent = `${keys.length} key${keys.length !== 1 ? 's' : ''} configured`;
+                    
+                    if (keys.length === 0) {
+                        tbody.innerHTML = `
+                            <tr>
+                                <td colspan="8" style="text-align: center; padding: 40px; color: var(--md-on-surface-variant);">
+                                    No API keys configured. Create one above to get started.
+                                </td>
+                            </tr>`;
+                        return;
+                    }
+                    
+                    tbody.innerHTML = keys.map(key => {
+                        const createdDate = key.created_at ? new Date(key.created_at).toLocaleDateString() : 'Unknown';
+                        const lastUsed = key.last_used_at ? new Date(key.last_used_at).toLocaleString() : 'Never';
+                        const isExpired = key.expires_at && new Date(key.expires_at) < new Date();
+                        const status = !key.is_active ? 'Revoked' : isExpired ? 'Expired' : 'Active';
+                        const statusClass = !key.is_active ? 'error' : isExpired ? 'warning' : 'healthy';
+                        
+                        return `
+                            <tr style="${!key.is_active || isExpired ? 'opacity: 0.6;' : ''}">
+                                <td><strong>${escapeHtml(key.name)}</strong></td>
+                                <td><code style="background: var(--md-surface-3); padding: 2px 6px; border-radius: 4px;">${escapeHtml(key.prefix)}...</code></td>
+                                <td>${escapeHtml(key.username)}</td>
+                                <td>${escapeHtml(key.scopes).split(',').map(s => 
+                                    `<span style="background: var(--md-primary-container); color: var(--md-on-primary-container); padding: 2px 8px; border-radius: 12px; font-size: 12px; margin-right: 4px;">${s.trim()}</span>`
+                                ).join('')}</td>
+                                <td>${createdDate}</td>
+                                <td>${lastUsed}</td>
+                                <td><span class="health-indicator ${statusClass}">● ${status}</span></td>
+                                <td>
+                                    ${key.is_active ? `
+                                        <button onclick="revokeAPIKey(${key.id}, '${escapeHtml(key.name)}')" class="md-button md-button-warning" style="padding: 4px 12px; font-size: 12px;">
+                                            Revoke
+                                        </button>
+                                    ` : ''}
+                                    <button onclick="deleteAPIKey(${key.id}, '${escapeHtml(key.name)}')" class="md-button md-button-error" style="padding: 4px 12px; font-size: 12px;">
+                                        Delete
+                                    </button>
+                                </td>
+                            </tr>`;
+                    }).join('');
+                })
+                .catch(e => {
+                    console.error('Failed to load API keys:', e);
+                    document.getElementById('apiKeysTableBody').innerHTML = `
+                        <tr>
+                            <td colspan="8" style="text-align: center; padding: 40px; color: var(--md-error);">
+                                Failed to load API keys: ${e.message}
+                            </td>
+                        </tr>`;
+                });
+        }
+
+        function createAPIKey() {
+            const name = document.getElementById('apiKeyName').value.trim();
+            if (!name) {
+                showStatus('error', 'Please enter a name for the API key', 'apiKeysStatus');
+                return;
+            }
+
+            const scopes = [];
+            if (document.getElementById('scopeRead').checked) scopes.push('read');
+            if (document.getElementById('scopeWrite').checked) scopes.push('write');
+            if (document.getElementById('scopeAdmin').checked) scopes.push('admin');
+
+            if (scopes.length === 0) {
+                showStatus('error', 'Please select at least one scope', 'apiKeysStatus');
+                return;
+            }
+
+            const expiresIn = parseInt(document.getElementById('apiKeyExpiry').value) || 0;
+
+            showStatus('info', 'Creating API key...', 'apiKeysStatus');
+
+            fetch('/admin/api/api-keys/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    scopes: scopes.join(','),
+                    expires_in: expiresIn
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.key) {
+                    // Show the key
+                    document.getElementById('newKeyValue').textContent = data.key;
+                    document.getElementById('newKeyDisplay').style.display = 'block';
+                    
+                    // Clear form
+                    document.getElementById('apiKeyName').value = '';
+                    document.getElementById('scopeRead').checked = true;
+                    document.getElementById('scopeWrite').checked = true;
+                    document.getElementById('scopeAdmin').checked = false;
+                    document.getElementById('apiKeyExpiry').value = '0';
+                    
+                    showStatus('success', `API key "${name}" created successfully!`, 'apiKeysStatus');
+                    loadAPIKeys();
+                } else {
+                    showStatus('error', 'Failed to create API key: ' + (data.error || 'Unknown error'), 'apiKeysStatus');
+                }
+            })
+            .catch(e => {
+                showStatus('error', 'Failed to create API key: ' + e.message, 'apiKeysStatus');
+            });
+        }
+
+        function copyAPIKey() {
+            const key = document.getElementById('newKeyValue').textContent;
+            navigator.clipboard.writeText(key).then(() => {
+                showStatus('success', 'API key copied to clipboard!', 'apiKeysStatus');
+            }).catch(e => {
+                showStatus('error', 'Failed to copy: ' + e.message, 'apiKeysStatus');
+            });
+        }
+
+        function revokeAPIKey(id, name) {
+            if (!confirm(`Revoke API key "${name}"?\n\nThis will immediately invalidate the key. This action cannot be undone.`)) {
+                return;
+            }
+
+            fetch(`/admin/api/api-keys/revoke/${id}`, { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    showStatus('success', `API key "${name}" has been revoked`, 'apiKeysStatus');
+                    loadAPIKeys();
+                })
+                .catch(e => {
+                    showStatus('error', 'Failed to revoke API key: ' + e.message, 'apiKeysStatus');
+                });
+        }
+
+        function deleteAPIKey(id, name) {
+            if (!confirm(`Delete API key "${name}"?\n\nThis will permanently remove the key from the system.`)) {
+                return;
+            }
+
+            fetch(`/admin/api/api-keys/delete/${id}`, { method: 'DELETE' })
+                .then(r => r.json())
+                .then(data => {
+                    showStatus('success', `API key "${name}" has been deleted`, 'apiKeysStatus');
+                    loadAPIKeys();
+                })
+                .catch(e => {
+                    showStatus('error', 'Failed to delete API key: ' + e.message, 'apiKeysStatus');
+                });
         }
 
         // ============================================
