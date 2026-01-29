@@ -13,7 +13,7 @@ Enterprise-grade log sanitization system with pattern detection and batch proces
 
 **Quick Install:**
 ```bash
-helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
+helm install yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
   --version 0.13.8 \
   --namespace yossarian-go \
   --create-namespace
@@ -29,7 +29,7 @@ helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
 ### From OCI Registry (Recommended)
 
 ```bash
-helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
+helm install yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
   --version 0.13.8 \
   -n yossarian-go --create-namespace
 ```
