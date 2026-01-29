@@ -71,7 +71,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # Worker (processes batch jobs)
+# Worker (processes batch jobs) - stateless, can scale horizontally
   worker:
     image: yossarian-go/yossarian-go:v0.13.11-dev
     container_name: yossarian-worker
@@ -84,10 +84,9 @@ services:
       MINIO_BUCKET: yossarian-jobs
       MINIO_USE_SSL: "false"
       WORKER_POLL_INTERVAL: "5"
+      AD_SERVICE_URL: http://yossarian-db-service:8081
     ports:
       - "8082:8082"
-    volumes:
-      - worker-data:/data
     depends_on:
       minio:
         condition: service_healthy
@@ -98,9 +97,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
+      
 volumes:
   minio-data:
   frontend-data:
-  worker-data:
   db-data:

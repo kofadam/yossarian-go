@@ -248,7 +248,7 @@ metadata:
   name: yossarian-worker
   namespace: yossarian-go
 spec:
-  replicas: 1
+  replicas: 2  # Multi-pod for local testing
   selector:
     matchLabels:
       app: yossarian
@@ -278,9 +278,3 @@ spec:
                 name: yossarian-go-config-local
             - secretRef:
                 name: yossarian-go-secrets-local
-          volumeMounts:
-            - name: jobs
-              mountPath: /data/jobs
-      volumes:
-        - name: jobs
-          emptyDir: {}  # Non-persistent for local testing

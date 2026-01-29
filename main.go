@@ -96,11 +96,7 @@ var (
 	cacheMutex    sync.RWMutex
 )
 
-// Batch processing storage
-var (
-	batchJobsBasePath = "/data/jobs" // PVC mount path for batch jobs
-	batchJobsMutex    sync.Mutex
-)
+// Batch processing (MinIO-based, no local storage needed)
 
 func recordReplacement(category, filename string, lineNum int, original, sanitized string) {
 	replacementMutex.Lock()
@@ -623,61 +619,6 @@ func generateSessionID() string {
 func generateJobID(username string) string {
 	timestamp := time.Now().Format("20060102-150405")
 	return fmt.Sprintf("batch-%s-%s", username, timestamp)
-}
-
-func createBatchJob(username string, zipContent []byte, zipFilename string) (string, error) {
-	jobID := generateJobID(username)
-
-	// Create job directory structure
-	jobPath := filepath.Join(batchJobsBasePath, username, jobID)
-	inputPath := filepath.Join(jobPath, "input.zip")
-	outputPath := filepath.Join(jobPath, "output")
-
-	batchJobsMutex.Lock()
-	defer batchJobsMutex.Unlock()
-
-	// Create directories
-	if err := os.MkdirAll(jobPath, 0755); err != nil {
-		return "", fmt.Errorf("failed to create job directory: %v", err)
-	}
-	if err := os.MkdirAll(outputPath, 0755); err != nil {
-		return "", fmt.Errorf("failed to create output directory: %v", err)
-	}
-
-	// Write ZIP file to disk
-	if err := os.WriteFile(inputPath, zipContent, 0644); err != nil {
-		return "", fmt.Errorf("failed to write input file: %v", err)
-	}
-
-	// Register job in database
-	client := &http.Client{Timeout: 5 * time.Second}
-	jobData := map[string]string{
-		"job_id":      jobID,
-		"username":    username,
-		"input_path":  inputPath,
-		"output_path": outputPath,
-	}
-
-	jsonData, _ := json.Marshal(jobData)
-	resp, err := client.Post(
-		fmt.Sprintf("%s/jobs/create", adServiceURL),
-		"application/json",
-		bytes.NewBuffer(jsonData),
-	)
-
-	if err != nil {
-		return "", fmt.Errorf("failed to register job: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("job registration failed with status %d", resp.StatusCode)
-	}
-
-	log.Printf("[BATCH] Job created: %s for user %s, file: %s (%.2f MB)",
-		jobID, username, zipFilename, float64(len(zipContent))/1024/1024)
-
-	return jobID, nil
 }
 
 func updateJobStatus(jobID, status string, totalFiles, processedFiles int, errorMsg string) error {
@@ -2480,333 +2421,6 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[DOWNLOAD] Completed: %s (%d bytes)", minioPath, stat.Size)
 }
 
-// Background batch job processor
-func batchJobProcessor() {
-	log.Printf("[BATCH] Background processor started")
-
-	// Track jobs currently being processed to avoid duplicates
-	processingJobs := make(map[string]bool)
-	var processingMutex sync.Mutex
-
-	scanCount := 0
-	for {
-		scanCount++
-		log.Printf("[BATCH] Scan #%d: Checking for queued jobs in %s...", scanCount, batchJobsBasePath)
-
-		// Scan jobs directory for queued jobs
-		if _, err := os.Stat(batchJobsBasePath); os.IsNotExist(err) {
-			// Jobs directory doesn't exist yet, create it
-			log.Printf("[BATCH] Jobs directory %s does not exist, creating...", batchJobsBasePath)
-			os.MkdirAll(batchJobsBasePath, 0755)
-			time.Sleep(10 * time.Second)
-			continue
-		}
-
-		// Walk through user directories
-		userDirs, err := os.ReadDir(batchJobsBasePath)
-		if err != nil {
-			log.Printf("[BATCH] Failed to read jobs directory: %v", err)
-			time.Sleep(10 * time.Second)
-			continue
-		}
-
-		log.Printf("[BATCH] Found %d user directories in %s", len(userDirs), batchJobsBasePath)
-
-		foundJob := false
-		totalJobsChecked := 0
-
-		for _, userDir := range userDirs {
-			if !userDir.IsDir() {
-				continue
-			}
-
-			username := userDir.Name()
-			userPath := filepath.Join(batchJobsBasePath, username)
-
-			jobDirs, err := os.ReadDir(userPath)
-			if err != nil {
-				log.Printf("[BATCH] Failed to read user directory %s: %v", userPath, err)
-				continue
-			}
-
-			log.Printf("[BATCH] User %s has %d job directories", username, len(jobDirs))
-
-			for _, jobDir := range jobDirs {
-				if !jobDir.IsDir() {
-					continue
-				}
-
-				jobID := jobDir.Name()
-				totalJobsChecked++
-
-				// Check if already processing
-				processingMutex.Lock()
-				if processingJobs[jobID] {
-					processingMutex.Unlock()
-					log.Printf("[BATCH] Job %s already being processed, skipping", jobID)
-					continue
-				}
-				processingMutex.Unlock()
-
-				// Check job status in database
-				log.Printf("[BATCH] Checking database status for job %s", jobID)
-				client := &http.Client{Timeout: 5 * time.Second}
-				resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
-				if err != nil {
-					log.Printf("[BATCH] Failed to get job status from database for %s: %v", jobID, err)
-					continue
-				}
-
-				var jobInfo struct {
-					Status     string  `json:"status"`
-					InputPath  *string `json:"input_path"`
-					OutputPath *string `json:"output_path"`
-				}
-
-				if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
-					log.Printf("[BATCH] Failed to decode job info for %s: %v", jobID, err)
-					resp.Body.Close()
-					continue
-				}
-				resp.Body.Close()
-
-				// DEBUG: Log what we got from database
-				inputPathStr := "NULL"
-				outputPathStr := "NULL"
-				if jobInfo.InputPath != nil {
-					inputPathStr = *jobInfo.InputPath
-				}
-				if jobInfo.OutputPath != nil {
-					outputPathStr = *jobInfo.OutputPath
-				}
-				log.Printf("[BATCH] Job %s has status: %s, input_path: %s, output_path: %s",
-					jobID, jobInfo.Status, inputPathStr, outputPathStr)
-
-				// Only process queued jobs
-				if jobInfo.Status == "queued" && jobInfo.InputPath != nil && jobInfo.OutputPath != nil {
-					foundJob = true
-					log.Printf("[BATCH] Found queued job %s - starting processing", jobID)
-
-					// Mark as processing
-					processingMutex.Lock()
-					processingJobs[jobID] = true
-					processingMutex.Unlock()
-
-					// Process in goroutine (allows parallel processing)
-					go func(jid, uname, inPath, outPath string) {
-						defer func() {
-							processingMutex.Lock()
-							delete(processingJobs, jid)
-							processingMutex.Unlock()
-						}()
-
-						processBatchJob(jid, uname, inPath, outPath)
-					}(jobID, username, *jobInfo.InputPath, *jobInfo.OutputPath)
-
-					// Only process one job per cycle to avoid overwhelming system
-					break
-				}
-			}
-
-			if foundJob {
-				break
-			}
-		}
-
-		if totalJobsChecked > 0 {
-			log.Printf("[BATCH] Scan #%d complete: checked %d jobs, found work: %v", scanCount, totalJobsChecked, foundJob)
-		} else {
-			log.Printf("[BATCH] Scan #%d complete: no jobs found in filesystem", scanCount)
-		}
-
-		// Sleep before next check
-		if foundJob {
-			time.Sleep(5 * time.Second) // Quick check if we found work
-		} else {
-			time.Sleep(10 * time.Second) // Longer sleep if idle
-		}
-	}
-}
-
-func processBatchJob(jobID, username, inputPath, outputPath string) {
-	log.Printf("[BATCH] Processing job %s for user %s", jobID, username)
-
-	// Update status to processing
-	jobStartTime := time.Now()
-	updateJobStatus(jobID, "processing", 0, 0, "")
-
-	// Read ZIP file
-	zipContent, err := os.ReadFile(inputPath)
-	if err != nil {
-		log.Printf("[BATCH] Failed to read input file: %v", err)
-		updateJobStatus(jobID, "failed", 0, 0, fmt.Sprintf("Failed to read input: %v", err))
-		return
-	}
-
-	// Extract files from ZIP
-	extractedFiles := extractZipContent(zipContent)
-	totalFiles := len(extractedFiles)
-
-	if totalFiles == 0 {
-		log.Printf("[BATCH] No files extracted from ZIP")
-		updateJobStatus(jobID, "failed", 0, 0, "No valid files in ZIP")
-		return
-	}
-
-	// Update total file count
-	updateJobStatus(jobID, "processing", totalFiles, 0, "")
-
-	log.Printf("[BATCH] Job %s: extracted %d files, starting sanitization", jobID, totalFiles)
-
-	// Get user words (empty for batch jobs - could enhance later)
-	userWords := []string{}
-
-	// Process each file
-	var sanitizedFiles []ExtractedFile
-	for i, extracted := range extractedFiles {
-		// Sanitize file
-		sanitized, _ := sanitizeText(extracted.Content, userWords, false, extracted.Name)
-
-		sanitizedFiles = append(sanitizedFiles, ExtractedFile{
-			Name:    extracted.Name,
-			Content: sanitized,
-			Mode:    extracted.Mode,
-			ModTime: extracted.ModTime,
-		})
-
-		// Update progress every 10 files or on last file
-		if (i+1)%10 == 0 || i == totalFiles-1 {
-			updateJobStatus(jobID, "processing", totalFiles, i+1, "")
-			log.Printf("[BATCH] Job %s: progress %d/%d files", jobID, i+1, totalFiles)
-		}
-
-		// Small sleep to avoid CPU spike
-		if i%10 == 0 && i > 0 {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-	// Generate reports before creating output ZIP
-	log.Printf("[BATCH] Job %s: generating reports", jobID)
-	reportsDir := filepath.Join(outputPath, "..", "reports")
-	os.MkdirAll(reportsDir, 0755)
-
-	// 1. IP Mappings CSV
-	ipMappingsPath := filepath.Join(reportsDir, "ip-mappings.csv")
-	generateIPMappingsReport(ipMappingsPath)
-
-	// 2. Detailed Replacements CSV (always disabled for batch - too large)
-	// Batch jobs don't track line-by-line replacements to save memory
-
-	// 3. Processing Summary JSON
-	summaryPath := filepath.Join(reportsDir, "processing-summary.json")
-	totalStats := map[string]int{
-		"ip_addresses":    len(ipMappings),
-		"files_processed": totalFiles,
-	}
-	generateProcessingSummary(summaryPath, jobID, totalFiles, totalStats, time.Since(jobStartTime))
-
-	log.Printf("[BATCH] Job %s: reports generated in %s", jobID, reportsDir)
-
-	// Create output ZIP
-	log.Printf("[BATCH] Job %s: creating output ZIP", jobID)
-	sanitizedZipData, err := createZipArchive(sanitizedFiles)
-	if err != nil {
-		log.Printf("[BATCH] Failed to create output ZIP: %v", err)
-		updateJobStatus(jobID, "failed", totalFiles, totalFiles, fmt.Sprintf("Failed to create output: %v", err))
-		return
-	}
-
-	// Write output ZIP
-	outputZipPath := filepath.Join(outputPath, "sanitized.zip")
-	if err := os.WriteFile(outputZipPath, sanitizedZipData, 0644); err != nil {
-		log.Printf("[BATCH] Failed to write output file: %v", err)
-		updateJobStatus(jobID, "failed", totalFiles, totalFiles, fmt.Sprintf("Failed to write output: %v", err))
-		return
-	}
-
-	// Mark as completed
-	updateJobStatus(jobID, "completed", totalFiles, totalFiles, "")
-
-	log.Printf("[BATCH] Job %s completed: %d files processed, output: %.2f MB",
-		jobID, totalFiles, float64(len(sanitizedZipData))/1024/1024)
-}
-
-func generateIPMappingsReport(filepath string) error {
-	mapMutex.Lock()
-	defer mapMutex.Unlock()
-
-	f, err := os.Create(filepath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	fmt.Fprintf(f, "original_ip,placeholder,timestamp\n")
-	for original, placeholder := range ipMappings {
-		fmt.Fprintf(f, "%s,%s,%s\n", original, placeholder, time.Now().Format(time.RFC3339))
-	}
-
-	log.Printf("[BATCH] IP mappings report saved: %d entries", len(ipMappings))
-	return nil
-}
-
-func generateDetailedReport(filepath string) error {
-	replacementMutex.Lock()
-	defer replacementMutex.Unlock()
-
-	f, err := os.Create(filepath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	fmt.Fprintf(f, "Category,File,Line,Original,Sanitized\n")
-	for _, repl := range detailedReplacements {
-		category := escapeCSV(repl.Category)
-		file := escapeCSV(repl.File)
-		original := escapeCSV(repl.Original)
-		sanitized := escapeCSV(repl.Sanitized)
-
-		fmt.Fprintf(f, "%s,%s,%d,%s,%s\n", category, file, repl.Line, original, sanitized)
-	}
-
-	log.Printf("[BATCH] Detailed report saved: %d replacements", len(detailedReplacements))
-	return nil
-}
-
-func generateProcessingSummary(filepath string, jobID string, fileCount int, stats map[string]int, duration time.Duration) error {
-	summary := map[string]interface{}{
-		"job_id":          jobID,
-		"timestamp":       time.Now().Format(time.RFC3339),
-		"total_files":     fileCount,
-		"processing_time": duration.String(),
-		"patterns_found": map[string]int{
-			"ip_addresses":    stats["ip_addresses"],
-			"ad_accounts":     stats["ad_accounts"],
-			"jwt_tokens":      stats["jwt_tokens"],
-			"private_keys":    stats["private_keys"],
-			"passwords":       stats["passwords"],
-			"sensitive_terms": stats["sensitive_terms"],
-			"user_words":      stats["user_words"],
-		},
-		"total_patterns": stats["ip_addresses"] + stats["ad_accounts"] + stats["jwt_tokens"] +
-			stats["private_keys"] + stats["passwords"] + stats["sensitive_terms"] + stats["user_words"],
-	}
-
-	data, err := json.MarshalIndent(summary, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	err = os.WriteFile(filepath, data, 0644)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("[BATCH] Processing summary saved: %s", filepath)
-	return nil
-}
-
 func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	// Require authentication for report downloads
 	if !isValidAdminSession(r) {
@@ -2967,7 +2581,7 @@ func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete from database first
+	// Delete from database
 	deleteReq, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/jobs/delete/%s", adServiceURL, jobID), nil)
 	deleteResp, err := client.Do(deleteReq)
 	if err != nil {
@@ -2977,17 +2591,18 @@ func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	deleteResp.Body.Close()
 
-	// Delete files from PVC
-	jobDir := filepath.Join("/data/jobs", jobInfo.Username, jobID)
-	if err := os.RemoveAll(jobDir); err != nil {
-		log.Printf("[ERROR] Failed to delete job directory %s: %v", jobDir, err)
-		// Continue anyway - database record is already deleted
-	} else {
-		log.Printf("[BATCH] Job directory deleted: %s", jobDir)
-	}
+	// Delete files from MinIO
+	ctx := context.Background()
+	inputObj := fmt.Sprintf("%s/%s/input.zip", jobInfo.Username, jobID)
+	outputObj := fmt.Sprintf("%s/%s/output.zip", jobInfo.Username, jobID)
+	reportsPrefix := fmt.Sprintf("%s/%s/reports/", jobInfo.Username, jobID)
+
+	deleteFromMinIO(ctx, inputObj)
+	deleteFromMinIO(ctx, outputObj)
+	deleteFromMinIO(ctx, reportsPrefix+"ip-mappings.csv")
+	deleteFromMinIO(ctx, reportsPrefix+"summary.json")
 
 	log.Printf("[AUDIT] Job deleted: user=%s, job=%s", username, jobID)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "deleted",
@@ -3144,27 +2759,32 @@ func performBatchCleanup() {
 
 	deletedCount := 0
 	errorCount := 0
+	ctx := context.Background()
 
 	for _, job := range result.Jobs {
 		// Delete from database
-		deleteReq, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/jobs/delete/%s", adServiceURL, job.JobID), nil)
-		deleteResp, err := client.Do(deleteReq)
+		deleteReq, _ := http.NewRequest("DELETE",
+			fmt.Sprintf("%s/jobs/delete/%s", adServiceURL, job.JobID), nil)
+		dbResp, err := http.DefaultClient.Do(deleteReq)
 		if err != nil {
 			log.Printf("[CLEANUP] Failed to delete job %s from database: %v", job.JobID, err)
 			errorCount++
 			continue
 		}
-		deleteResp.Body.Close()
+		dbResp.Body.Close()
 
-		// Delete files from PVC
-		jobDir := filepath.Join("/data/jobs", job.Username, job.JobID)
-		if err := os.RemoveAll(jobDir); err != nil {
-			log.Printf("[CLEANUP] Failed to delete directory %s: %v", jobDir, err)
-			errorCount++
-		} else {
-			deletedCount++
-			log.Printf("[CLEANUP] Deleted job %s (user: %s)", job.JobID, job.Username)
-		}
+		// Delete files from MinIO
+		inputObj := fmt.Sprintf("%s/%s/input.zip", job.Username, job.JobID)
+		outputObj := fmt.Sprintf("%s/%s/output.zip", job.Username, job.JobID)
+		reportsPrefix := fmt.Sprintf("%s/%s/reports/", job.Username, job.JobID)
+
+		deleteFromMinIO(ctx, inputObj)
+		deleteFromMinIO(ctx, outputObj)
+		deleteFromMinIO(ctx, reportsPrefix+"ip-mappings.csv")
+		deleteFromMinIO(ctx, reportsPrefix+"summary.json")
+
+		deletedCount++
+		log.Printf("[CLEANUP] Deleted job %s (user: %s)", job.JobID, job.Username)
 	}
 
 	log.Printf("[CLEANUP] Cleanup complete: %d deleted, %d errors", deletedCount, errorCount)
@@ -3692,77 +3312,6 @@ func cleanupOldJobsWorker() {
 	}
 
 	log.Printf("[WORKER] Cleanup complete: %d jobs removed", cleanedCount)
-}
-
-// batchJobSubmitHandler handles ZIP uploads in frontend mode
-func batchJobSubmitHandler(w http.ResponseWriter, r *http.Request, file multipart.File, fileHeader *multipart.FileHeader, username string) {
-	ctx := context.Background()
-
-	// Read file content
-	content, err := io.ReadAll(file)
-	if err != nil {
-		http.Error(w, "Failed to read file", http.StatusInternalServerError)
-		return
-	}
-
-	// Generate job ID
-	jobID := generateJobID(username)
-
-	// Upload to MinIO
-	objectName := fmt.Sprintf("%s/%s/input.zip", username, jobID)
-	if err := uploadToMinIO(ctx, objectName, bytes.NewReader(content), int64(len(content))); err != nil {
-		log.Printf("[ERROR] Failed to upload to MinIO: %v", err)
-		http.Error(w, "Failed to upload file", http.StatusInternalServerError)
-		return
-	}
-
-	// Count files in ZIP
-	zipReader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
-	if err != nil {
-		log.Printf("[ERROR] Failed to read ZIP: %v", err)
-		http.Error(w, "Invalid ZIP file", http.StatusBadRequest)
-		return
-	}
-	totalFiles := len(zipReader.File)
-
-	// Create job record in database
-	jobData := map[string]interface{}{
-		"job_id":      jobID,
-		"username":    username,
-		"total_files": totalFiles,
-		"status":      "queued",
-	}
-
-	jsonData, _ := json.Marshal(jobData)
-	resp, err := http.Post(
-		fmt.Sprintf("%s/jobs/create", adServiceURL),
-		"application/json",
-		bytes.NewBuffer(jsonData),
-	)
-	if err != nil {
-		log.Printf("[ERROR] Failed to create job record: %v", err)
-		http.Error(w, "Failed to create job record", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[ERROR] Database service error: %s", string(body))
-		http.Error(w, "Failed to create job record", http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("[FRONTEND] Batch job %s created by %s: %d files", jobID, username, totalFiles)
-
-	// Return success response
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"job_id":      jobID,
-		"status":      "queued",
-		"total_files": totalFiles,
-		"message":     "Batch job submitted successfully",
-	})
 }
 
 // generateIPMappingsReportInMemory creates IP mappings CSV in memory

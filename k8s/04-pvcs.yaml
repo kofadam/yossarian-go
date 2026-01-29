@@ -33,21 +33,3 @@ spec:
     requests:
       storage: 50Gi
   storageClassName: 
-
----
-# Worker Processing PVC (v0.13.0+)
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: yossarian-jobs-pvc
-  namespace: yossarian-go
-  labels:
-    app: yossarian-worker
-    component: processing
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 50Gi
-  storageClassName: 
