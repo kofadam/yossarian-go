@@ -55,7 +55,7 @@ curl -L https://github.com/vmware-labs/distribution-tooling-for-helm/releases/do
 sudo mv dt /usr/local/bin/
 
 # Wrap the chart with all images
-dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8
+dt wrap oci://ghcr.io/kofadam/charts/yossarian-go
 
 # Result: yossarian-go-0.13.8.wrap.tgz (chart + 4 container images)
 ```
@@ -152,7 +152,7 @@ yossarian-go-0.13.8.wrap.tgz
 ### Check Annotations
 ```bash
 # Extract and view annotations
-helm show chart oci://ghcr.io/kofadam/yossarian-go:0.13.8 | grep -A 20 "annotations:"
+helm show chart oci://ghcr.io/kofadam/charts/yossarian-go | grep -A 20 "annotations:"
 
 # Should show distribution.carto.run/images with all 4 images
 ```
@@ -160,7 +160,7 @@ helm show chart oci://ghcr.io/kofadam/yossarian-go:0.13.8 | grep -A 20 "annotati
 ### Verify Image Versions
 ```bash
 # Check what images will be pulled
-helm template yossarian oci://ghcr.io/kofadam/yossarian-go:0.13.8 | \
+helm template yossarian oci://ghcr.io/kofadam/charts/yossarian-go | \
   grep "image:" | sort -u
 
 # Should show:
@@ -213,7 +213,7 @@ helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
 **Option 2: Switch to air-gap distribution**
 ```bash
 # Wrap chart with images
-dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.8 -o ./wrapped
+dt wrap oci://ghcr.io/kofadam/charts/yossarian-go -o ./wrapped
 
 # Push to air-gap registry
 dt push ./wrapped/yossarian-go-0.13.8.wrap.tgz \
