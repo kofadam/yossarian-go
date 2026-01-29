@@ -29,23 +29,26 @@ cd yossarian-go
 ```
 yossarian-go/
 ├── main.go                    # Main application (frontend + worker modes)
-├── db-service.go              # Database service + job queue API
+├── db-service.go              # Database service + job queue + API keys
 ├── templates/                 # HTML templates
 │   ├── index.html            # Main upload UI
-│   ├── admin.html            # Admin panel
-│   └── my-jobs.html          # Batch job status page
+│   ├── admin.html            # Admin panel (includes API Keys tab)
+│   └── api-docs.html         # OpenAPI/Swagger documentation
 ├── grafana/                  # Grafana dashboards
 │   ├── yossarian-overview.json
 │   └── yossarian-worker-details.json
 ├── helm/                     # Helm charts
 │   ├── README.md
-│   ├── yossarian-go-0.13.8.tgz
+│   ├── yossarian-go-0.13.18.tgz
 │   └── yossarian-go/        # Chart source
 ├── docs/                     # Documentation
 │   ├── ARCHITECTURE.md
 │   ├── DISTRIBUTION-TOOLING-GUIDE.md
 │   ├── CERTIFICATE-CONFIGURATION-GUIDE.md
 │   └── DEVELOPMENT.md (this file)
+├── scripts/                  # Testing scripts
+│   ├── generate-test-logs.sh # Generate test log files
+│   └── TEST-LOG-GENERATOR.md
 ├── Dockerfile                # Main app image
 ├── Dockerfile.db-service     # DB service image
 ├── docker-compose.yml        # Local development stack
@@ -61,10 +64,10 @@ yossarian-go/
 
 ```bash
 # Build with version tag
-./build.sh v0.13.8
+./build.sh v0.13.17
 
 # Or manually
-VERSION=v0.13.8
+VERSION=v0.13.17
 BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
 GIT_COMMIT=$(git rev-parse --short HEAD)
 
@@ -80,12 +83,12 @@ docker build \
 
 ```bash
 # Build with version tag
-./build-db-service.sh v0.12.3
+./build-db-service.sh v0.12.4
 
 # Or manually
 docker build \
   -f Dockerfile.db-service \
-  -t yossarian-go/yossarian-go-db-service:v0.12.3 \
+  -t yossarian-go/yossarian-go-db-service:v0.12.4 \
   .
 ```
 
@@ -124,7 +127,7 @@ docker run --rm -p 8080:8080 \
   -e MODE=frontend \
   -e ADMIN_PASSWORD=test123 \
   -e OIDC_ENABLED=false \
-  yossarian-go/yossarian-go:v0.13.8
+  yossarian-go/yossarian-go:v0.13.17
 ```
 
 **Worker Only:**
@@ -132,35 +135,35 @@ docker run --rm -p 8080:8080 \
 docker run --rm -p 8082:8080 \
   -e MODE=worker \
   -v $(pwd)/data:/data \
-  yossarian-go/yossarian-go:v0.13.8
+  yossarian-go/yossarian-go:v0.13.17
 ```
 
 **Database Service:**
 ```bash
 docker run --rm -p 8083:8081 \
   -v $(pwd)/data:/data \
-  yossarian-go/yossarian-go-db-service:v0.12.3
+  yossarian-go/yossarian-go-db-service:v0.12.4
 ```
 
 ---
 
 ## 🎯 Testing Workflows
 
-### Test Single File Upload
+### Test Single File Upload (Browser Session)
 
 ```bash
 # Create test file
 echo "Test log with 192.168.1.1 and CORP\user123" > test.log
 
-# Upload
-curl -F "file=@test.log" http://localhost:8080/upload
+# Upload (requires session cookie from browser login)
+curl -b cookies.txt -F "file=@test.log" http://localhost:8080/upload
 
 # Should return sanitized content with:
 # - IP replaced with [IP-001]
 # - AD account replaced with USN (if in database)
 ```
 
-### Test Batch Job Processing
+### Test Batch Job Processing (Browser Session)
 
 ```bash
 # Create test files
@@ -172,7 +175,7 @@ echo "Log 3 with CORP\admin" > log3.txt
 zip batch-test.zip log1.txt log2.txt log3.txt
 
 # Upload batch job
-RESPONSE=$(curl -F "file=@batch-test.zip" http://localhost:8080/upload)
+RESPONSE=$(curl -b cookies.txt -F "file=@batch-test.zip" http://localhost:8080/upload)
 echo $RESPONSE
 
 # Extract job ID
@@ -180,30 +183,143 @@ JOB_ID=$(echo $RESPONSE | jq -r '.job_id')
 echo "Job ID: $JOB_ID"
 
 # Check status (repeat until completed)
-curl http://localhost:8080/api/jobs/status/$JOB_ID | jq
+curl -b cookies.txt http://localhost:8080/api/jobs/status/$JOB_ID | jq
 
 # Download results when completed
-curl -O http://localhost:8080/jobs/download/$JOB_ID
+curl -b cookies.txt -O http://localhost:8080/jobs/download/$JOB_ID
 
 # Download reports
-curl -O http://localhost:8080/jobs/reports/$JOB_ID/ip-mappings.csv
-curl -O http://localhost:8080/jobs/reports/$JOB_ID/summary.json
+curl -b cookies.txt -O http://localhost:8080/jobs/reports/$JOB_ID/ip-mappings.csv
+curl -b cookies.txt -O http://localhost:8080/jobs/reports/$JOB_ID/summary.json
 ```
 
-### Test LDAP Sync
+---
+
+## 🔑 API Key Authentication Testing
+
+API keys enable headless/pipeline integration without browser sessions. Available since v0.13.17.
+
+### Creating an API Key
+
+1. **Via Admin Panel:**
+   - Login to Yossarian Go
+   - Go to **Admin** → **API Keys** tab
+   - Click **Generate New API Key**
+   - Copy the key (shown only once!)
+
+2. **API Key Format:** `yoss_<64-character-hex-string>`
+
+### Test API Key Authentication
 
 ```bash
-# Requires LDAP server configured in docker-compose.yml
+# Set your API key
+API_KEY="yoss_your_api_key_here"
+BASE_URL="http://localhost:8080"  # or your deployment URL
 
-# Trigger sync
-curl -X POST http://localhost:8083/ldap/sync-full
-
-# Check status
-curl http://localhost:8083/ldap/status | jq
-
-# List accounts
-curl http://localhost:8083/accounts/list | jq
+# Verify API key works
+curl -H "X-API-Key: $API_KEY" $BASE_URL/api/jobs/list
 ```
+
+### Single File Upload with API Key
+
+```bash
+# Create test file with sensitive data
+echo "Server 192.168.1.100 user CORP\john.doe logged in at 10:30" > test.log
+
+# Upload file
+curl -X POST $BASE_URL/upload \
+  -H "X-API-Key: $API_KEY" \
+  -F "file=@test.log"
+
+# Response includes sanitized content directly
+```
+
+### Batch Processing Pipeline with API Key
+
+```bash
+# 1. Create test files
+mkdir -p test-logs
+for i in {1..5}; do
+  echo "Server 10.0.0.$i user CORP\user$i processed request" > test-logs/app-$i.log
+done
+zip -r batch-test.zip test-logs/
+
+# 2. Upload ZIP file
+RESPONSE=$(curl -s -X POST $BASE_URL/upload \
+  -H "X-API-Key: $API_KEY" \
+  -F "file=@batch-test.zip")
+echo $RESPONSE | jq
+
+# 3. Extract job ID
+JOB_ID=$(echo $RESPONSE | jq -r '.job_id')
+echo "Job ID: $JOB_ID"
+
+# 4. Poll status until completed
+while true; do
+  STATUS=$(curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/api/jobs/status/$JOB_ID")
+  echo $STATUS | jq -r '.status'
+  if [[ $(echo $STATUS | jq -r '.status') == "completed" ]]; then
+    break
+  fi
+  sleep 2
+done
+
+# 5. Download sanitized output
+curl -H "X-API-Key: $API_KEY" "$BASE_URL/jobs/download/$JOB_ID" -o sanitized-output.zip
+unzip -l sanitized-output.zip
+
+# 6. View sanitized content
+unzip -p sanitized-output.zip | head -20
+
+# 7. Download IP mappings report
+curl -H "X-API-Key: $API_KEY" "$BASE_URL/jobs/reports/$JOB_ID/ip-mappings.csv"
+
+# 8. Download summary report
+curl -H "X-API-Key: $API_KEY" "$BASE_URL/jobs/reports/$JOB_ID/summary.json" | jq
+```
+
+### API Key Endpoints Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/upload` | Submit files for sanitization |
+| `GET` | `/api/jobs/list` | List user's jobs |
+| `GET` | `/api/jobs/status/{job_id}` | Get job status |
+| `GET` | `/jobs/download/{job_id}` | Download sanitized output |
+| `POST` | `/api/jobs/cancel/{job_id}` | Cancel a job |
+| `DELETE` | `/api/jobs/delete/{job_id}` | Delete a job |
+| `GET` | `/jobs/reports/{job_id}/ip-mappings.csv` | IP mapping report |
+| `GET` | `/jobs/reports/{job_id}/summary.json` | Processing summary |
+| `GET` | `/mappings/csv` | Current session IP mappings |
+| `GET` | `/health` | Health check (no auth required) |
+| `GET` | `/metrics` | Prometheus metrics (no auth required) |
+
+### Generate Test Logs
+
+Use the included test log generator for comprehensive testing:
+
+```bash
+cd scripts/
+
+# Generate 20 log files with 10,000 lines each
+./generate-test-logs.sh
+
+# Create bundle
+zip -r test-logs-bundle.zip test-logs/
+
+# Upload via API
+curl -X POST $BASE_URL/upload \
+  -H "X-API-Key: $API_KEY" \
+  -F "file=@test-logs-bundle.zip"
+```
+
+The generator creates logs with:
+- IP addresses (public and private ranges)
+- AD accounts (CORP\user, user@domain.com, bare usernames)
+- JWT tokens
+- Passwords in connection strings
+- Private keys
+- Custom sensitive terms
 
 ---
 
@@ -215,19 +331,19 @@ curl http://localhost:8083/accounts/list | jq
 
 2. **Rebuild images:**
 ```bash
-./build.sh v0.13.8-dev
-./build-db-service.sh v0.12.3-dev
+./build.sh v0.13.17-dev
+./build-db-service.sh v0.12.4-dev
 ```
 
 3. **Update docker-compose.yml** to use `-dev` tags:
 ```yaml
 services:
   frontend:
-    image: yossarian-go/yossarian-go:v0.13.8-dev
+    image: yossarian-go/yossarian-go:v0.13.17-dev
   worker:
-    image: yossarian-go/yossarian-go:v0.13.8-dev
+    image: yossarian-go/yossarian-go:v0.13.17-dev
   db-service:
-    image: yossarian-go/yossarian-go-db-service:v0.12.3-dev
+    image: yossarian-go/yossarian-go-db-service:v0.12.4-dev
 ```
 
 4. **Restart services:**
@@ -252,7 +368,7 @@ docker run --rm -p 8080:8080 \
   -v $(pwd)/templates:/app/templates \
   -e MODE=frontend \
   -e ADMIN_PASSWORD=test123 \
-  yossarian-go/yossarian-go:v0.13.8
+  yossarian-go/yossarian-go:v0.13.17
 ```
 
 Restart container after template changes.
@@ -278,6 +394,8 @@ curl http://localhost:8082/metrics
 # - yossarian_ad_cache_hits_total
 # - yossarian_ad_cache_misses_total
 # - yossarian_active_sessions
+# - yossarian_batch_jobs_total
+# - yossarian_batch_processing_duration_seconds
 ```
 
 ### Test with Prometheus (Optional)
@@ -355,12 +473,17 @@ helm uninstall yossarian-test -n yossarian-test
 kubectl delete namespace yossarian-test
 ```
 
-### Package Chart
+### Package and Publish Chart
 
 ```bash
 cd helm
+
+# Package
 helm package yossarian-go
-# Creates: yossarian-go-0.13.8.tgz
+# Creates: yossarian-go-0.13.18.tgz
+
+# Push to OCI registry
+helm push yossarian-go-0.13.18.tgz oci://ghcr.io/kofadam/charts
 ```
 
 ---
@@ -435,6 +558,9 @@ SELECT * FROM batch_jobs;
 
 # Check AD accounts
 SELECT COUNT(*) FROM ad_accounts;
+
+# Check API keys
+SELECT key_id, name, username, created_at, last_used_at FROM api_keys;
 ```
 
 ---
@@ -449,8 +575,8 @@ minikube start --memory 8192 --cpus 4
 
 # Build images in minikube
 eval $(minikube docker-env)
-./build.sh v0.13.8
-./build-db-service.sh v0.12.3
+./build.sh v0.13.17
+./build-db-service.sh v0.12.4
 
 # Install chart
 helm install yossarian ./helm/yossarian-go \
@@ -473,8 +599,8 @@ open http://localhost:8080
 kind create cluster --name yossarian-test
 
 # Load images
-kind load docker-image yossarian-go/yossarian-go:v0.13.8 --name yossarian-test
-kind load docker-image yossarian-go/yossarian-go-db-service:v0.12.3 --name yossarian-test
+kind load docker-image yossarian-go/yossarian-go:v0.13.17 --name yossarian-test
+kind load docker-image yossarian-go/yossarian-go-db-service:v0.12.4 --name yossarian-test
 kind load docker-image quay.io/minio/minio:RELEASE.2024-01-01T00-00-00Z --name yossarian-test
 
 # Install chart
@@ -486,6 +612,27 @@ helm install yossarian ./helm/yossarian-go \
 
 # Port forward
 kubectl port-forward -n yossarian-go svc/yossarian-frontend 8080:8080
+```
+
+### Test in MicroK8s
+
+```bash
+# Enable required addons
+microk8s enable dns storage metallb
+
+# Install from OCI registry
+helm install yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
+  --version 0.13.18 \
+  --namespace yossarian-go \
+  --create-namespace \
+  --set ingress.enabled=false \
+  --set auth.adminPassword=test123
+
+# Check pods (should see init containers complete first)
+kubectl get pods -n yossarian-go -w
+
+# Get LoadBalancer IP
+kubectl get svc -n yossarian-go yossarian-frontend
 ```
 
 ---
@@ -503,9 +650,48 @@ Before releasing a new version:
 - [ ] Test Helm chart installation
 - [ ] Package Helm chart
 - [ ] Push Helm chart to OCI registry
+- [ ] Test API key authentication
 - [ ] Create Git tag
 - [ ] Create GitHub release
 - [ ] Update main README.md
+
+---
+
+## 🔐 API Key Management
+
+### Database Schema
+
+API keys are stored in the `api_keys` table:
+
+```sql
+CREATE TABLE api_keys (
+    key_id TEXT PRIMARY KEY,           -- yoss_<hash>
+    key_hash TEXT NOT NULL,            -- SHA256 hash of full key
+    name TEXT NOT NULL,                -- User-provided name
+    username TEXT NOT NULL,            -- Owner username
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_used_at DATETIME,
+    expires_at DATETIME,               -- NULL = never expires
+    is_active INTEGER DEFAULT 1
+);
+```
+
+### Admin API Endpoints
+
+```bash
+# List API keys (admin only)
+curl -b cookies.txt http://localhost:8080/admin/api/keys/list
+
+# Create API key (admin only)
+curl -X POST -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"name": "CI Pipeline"}' \
+  http://localhost:8080/admin/api/keys/create
+
+# Revoke API key (admin only)
+curl -X DELETE -b cookies.txt \
+  http://localhost:8080/admin/api/keys/revoke?key_id=yoss_abc123
+```
 
 ---
 
@@ -524,10 +710,11 @@ Before releasing a new version:
 2. Create a feature branch (`feature/my-feature`)
 3. Make your changes
 4. Test locally with docker-compose
-5. Update documentation if needed
-6. Commit with descriptive messages
-7. Push to your fork
-8. Open pull request with description
+5. Test API key authentication if touching auth code
+6. Update documentation if needed
+7. Commit with descriptive messages
+8. Push to your fork
+9. Open pull request with description
 
 ### Commit Message Format
 
@@ -550,14 +737,16 @@ Before releasing a new version:
 
 **Example:**
 ```
-feat: add job cancellation timeout
+feat: add API key authentication
 
-Add WORKER_CANCELLATION_TIMEOUT environment variable to automatically
-cancel jobs that have been processing for too long.
+Add X-API-Key header authentication for pipeline integration.
+Keys are managed via Admin panel and stored with SHA256 hashing.
 
-Defaults to 3600 seconds (1 hour). Set to 0 to disable.
+- POST /admin/api/keys/create - Generate new key
+- DELETE /admin/api/keys/revoke - Revoke existing key
+- GET /admin/api/keys/list - List all keys
 
-Fixes #123
+Closes #42
 ```
 
 ---
@@ -568,6 +757,7 @@ Fixes #123
 - [Helm Chart README](../helm/yossarian-go/README.md)
 - [Distribution Tooling Guide](DISTRIBUTION-TOOLING-GUIDE.md)
 - [Certificate Configuration](CERTIFICATE-CONFIGURATION-GUIDE.md)
+- [OpenAPI Documentation](/api/openapi.yaml)
 
 ---
 
@@ -578,5 +768,5 @@ Fixes #123
 
 ---
 
-**Document Version:** v0.13.8  
+**Document Version:** v0.13.17  
 **Last Updated:** January 2026
