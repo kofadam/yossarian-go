@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -73,7 +76,21 @@ func initDB() error {
 		error_message TEXT
 	);
 	CREATE INDEX IF NOT EXISTS idx_batch_jobs_username ON batch_jobs(username);
-	CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status);`
+	CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status);
+	CREATE TABLE IF NOT EXISTS api_keys (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		key_hash TEXT NOT NULL UNIQUE,
+		key_prefix TEXT NOT NULL,
+		name TEXT NOT NULL,
+		username TEXT NOT NULL,
+		scopes TEXT DEFAULT 'read,write',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		expires_at DATETIME,
+		last_used_at DATETIME,
+		is_active INTEGER DEFAULT 1
+	);
+	CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+	CREATE INDEX IF NOT EXISTS idx_api_keys_username ON api_keys(username);`
 
 	_, err = db.Exec(createTableSQL)
 	if err != nil {
@@ -1071,9 +1088,291 @@ func batchNextHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(job)
 }
 
+// API Key handlers
+
+func generateAPIKey() (string, string, string) {
+	// Generate 32 random bytes
+	bytes := make([]byte, 32)
+	rand.Read(bytes)
+	
+	// Create key with prefix
+	key := "yoss_" + hex.EncodeToString(bytes)
+	prefix := key[:13] // "yoss_" + 8 chars
+	
+	// Hash the full key for storage
+	hash := sha256.Sum256([]byte(key))
+	hashStr := hex.EncodeToString(hash[:])
+	
+	return key, prefix, hashStr
+}
+
+func hashAPIKey(key string) string {
+	hash := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(hash[:])
+}
+
+func apiKeyCreateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name     string `json:"name"`
+		Username string `json:"username"`
+		Scopes   string `json:"scopes"`
+		// ExpiresIn is optional, in hours (0 = never)
+		ExpiresIn int `json:"expires_in"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" || req.Username == "" {
+		http.Error(w, "name and username are required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Scopes == "" {
+		req.Scopes = "read,write"
+	}
+
+	// Generate API key
+	key, prefix, keyHash := generateAPIKey()
+
+	// Calculate expiry
+	var expiresAt *time.Time
+	if req.ExpiresIn > 0 {
+		t := time.Now().Add(time.Duration(req.ExpiresIn) * time.Hour)
+		expiresAt = &t
+	}
+
+	// Insert into database
+	var result sql.Result
+	var err error
+	if expiresAt != nil {
+		result, err = db.Exec(`INSERT INTO api_keys (key_hash, key_prefix, name, username, scopes, expires_at) 
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			keyHash, prefix, req.Name, req.Username, req.Scopes, expiresAt.Format("2006-01-02 15:04:05"))
+	} else {
+		result, err = db.Exec(`INSERT INTO api_keys (key_hash, key_prefix, name, username, scopes) 
+			VALUES (?, ?, ?, ?, ?)`,
+			keyHash, prefix, req.Name, req.Username, req.Scopes)
+	}
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to create API key: %v", err)
+		http.Error(w, "Failed to create API key", http.StatusInternalServerError)
+		return
+	}
+
+	id, _ := result.LastInsertId()
+	log.Printf("[API-KEY] Created key %s for user %s (id=%d)", prefix, req.Username, id)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":         id,
+		"key":        key, // Only returned once!
+		"prefix":     prefix,
+		"name":       req.Name,
+		"scopes":     req.Scopes,
+		"expires_at": expiresAt,
+		"message":    "Store this key securely - it won't be shown again!",
+	})
+}
+
+func apiKeyListHandler(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimPrefix(r.URL.Path, "/api-keys/list/")
+	
+	// If no username in path, list all (admin only)
+	var rows *sql.Rows
+	var err error
+	if username == "" || username == "all" {
+		rows, err = db.Query(`SELECT id, key_prefix, name, username, scopes, created_at, expires_at, last_used_at, is_active 
+			FROM api_keys ORDER BY created_at DESC`)
+	} else {
+		rows, err = db.Query(`SELECT id, key_prefix, name, username, scopes, created_at, expires_at, last_used_at, is_active 
+			FROM api_keys WHERE username = ? ORDER BY created_at DESC`, username)
+	}
+
+	if err != nil {
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type APIKeyInfo struct {
+		ID         int64   `json:"id"`
+		Prefix     string  `json:"prefix"`
+		Name       string  `json:"name"`
+		Username   string  `json:"username"`
+		Scopes     string  `json:"scopes"`
+		CreatedAt  string  `json:"created_at"`
+		ExpiresAt  *string `json:"expires_at"`
+		LastUsedAt *string `json:"last_used_at"`
+		IsActive   bool    `json:"is_active"`
+	}
+
+	keys := []APIKeyInfo{}
+	for rows.Next() {
+		var k APIKeyInfo
+		var isActive int
+		if err := rows.Scan(&k.ID, &k.Prefix, &k.Name, &k.Username, &k.Scopes, &k.CreatedAt, &k.ExpiresAt, &k.LastUsedAt, &isActive); err != nil {
+			continue
+		}
+		k.IsActive = isActive == 1
+		keys = append(keys, k)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"keys":  keys,
+		"total": len(keys),
+	})
+}
+
+func apiKeyDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := strings.TrimPrefix(r.URL.Path, "/api-keys/delete/")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid key ID", http.StatusBadRequest)
+		return
+	}
+
+	result, err := db.Exec("DELETE FROM api_keys WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, "Failed to delete API key", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "API key not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("[API-KEY] Deleted key id=%d", id)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+}
+
+func apiKeyRevokeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := strings.TrimPrefix(r.URL.Path, "/api-keys/revoke/")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid key ID", http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Exec("UPDATE api_keys SET is_active = 0 WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, "Failed to revoke API key", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[API-KEY] Revoked key id=%d", id)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
+}
+
+func apiKeyValidateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	// Hash the provided key
+	keyHash := hashAPIKey(req.Key)
+
+	// Look up in database
+	var id int64
+	var username, scopes string
+	var expiresAt *string
+	var isActive int
+
+	err := db.QueryRow(`SELECT id, username, scopes, expires_at, is_active FROM api_keys WHERE key_hash = ?`, keyHash).
+		Scan(&id, &username, &scopes, &expiresAt, &isActive)
+
+	if err == sql.ErrNoRows {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid":   false,
+			"message": "Invalid API key",
+		})
+		return
+	}
+
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Check if active
+	if isActive != 1 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid":   false,
+			"message": "API key has been revoked",
+		})
+		return
+	}
+
+	// Check expiry
+	if expiresAt != nil && *expiresAt != "" {
+		expiry, err := time.Parse("2006-01-02 15:04:05", *expiresAt)
+		if err == nil && time.Now().After(expiry) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid":   false,
+				"message": "API key has expired",
+			})
+			return
+		}
+	}
+
+	// Update last_used_at
+	db.Exec("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?", id)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"valid":    true,
+		"username": username,
+		"scopes":   scopes,
+	})
+}
+
 func main() {
 	// Load LDAP configuration
-	ldapServer = os.Getenv("LDAP_SERVER")
+	ldapServer = os.Getenv("LDAP_SERVER") 
 	ldapBindDN = os.Getenv("LDAP_BIND_DN")
 	ldapBindPassword = os.Getenv("LDAP_BIND_PASSWORD")
 	ldapSearchBase = os.Getenv("LDAP_SEARCH_BASE")
@@ -1126,6 +1425,14 @@ func main() {
 	http.HandleFunc("/jobs/delete/", jobDeleteHandler)
 	http.HandleFunc("/jobs/cleanup", jobCleanupListHandler)
 	http.HandleFunc("/batch/next", batchNextHandler)
+
+	// API key endpoints
+	http.HandleFunc("/api-keys/create", apiKeyCreateHandler)
+	http.HandleFunc("/api-keys/list/", apiKeyListHandler)
+	http.HandleFunc("/api-keys/list", apiKeyListHandler)
+	http.HandleFunc("/api-keys/delete/", apiKeyDeleteHandler)
+	http.HandleFunc("/api-keys/revoke/", apiKeyRevokeHandler)
+	http.HandleFunc("/api-keys/validate", apiKeyValidateHandler)
 
 	log.Printf("Database service starting on port 8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
