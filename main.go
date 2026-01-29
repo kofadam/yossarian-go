@@ -1258,35 +1258,39 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Session validation (required for both OIDC and single-user mode)
-	if !isValidAdminSession(r) {
+	// Authentication: Accept API key OR session cookie
+	username, isAPIKey, isAuthenticated := apiKeyOrSessionAuth(r)
+	
+	if !isAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":   "session_expired",
-			"message": "Your session has expired. Please log in again.",
-		})
-		return
-	}
-
-	// Get username from session (guaranteed to exist after validation above)
-	username := "anonymous"
-	if cookie, err := r.Cookie("admin_session"); err == nil {
-		sessionMutex.Lock()
-		if user, exists := sessionUsers[cookie.Value]; exists {
-			username = user
+		if isAPIKey {
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "invalid_api_key",
+				"message": "Invalid or expired API key.",
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "session_expired",
+				"message": "Your session has expired. Please log in again.",
+			})
 		}
-		sessionMutex.Unlock()
+		return
 	}
 
-	if username == "anonymous" {
-		// This should never happen after session validation, but safety check
-		log.Printf("[ERROR] Session valid but username not found - rejecting upload")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":   "authentication_required",
-			"message": "Please log in to upload files.",
-		})
-		return
+	// Check API key has write scope
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		if !hasAPIKeyScope(apiKey, "write") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "insufficient_scope",
+				"message": "API key requires 'write' scope for uploads.",
+			})
+			return
+		}
+		log.Printf("[API-KEY] Upload authenticated via API key for user: %s", username)
 	}
 
 	if parseErr := r.ParseMultipartForm(int64(maxTotalUploadSizeMB) << 20); parseErr != nil {
