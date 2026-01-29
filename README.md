@@ -34,8 +34,8 @@ Automatically detects and replaces sensitive information in log files with anony
 
 ```bash
 # Standard installation
-helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
-  --version 0.13.17 \
+helm install yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
+  --version 0.13.18 \
   --namespace yossarian-go \
   --create-namespace \
   --set ingress.host=yossarian.example.com \
