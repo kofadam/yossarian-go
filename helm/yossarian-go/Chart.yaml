@@ -37,4 +37,4 @@ name: yossarian-go
 sources:
 - https://github.com/kofadam/yossarian-go
 type: application
-version: 0.13.17
+version: 0.13.18
