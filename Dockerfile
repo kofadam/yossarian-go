@@ -12,6 +12,8 @@ RUN go mod download
 # Copy source code and templates
 COPY *.go ./
 COPY templates/ ./templates/
+COPY docs/swagger-ui.html docs/swagger-ui.css docs/swagger-ui-bundle.js docs/swagger-ui-standalone-preset.js ./docs/
+COPY openapi.yaml ./
 
 # Build the application with version information
 ARG VERSION=dev
