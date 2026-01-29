@@ -2327,14 +2327,10 @@ func jobStatusAPIHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func jobListAPIHandler(w http.ResponseWriter, r *http.Request) {
-	// Get username from session
-	username := "anonymous"
-	if cookie, err := r.Cookie("admin_session"); err == nil {
-		sessionMutex.Lock()
-		if user, exists := sessionUsers[cookie.Value]; exists {
-			username = user
-		}
-		sessionMutex.Unlock()
+	// Get username from API key or session
+	username, _, isAuthenticated := apiKeyOrSessionAuth(r)
+	if !isAuthenticated {
+		username = "anonymous"
 	}
 
 	// Proxy to db-service
@@ -2361,6 +2357,32 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Authenticate via API key or session
+	username, isAPIKey, isAuthenticated := apiKeyOrSessionAuth(r)
+	if !isAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "authentication_required",
+			"message": "Valid API key or session required to download jobs.",
+		})
+		return
+	}
+
+	// Check read scope for API key
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		if !hasAPIKeyScope(apiKey, "read") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "insufficient_scope",
+				"message": "API key requires 'read' scope for downloads.",
+			})
+			return
+		}
+	}
+
 	// Get job info
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
@@ -2384,6 +2406,25 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	if jobInfo.Status != "completed" {
 		http.Error(w, "Job not completed yet", http.StatusBadRequest)
+		return
+	}
+
+	// Verify user owns this job (or has admin scope)
+	isAdmin := false
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		isAdmin = hasAPIKeyScope(apiKey, "admin")
+	} else {
+		isAdmin = hasRole(r, "admin")
+	}
+	if jobInfo.Username != username && !isAdmin {
+		log.Printf("[SECURITY] User %s attempted to download job %s owned by %s", username, jobID, jobInfo.Username)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "access_denied",
+			"message": "You can only download your own jobs.",
+		})
 		return
 	}
 
@@ -2421,12 +2462,6 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
-	// Require authentication for report downloads
-	if !isValidAdminSession(r) {
-		http.Error(w, "Authentication required", http.StatusUnauthorized)
-		return
-	}
-
 	// Parse URL: /jobs/reports/{job_id}/{report_type}
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/reports/"), "/")
 	if len(pathParts) != 2 {
@@ -2437,14 +2472,30 @@ func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	jobID := pathParts[0]
 	reportType := pathParts[1]
 
-	// Get username from validated session
-	username := "Administrator" // Default for single-user mode
-	if cookie, err := r.Cookie("admin_session"); err == nil {
-		sessionMutex.Lock()
-		if user, exists := sessionUsers[cookie.Value]; exists {
-			username = user
+	// Authenticate via API key or session
+	username, isAPIKey, isAuthenticated := apiKeyOrSessionAuth(r)
+	if !isAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "authentication_required",
+			"message": "Valid API key or session required to download reports.",
+		})
+		return
+	}
+
+	// Check read scope for API key
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		if !hasAPIKeyScope(apiKey, "read") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "insufficient_scope",
+				"message": "API key requires 'read' scope for report downloads.",
+			})
+			return
 		}
-		sessionMutex.Unlock()
 	}
 
 	// Verify job exists and belongs to user
@@ -2472,10 +2523,22 @@ func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify user owns this job (or is admin)
-	if jobInfo.Username != username && !hasRole(r, "admin") {
+	// Verify user owns this job (or has admin scope)
+	isAdmin := false
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		isAdmin = hasAPIKeyScope(apiKey, "admin")
+	} else {
+		isAdmin = hasRole(r, "admin")
+	}
+	if jobInfo.Username != username && !isAdmin {
 		log.Printf("[SECURITY] User %s attempted to access job %s owned by %s", username, jobID, jobInfo.Username)
-		http.Error(w, "Access denied", http.StatusForbidden)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "access_denied",
+			"message": "You can only access your own job reports.",
+		})
 		return
 	}
 
@@ -2539,14 +2602,30 @@ func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get username for authorization
-	username := "anonymous"
-	if cookie, err := r.Cookie("admin_session"); err == nil {
-		sessionMutex.Lock()
-		if user, exists := sessionUsers[cookie.Value]; exists {
-			username = user
+	// Authenticate via API key or session
+	username, isAPIKey, isAuthenticated := apiKeyOrSessionAuth(r)
+	if !isAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "authentication_required",
+			"message": "Valid API key or session required to delete jobs.",
+		})
+		return
+	}
+
+	// Check write scope for API key
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		if !hasAPIKeyScope(apiKey, "write") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "insufficient_scope",
+				"message": "API key requires 'write' scope to delete jobs.",
+			})
+			return
 		}
-		sessionMutex.Unlock()
 	}
 
 	// Verify job exists and belongs to user
@@ -2573,10 +2652,22 @@ func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify user owns this job (or is admin)
-	if jobInfo.Username != username && !hasRole(r, "admin") {
+	// Verify user owns this job (or has admin scope)
+	isAdmin := false
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		isAdmin = hasAPIKeyScope(apiKey, "admin")
+	} else {
+		isAdmin = hasRole(r, "admin")
+	}
+	if jobInfo.Username != username && !isAdmin {
 		log.Printf("[SECURITY] User %s attempted to delete job %s owned by %s", username, jobID, jobInfo.Username)
-		http.Error(w, "Access denied", http.StatusForbidden)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "access_denied",
+			"message": "You can only delete your own jobs.",
+		})
 		return
 	}
 
@@ -2622,14 +2713,30 @@ func jobCancelAPIHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get username for authorization
-	username := "anonymous"
-	if cookie, err := r.Cookie("admin_session"); err == nil {
-		sessionMutex.Lock()
-		if user, exists := sessionUsers[cookie.Value]; exists {
-			username = user
+	// Authenticate via API key or session
+	username, isAPIKey, isAuthenticated := apiKeyOrSessionAuth(r)
+	if !isAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "authentication_required",
+			"message": "Valid API key or session required to cancel jobs.",
+		})
+		return
+	}
+
+	// Check write scope for API key
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		if !hasAPIKeyScope(apiKey, "write") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "insufficient_scope",
+				"message": "API key requires 'write' scope to cancel jobs.",
+			})
+			return
 		}
-		sessionMutex.Unlock()
 	}
 
 	// Verify job exists and belongs to user
@@ -2657,10 +2764,22 @@ func jobCancelAPIHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify user owns this job (or is admin)
-	if jobInfo.Username != username && !hasRole(r, "admin") {
+	// Verify user owns this job (or has admin scope)
+	isAdmin := false
+	if isAPIKey {
+		apiKey := r.Header.Get("X-API-Key")
+		isAdmin = hasAPIKeyScope(apiKey, "admin")
+	} else {
+		isAdmin = hasRole(r, "admin")
+	}
+	if jobInfo.Username != username && !isAdmin {
 		log.Printf("[SECURITY] User %s attempted to cancel job %s owned by %s", username, jobID, jobInfo.Username)
-		http.Error(w, "Access denied", http.StatusForbidden)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "access_denied",
+			"message": "You can only cancel your own jobs.",
+		})
 		return
 	}
 
