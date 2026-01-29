@@ -33,11 +33,11 @@ This chart supports **Distribution Tooling for Helm** for air-gap environments:
 # See: https://github.com/vmware-labs/distribution-tooling-for-helm
 
 # 1. Wrap the chart with all images
-dt wrap oci://ghcr.io/kofadam/yossarian-go:0.13.17 \
+dt wrap oci://ghcr.io/kofadam/charts/yossarian-go:0.13.18 \
   --output-dir ./wrapped-charts
 
 # 2. Push to your air-gap registry
-dt push ./wrapped-charts/yossarian-go-0.13.17.wrap.tgz \
+dt push ./wrapped-charts/yossarian-go-0.13.18.wrap.tgz \
   --to-registry your-registry.local
 
 # 3. Install from air-gap registry
@@ -56,7 +56,7 @@ helm install yossarian oci://your-registry.local/yossarian-go \
 
 ```bash
 # Install directly from GitHub Container Registry (OCI)
-helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
+helm install yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
   --version 0.13.17 \
   --namespace yossarian-go \
   --create-namespace \
@@ -78,7 +78,7 @@ auth:
 ```
 
 ```bash
-helm install yossarian oci://ghcr.io/kofadam/yossarian-go \
+helm install yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
   --version 0.13.17 \
   -f minimal-values.yaml \
   -n yossarian-go --create-namespace
@@ -353,7 +353,7 @@ worker:
 ## Upgrading
 
 ```bash
-helm upgrade yossarian oci://ghcr.io/kofadam/yossarian-go \
+helm upgrade yossarian oci://ghcr.io/kofadam/charts/yossarian-go \
   --version 0.13.17 \
   -n yossarian-go \
   -f custom-values.yaml
