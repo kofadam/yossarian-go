@@ -85,6 +85,13 @@ type Replacement struct {
 	Sanitized string
 }
 
+type ExtractedFile struct {
+	Name    string
+	Content string
+	Mode    os.FileMode
+	ModTime time.Time
+}
+
 var (
 	detailedReplacements []Replacement
 	replacementMutex     sync.Mutex
