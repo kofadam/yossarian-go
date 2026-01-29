@@ -1093,10 +1093,6 @@ func isArchiveFile(filename string) bool {
 	return false
 }
 
-func countMatches(text, pattern string) int {
-	return strings.Count(text, pattern)
-}
-
 func mainHealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status": "ok", "service": "yossarian-go", "version": "%s", "build_time": "%s", "commit": "%s"}`, Version, BuildTime, GitCommit)
@@ -1412,119 +1408,6 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		"total_ip_mappings": len(ipMappings),
 		"status":            "completed",
 	})
-}
-
-func extractZipContent(zipData []byte) []ExtractedFile {
-	var extractedFiles []ExtractedFile
-
-	reader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
-	if err != nil {
-		log.Printf("[ERROR] Failed to read ZIP archive: %v", err)
-		return extractedFiles
-	}
-
-	totalFiles := len(reader.File)
-	skippedDirs := 0
-	skippedLarge := 0
-	skippedBinary := 0
-	failedOpen := 0
-	failedRead := 0
-
-	log.Printf("[DEBUG] ZIP contains %d entries", totalFiles)
-
-	for _, file := range reader.File {
-		// Skip directories
-		if file.FileInfo().IsDir() {
-			skippedDirs++
-			continue
-		}
-
-		// Skip very large files in ZIP
-		if file.UncompressedSize64 > uint64(maxZipFileSizeMB)*1024*1024 {
-			log.Printf("[WARN] Skipping large file in ZIP: %s (%.2f MB, max %dMB)",
-				file.Name, float64(file.UncompressedSize64)/1024/1024, maxZipFileSizeMB)
-			skippedLarge++
-			continue
-		}
-
-		// Open file within ZIP
-		rc, err := file.Open()
-		if err != nil {
-			log.Printf("[ERROR] Failed to open file %s in ZIP: %v", file.Name, err)
-			failedOpen++
-			continue
-		}
-
-		// Read file content
-		content, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			log.Printf("[ERROR] Failed to read file %s in ZIP: %v", file.Name, err)
-			failedRead++
-			continue
-		}
-
-		// Skip binary files
-		if isBinaryContent(content) {
-			log.Printf("[WARN] Skipping binary file in ZIP: %s", file.Name)
-			skippedBinary++
-			continue
-		}
-
-		extractedFiles = append(extractedFiles, ExtractedFile{
-			Name:    file.Name,
-			Content: string(content),
-			Mode:    file.Mode(),
-			ModTime: file.Modified,
-		})
-
-		log.Printf("[DEBUG] Extracted: %s (%.2f KB)", file.Name, float64(len(content))/1024)
-	}
-
-	log.Printf("[INFO] ZIP extraction summary: %d total entries, %d extracted, %d skipped (dirs=%d, large=%d, binary=%d, errors=%d)",
-		totalFiles, len(extractedFiles),
-		skippedDirs+skippedLarge+skippedBinary+failedOpen+failedRead,
-		skippedDirs, skippedLarge, skippedBinary, failedOpen+failedRead)
-
-	return extractedFiles
-}
-
-func createZipArchive(files []ExtractedFile) ([]byte, error) {
-	var buf bytes.Buffer
-	zipWriter := zip.NewWriter(&buf)
-
-	for _, file := range files {
-		header := &zip.FileHeader{
-			Name:   file.Name,
-			Method: zip.Deflate,
-		}
-		header.SetMode(file.Mode)
-		header.SetModTime(file.ModTime)
-
-		writer, err := zipWriter.CreateHeader(header)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create file header for %s: %v", file.Name, err)
-		}
-
-		_, err = writer.Write([]byte(file.Content))
-		if err != nil {
-			return nil, fmt.Errorf("failed to write file %s: %v", file.Name, err)
-		}
-	}
-
-	err := zipWriter.Close()
-	if err != nil {
-		return nil, fmt.Errorf("failed to close zip writer: %v", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-type ExtractedFile struct {
-	Name    string
-	Content string
-	Mode    os.FileMode
-	ModTime time.Time
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
