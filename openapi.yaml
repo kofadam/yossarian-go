@@ -1,0 +1,821 @@
+openapi: 3.0.3
+info:
+  title: Yossarian Go API
+  description: |
+    Enterprise log sanitization API for automated pipeline integration.
+    
+    Yossarian Go automatically detects and replaces sensitive information in log files
+    with anonymized tokens, making logs safe to share with external vendors or support teams.
+    
+    ## Detected Patterns
+    - **IP Addresses** → `[IP-001]`, `[IP-002]`, etc. (consistent mapping)
+    - **AD Accounts** → `USN123456789` (via LDAP lookup)
+    - **JWT Tokens** → `[JWT-REDACTED]`
+    - **Private Keys** → `[PRIVATE-KEY-REDACTED]`
+    - **Passwords** → `[PASSWORD-REDACTED]`
+    - **Custom Terms** → Configurable per organization
+    
+    ## Pipeline Integration Flow
+    ```
+    1. POST /api/v1/jobs     → Submit ZIP file, receive job_id
+    2. GET  /api/v1/jobs/{id} → Poll until status="completed"
+    3. GET  /api/v1/jobs/{id}/download → Download sanitized.zip
+    4. GET  /api/v1/jobs/{id}/reports/ip-mappings.csv → Get audit trail
+    ```
+    
+    ## Authentication
+    Currently supports session-based authentication (OIDC/password).
+    API key authentication planned for v0.14.0 (see `X-API-Key` header).
+    
+  version: 0.13.12
+  contact:
+    name: Yossarian Go Support
+    url: https://github.com/kofadam/yossarian-go
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://yossarian-go.example.com
+    description: Production server
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Jobs
+    description: Batch job management for pipeline integration
+  - name: Health
+    description: Service health and monitoring
+  - name: Admin
+    description: Administrative endpoints (requires admin role)
+  - name: Reports
+    description: Download sanitization reports
+
+security:
+  - sessionCookie: []
+  - apiKey: []  # Planned for v0.14.0
+
+paths:
+  # ============================================================================
+  # PIPELINE INTEGRATION ENDPOINTS
+  # ============================================================================
+  
+  /upload:
+    post:
+      tags:
+        - Jobs
+      summary: Submit files for sanitization
+      description: |
+        Upload files for sanitization processing. 
+        
+        **For automation/pipelines:** Submit a ZIP file containing log files.
+        Returns a `job_id` that can be polled for status.
+        
+        **Supported formats:** `.log`, `.txt`, `.json`, `.xml`, `.csv`, `.zip`, `.tar.gz`
+        
+        **Limits:**
+        - Max total upload: 100MB (configurable)
+        - Max single file: 50MB (configurable)
+        - Max files per upload: 10 (configurable)
+      operationId: submitJob
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: One or more files to sanitize (ZIP recommended for batch)
+                generate_detailed_report:
+                  type: string
+                  enum: ["true", "false"]
+                  default: "false"
+                  description: Generate line-by-line replacement CSV report
+      responses:
+        '200':
+          description: Job submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSubmitResponse'
+              examples:
+                batchJob:
+                  summary: ZIP file batch job
+                  value:
+                    job_id: "batch-Administrator-20260129-090425"
+                    status: "queued"
+                    total_files: 4
+                    message: "Batch job submitted successfully"
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                noFiles:
+                  value:
+                    error: "No files uploaded"
+                tooManyFiles:
+                  value:
+                    error: "Maximum 10 files allowed"
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "session_expired"
+                message: "Your session has expired. Please log in again."
+        '413':
+          description: File too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Files too large (max 100MB total)"
+
+  /api/jobs/status/{job_id}:
+    get:
+      tags:
+        - Jobs
+      summary: Get job status
+      description: |
+        Retrieve the current status of a batch job.
+        
+        **Pipeline usage:** Poll this endpoint until `status` is `completed` or `failed`.
+        
+        **Status values:**
+        - `queued` - Job is waiting to be processed
+        - `processing` - Job is being processed by a worker
+        - `completed` - Job finished successfully, download available
+        - `failed` - Job failed, check `error_message`
+        - `cancelled` - Job was cancelled by user
+      operationId: getJobStatus
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "batch-Administrator-20260129-090425"
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+              examples:
+                queued:
+                  summary: Job waiting in queue
+                  value:
+                    job_id: "batch-Administrator-20260129-090425"
+                    username: "Administrator"
+                    status: "queued"
+                    total_files: 4
+                    processed_files: 0
+                    created_at: "2026-01-29 09:04:25"
+                    started_at: null
+                    completed_at: null
+                    error_message: null
+                processing:
+                  summary: Job being processed
+                  value:
+                    job_id: "batch-Administrator-20260129-090425"
+                    username: "Administrator"
+                    status: "processing"
+                    total_files: 4
+                    processed_files: 2
+                    created_at: "2026-01-29 09:04:25"
+                    started_at: "2026-01-29 09:04:27"
+                    completed_at: null
+                    error_message: null
+                completed:
+                  summary: Job completed successfully
+                  value:
+                    job_id: "batch-Administrator-20260129-090425"
+                    username: "Administrator"
+                    status: "completed"
+                    total_files: 4
+                    processed_files: 4
+                    created_at: "2026-01-29 09:04:25"
+                    started_at: "2026-01-29 09:04:27"
+                    completed_at: "2026-01-29 09:04:28"
+                    error_message: null
+        '404':
+          description: Job not found
+
+  /api/jobs/list:
+    get:
+      tags:
+        - Jobs
+      summary: List user's jobs
+      description: |
+        List all batch jobs for the authenticated user.
+        Returns jobs from the last 8 hours by default.
+      operationId: listJobs
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Only return jobs created after this time (RFC3339)
+          example: "2026-01-29T00:00:00Z"
+      responses:
+        '200':
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobList'
+              example:
+                jobs:
+                  - job_id: "batch-Administrator-20260129-090425"
+                    status: "completed"
+                    total_files: 4
+                    processed_files: 4
+                    created_at: "2026-01-29 09:04:25"
+                    completed_at: "2026-01-29 09:04:28"
+                total: 1
+
+  /jobs/download/{job_id}:
+    get:
+      tags:
+        - Jobs
+      summary: Download sanitized output
+      description: |
+        Download the sanitized ZIP file for a completed job.
+        
+        **Only available when job status is `completed`.**
+        
+        Returns a ZIP archive containing all sanitized files with their
+        original directory structure preserved.
+      operationId: downloadJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "batch-Administrator-20260129-090425"
+      responses:
+        '200':
+          description: Sanitized ZIP file
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              example: 'attachment; filename="sanitized-batch-Administrator-20260129-090425.zip"'
+        '400':
+          description: Job not completed yet
+        '404':
+          description: Job not found or output not available
+
+  /jobs/reports/{job_id}/{report_type}:
+    get:
+      tags:
+        - Reports
+      summary: Download job reports
+      description: |
+        Download reports generated during sanitization.
+        
+        **Available reports:**
+        - `ip-mappings.csv` - Mapping of original IPs to placeholders
+        - `summary.json` - Processing statistics and pattern counts
+      operationId: downloadReport
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "batch-Administrator-20260129-090425"
+        - name: report_type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum:
+              - ip-mappings.csv
+              - summary.json
+      responses:
+        '200':
+          description: Report file
+          content:
+            text/csv:
+              schema:
+                type: string
+              example: |
+                original_ip,placeholder,timestamp
+                192.168.1.100,[IP-001],2026-01-29T09:04:28Z
+                10.0.0.50,[IP-002],2026-01-29T09:04:28Z
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessingSummary'
+        '404':
+          description: Report not available
+
+  /api/jobs/cancel/{job_id}:
+    post:
+      tags:
+        - Jobs
+      summary: Cancel a job
+      description: |
+        Cancel a queued or processing job.
+        
+        **Only works for jobs with status `queued` or `processing`.**
+        Completed or failed jobs cannot be cancelled.
+      operationId: cancelJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "cancelled"
+                  job_id:
+                    type: string
+                  message:
+                    type: string
+        '400':
+          description: Cannot cancel job (already completed/failed)
+        '403':
+          description: Access denied (not job owner)
+        '404':
+          description: Job not found
+
+  /api/jobs/delete/{job_id}:
+    delete:
+      tags:
+        - Jobs
+      summary: Delete a job
+      description: |
+        Permanently delete a job and all associated files.
+        
+        **Warning:** This action cannot be undone. All input files,
+        output files, and reports will be deleted from storage.
+      operationId: deleteJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "deleted"
+                  job_id:
+                    type: string
+                  message:
+                    type: string
+        '403':
+          description: Access denied (not job owner)
+        '404':
+          description: Job not found
+
+  # ============================================================================
+  # HEALTH & MONITORING
+  # ============================================================================
+  
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: |
+        Returns service health status. Use for load balancer health checks
+        and orchestration systems.
+      operationId: healthCheck
+      security: []  # No auth required
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "ok"
+                service: "yossarian-go"
+                version: "v0.13.12"
+                build_time: "2026-01-29_08:57:09"
+                commit: "f05f7f4"
+
+  /metrics:
+    get:
+      tags:
+        - Health
+      summary: Prometheus metrics
+      description: |
+        Exposes Prometheus-compatible metrics for monitoring.
+        
+        **Key metrics:**
+        - `yossarian_batch_jobs_total{status}` - Job counts by status
+        - `yossarian_batch_processing_duration_seconds` - Processing time histogram
+        - `yossarian_batch_files_processed_total` - Files processed counter
+        - `yossarian_ad_cache_hits_total` / `ad_cache_misses_total` - Cache performance
+        - `yossarian_minio_operations_total{operation}` - MinIO operations
+      operationId: getMetrics
+      security: []  # No auth required
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP yossarian_batch_jobs_total Total number of batch jobs by status
+                # TYPE yossarian_batch_jobs_total counter
+                yossarian_batch_jobs_total{status="completed"} 42
+                yossarian_batch_jobs_total{status="failed"} 2
+
+  /api/config:
+    get:
+      tags:
+        - Health
+      summary: Get configuration limits
+      description: Returns current file upload limits for client-side validation.
+      operationId: getConfig
+      responses:
+        '200':
+          description: Configuration limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigLimits'
+              example:
+                max_total_upload_size_mb: 100
+                max_file_size_mb: 50
+                max_zip_file_size_mb: 10
+                max_file_count: 10
+
+  # ============================================================================
+  # ADMIN ENDPOINTS
+  # ============================================================================
+  
+  /admin/api/ldap/status:
+    get:
+      tags:
+        - Admin
+      summary: Get LDAP status
+      description: Returns LDAP/Active Directory connection status and account counts.
+      operationId: getLdapStatus
+      responses:
+        '200':
+          description: LDAP status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LdapStatus'
+        '403':
+          description: Admin role required
+
+  /admin/api/ldap/sync:
+    post:
+      tags:
+        - Admin
+      summary: Trigger LDAP sync
+      description: |
+        Manually trigger a full LDAP synchronization.
+        This imports all AD accounts for username-to-USN mapping.
+      operationId: triggerLdapSync
+      responses:
+        '200':
+          description: Sync completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+                  accounts_imported:
+                    type: integer
+        '403':
+          description: Admin role required
+        '503':
+          description: LDAP not configured
+
+  /admin/api/sensitive/list:
+    get:
+      tags:
+        - Admin
+      summary: List sensitive terms
+      description: Returns all configured sensitive terms and their replacements.
+      operationId: listSensitiveTerms
+      responses:
+        '200':
+          description: Sensitive terms list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SensitiveTermsList'
+        '403':
+          description: Admin role required
+
+  /admin/api/sensitive/add:
+    post:
+      tags:
+        - Admin
+      summary: Add sensitive term
+      description: Add a new organization-specific sensitive term.
+      operationId: addSensitiveTerm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SensitiveTermRequest'
+      responses:
+        '200':
+          description: Term added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+        '400':
+          description: Invalid request
+        '403':
+          description: Admin role required
+
+  /admin/api/sensitive/delete:
+    delete:
+      tags:
+        - Admin
+      summary: Delete sensitive term
+      description: Remove a sensitive term from the configuration.
+      operationId: deleteSensitiveTerm
+      parameters:
+        - name: term
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Term to delete
+      responses:
+        '200':
+          description: Term deleted
+        '400':
+          description: Term parameter required
+        '403':
+          description: Admin role required
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: admin_session
+      description: Session cookie from OIDC or password login
+    
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        **Planned for v0.14.0**
+        
+        API key for service-to-service authentication.
+        Contact your administrator to obtain an API key for pipeline integration.
+
+  schemas:
+    JobSubmitResponse:
+      type: object
+      required:
+        - job_id
+        - status
+      properties:
+        job_id:
+          type: string
+          description: Unique job identifier for status polling
+          example: "batch-Administrator-20260129-090425"
+        status:
+          type: string
+          enum: [queued, processing, completed, failed, cancelled]
+          example: "queued"
+        total_files:
+          type: integer
+          description: Number of files in the submitted archive
+          example: 4
+        message:
+          type: string
+          example: "Batch job submitted successfully"
+
+    JobStatus:
+      type: object
+      properties:
+        job_id:
+          type: string
+          example: "batch-Administrator-20260129-090425"
+        username:
+          type: string
+          example: "Administrator"
+        status:
+          type: string
+          enum: [queued, processing, completed, failed, cancelled]
+        total_files:
+          type: integer
+          description: Total files to process
+        processed_files:
+          type: integer
+          description: Files processed so far (for progress tracking)
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+          description: Error details if status is 'failed'
+
+    JobList:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            type: object
+            properties:
+              job_id:
+                type: string
+              status:
+                type: string
+              total_files:
+                type: integer
+              processed_files:
+                type: integer
+              created_at:
+                type: string
+              completed_at:
+                type: string
+                nullable: true
+        total:
+          type: integer
+
+    ProcessingSummary:
+      type: object
+      properties:
+        job_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        total_files:
+          type: integer
+        processing_time:
+          type: string
+          example: "110.5ms"
+        patterns_found:
+          type: object
+          properties:
+            ip_addresses:
+              type: integer
+            ad_accounts:
+              type: integer
+            jwt_tokens:
+              type: integer
+            private_keys:
+              type: integer
+            passwords:
+              type: integer
+            sensitive_terms:
+              type: integer
+            user_words:
+              type: integer
+        total_patterns:
+          type: integer
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+        service:
+          type: string
+          example: "yossarian-go"
+        version:
+          type: string
+          example: "v0.13.12"
+        build_time:
+          type: string
+          example: "2026-01-29_08:57:09"
+        commit:
+          type: string
+          example: "f05f7f4"
+
+    ConfigLimits:
+      type: object
+      properties:
+        max_total_upload_size_mb:
+          type: integer
+          example: 100
+        max_file_size_mb:
+          type: integer
+          example: 50
+        max_zip_file_size_mb:
+          type: integer
+          example: 10
+        max_file_count:
+          type: integer
+          example: 10
+
+    LdapStatus:
+      type: object
+      properties:
+        ldap_configured:
+          type: boolean
+        ldap_server:
+          type: string
+        sync_interval:
+          type: integer
+        account_count:
+          type: integer
+        user_count:
+          type: integer
+        computer_count:
+          type: integer
+
+    SensitiveTermsList:
+      type: object
+      properties:
+        terms:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            "ProjectApollo": "[PROJECT-REDACTED]"
+            "ClientMegaCorp": "[CLIENT-REDACTED]"
+        total:
+          type: integer
+
+    SensitiveTermRequest:
+      type: object
+      required:
+        - term
+      properties:
+        term:
+          type: string
+          description: The sensitive term to detect
+          example: "ProjectApollo"
+        replacement:
+          type: string
+          description: Custom replacement text (default "[SENSITIVE]")
+          example: "[PROJECT-REDACTED]"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
