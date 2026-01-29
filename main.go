@@ -763,6 +763,95 @@ func hasRole(r *http.Request, requiredRole string) bool {
 	return false
 }
 
+// API Key authentication
+type APIKeyInfo struct {
+	Valid    bool   `json:"valid"`
+	Username string `json:"username"`
+	Scopes   string `json:"scopes"`
+	Message  string `json:"message,omitempty"`
+}
+
+func validateAPIKey(apiKey string) (*APIKeyInfo, error) {
+	if adServiceURL == "" {
+		return nil, fmt.Errorf("AD service URL not configured")
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	jsonData, _ := json.Marshal(map[string]string{"key": apiKey})
+	
+	resp, err := client.Post(
+		fmt.Sprintf("%s/api-keys/validate", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate API key: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var info APIKeyInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %v", err)
+	}
+
+	return &info, nil
+}
+
+func hasAPIKeyScope(apiKey, requiredScope string) bool {
+	info, err := validateAPIKey(apiKey)
+	if err != nil || !info.Valid {
+		return false
+	}
+
+	scopes := strings.Split(info.Scopes, ",")
+	for _, scope := range scopes {
+		if strings.TrimSpace(scope) == requiredScope || strings.TrimSpace(scope) == "admin" {
+			return true
+		}
+	}
+	return false
+}
+
+// apiKeyOrSessionAuth checks for API key first, then falls back to session auth
+// Returns (username, isAPIKey, isAuthenticated)
+func apiKeyOrSessionAuth(r *http.Request) (string, bool, bool) {
+	// Check for API key in header
+	apiKey := r.Header.Get("X-API-Key")
+	if apiKey != "" {
+		info, err := validateAPIKey(apiKey)
+		if err == nil && info.Valid {
+			return info.Username, true, true
+		}
+		return "", true, false // API key provided but invalid
+	}
+
+	// Fall back to session auth
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		return "", false, false
+	}
+
+	sessionMutex.Lock()
+	defer sessionMutex.Unlock()
+
+	if expiry, exists := adminSessions[cookie.Value]; exists {
+		// Check token expiry
+		if tokenExpiry, hasTokenExpiry := sessionTokenExpiry[cookie.Value]; hasTokenExpiry {
+			if time.Now().After(tokenExpiry) {
+				return "", false, false
+			}
+		} else if time.Now().After(expiry) {
+			return "", false, false
+		}
+
+		if username, exists := sessionUsers[cookie.Value]; exists {
+			return username, false, true
+		}
+	}
+
+	return "", false, false
+}
+
 func showAccessDenied(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusForbidden)
@@ -3255,8 +3344,123 @@ func generateProcessingSummaryInMemory(jobID string, fileCount int, stats map[st
 			stats["private_keys"] + stats["passwords"] + stats["sensitive_terms"] + stats["user_words"],
 	}
 
-	data, _ := json.MarshalIndent(summary, "", "  ")
+data, _ := json.MarshalIndent(summary, "", "  ")
 	return string(data)
+}
+
+// API Key management proxy handlers
+
+func proxyAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get username from session to auto-fill if not provided
+	username := ""
+	if cookie, err := r.Cookie("admin_session"); err == nil {
+		sessionMutex.Lock()
+		if user, exists := sessionUsers[cookie.Value]; exists {
+			username = user
+		}
+		sessionMutex.Unlock()
+	}
+
+	// Read and potentially modify request body
+	var req map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Auto-fill username if not provided
+	if req["username"] == nil || req["username"] == "" {
+		req["username"] = username
+	}
+
+	jsonData, _ := json.Marshal(req)
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api-keys/create", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func proxyAPIKeyList(w http.ResponseWriter, r *http.Request) {
+	// Get username from path or default to current user
+	pathUsername := strings.TrimPrefix(r.URL.Path, "/admin/api/api-keys/list/")
+	if pathUsername == "" {
+		pathUsername = "all" // Admin sees all keys
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/api-keys/list/%s", adServiceURL, pathUsername))
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func proxyAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	keyID := strings.TrimPrefix(r.URL.Path, "/admin/api/api-keys/delete/")
+	if keyID == "" {
+		http.Error(w, "Key ID required", http.StatusBadRequest)
+		return
+	}
+
+	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api-keys/delete/%s", adServiceURL, keyID), nil)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func proxyAPIKeyRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	keyID := strings.TrimPrefix(r.URL.Path, "/admin/api/api-keys/revoke/")
+	if keyID == "" {
+		http.Error(w, "Key ID required", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := http.Post(fmt.Sprintf("%s/api-keys/revoke/%s", adServiceURL, keyID), "application/json", nil)
+	if err != nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // tourContentHandler serves tour content JSON from ConfigMap
@@ -3426,6 +3630,13 @@ func main() {
 	http.HandleFunc("/admin/api/org-settings/list", adminRequired(proxyOrgSettingsList))
 	http.HandleFunc("/admin/api/org-settings/update", adminRequired(proxyOrgSettingsUpdate))
 	http.HandleFunc("/api/org-settings/public", proxyOrgSettingsPublic) // No auth required - public endpoint
+
+	// API Key management (admin only)
+	http.HandleFunc("/admin/api/api-keys/create", adminRequired(proxyAPIKeyCreate))
+	http.HandleFunc("/admin/api/api-keys/list/", adminRequired(proxyAPIKeyList))
+	http.HandleFunc("/admin/api/api-keys/list", adminRequired(proxyAPIKeyList))
+	http.HandleFunc("/admin/api/api-keys/delete/", adminRequired(proxyAPIKeyDelete))
+	http.HandleFunc("/admin/api/api-keys/revoke/", adminRequired(proxyAPIKeyRevoke))
 
 	// Tour content endpoint (no auth required - public endpoint)
 	http.HandleFunc("/api/tour/", tourContentHandler)
