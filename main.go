@@ -3376,6 +3376,11 @@ func main() {
 	// Initialize templates
 	initTemplates()
 
+	// API Documentation (OpenAPI + Swagger UI) - must be before "/" handler
+	http.HandleFunc("/docs", swaggerUIHandler)
+	http.HandleFunc("/docs/", swaggerUIAssetsHandler)
+	http.HandleFunc("/api/openapi.yaml", openapiHandler)
+
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/health", mainHealthHandler)
 	http.HandleFunc("/api/userinfo", userInfoHandler)
@@ -3422,11 +3427,6 @@ func main() {
 
 	// Tour content endpoint (no auth required - public endpoint)
 	http.HandleFunc("/api/tour/", tourContentHandler)
-
-	// API Documentation (OpenAPI + Swagger UI)
-	http.HandleFunc("/api/openapi.yaml", openapiHandler)
-	http.HandleFunc("/docs", swaggerUIHandler)
-	http.HandleFunc("/docs/", swaggerUIAssetsHandler)
 
 	// Debug route
 	http.HandleFunc("/debug", debugHandler)
