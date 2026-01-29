@@ -1,0 +1,121 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "yossarian-go.fullname" . }}-tour-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yossarian-go.labels" . | nindent 4 }}
+    app.kubernetes.io/component: config
+data:
+  tour-en.json: |
+    {
+      "meta": {
+        "version": "1.0",
+        "language": "en",
+        "direction": "ltr"
+      },
+      "config": {
+        "autoStartForNewUsers": true,
+        "overlayOpacity": 0.75,
+        "animationDuration": 300,
+        "storageKey": "yossarian_tour_completed"
+      },
+      "steps": [
+        {
+          "id": "welcome",
+          "type": "modal",
+          "title": "Welcome to Yossarian Go! 🛡️",
+          "content": "This tool helps you <strong>sanitize log files</strong> before sharing them with external vendors or support teams.<br><br>⚠️ <strong>Important:</strong> You are responsible for exporting logs using the correct procedures and paths. This tool only removes sensitive content from the files you provide."
+        },
+        {
+          "id": "nav-overview",
+          "target": ".nav-items",
+          "title": "Navigation",
+          "content": "<strong>Secure Files</strong> - Upload and sanitize logs<br><strong>My Words</strong> - Add custom terms to redact<br><strong>My Jobs</strong> - Track batch processing<br><strong>Help</strong> - Documentation & tips",
+          "position": "right"
+        },
+        {
+          "id": "dropzone",
+          "target": "#dropZone",
+          "title": "Step 1: Upload Files",
+          "content": "Drag & drop your log files here, or click to browse.<br><br>Supports: <code>.log</code>, <code>.txt</code>, <code>.zip</code>, <code>.tar.gz</code>, <code>.json</code>, <code>.xml</code>, <code>.csv</code>",
+          "position": "bottom"
+        },
+        {
+          "id": "process-button",
+          "target": "#processBtn",
+          "title": "Step 2: Process Files",
+          "content": "Click here to start sanitization. Processing happens on the server - your files never leave the organization's network.",
+          "position": "top"
+        },
+        {
+          "id": "save-warning",
+          "type": "modal",
+          "title": "⚠️ Critical: Save Your Results!",
+          "content": "After processing completes, you <strong>MUST download and save</strong> all files and reports immediately.<br><br>❌ <strong>Reports cannot be retrieved later</strong> - they are automatically deleted after your session ends.<br><br>✅ Always save:<br>• Sanitized files (.zip)<br>• Mapping report (for reference)<br>• Detailed CSV report (if enabled)"
+        },
+        {
+          "id": "complete",
+          "type": "modal",
+          "title": "You're Ready! 🎉",
+          "content": "You can restart this tour anytime from the <strong>Help</strong> section.<br><br>Questions? Check the Help page for detailed documentation."
+        }
+      ],
+      "ui": {
+        "buttons": {
+          "next": "Next →",
+          "prev": "← Back",
+          "skip": "Skip Tour",
+          "finish": "Let's Go!"
+        },
+        "accessibility": {
+          "closeLabel": "Close",
+          "stepOf": "Step {current} of {total}"
+        },
+        "tourButton": "🎯 Start Tour",
+        "languageLabel": "Language"
+      }
+    }
+  tour-he.json: |
+    {
+      "meta": {
+        "version": "1.0",
+        "language": "he",
+        "direction": "ltr"
+      },
+      "config": {
+        "autoStartForNewUsers": true,
+        "overlayOpacity": 0.75,
+        "animationDuration": 300,
+        "storageKey": "yossarian_tour_completed"
+      },
+      "steps": [
+        {
+          "id": "welcome",
+          "type": "modal",
+          "title": "!Yossarian Go-ברוכים הבאים ל 🛡️",
+          "content": "כלי זה מסייע לך <strong>לנקות קבצי לוג</strong> לפני שיתופם עם ספקים חיצוניים או צוותי תמיכה.<br><br>⚠️ <strong>חשוב:</strong> באחריותך לייצא לוגים בהתאם לנהלים ולנתיבים הנכונים. כלי זה רק מסיר תוכן רגיש מהקבצים שאתה מספק."
+        },
+        {
+          "id": "complete",
+          "type": "modal",
+          "title": "!אתה מוכן 🎉",
+          "content": "תוכל להפעיל מחדש סיור זה בכל עת מאזור <strong>העזרה</strong>.<br><br>שאלות? בדוק את דף העזרה לתיעוד מפורט."
+        }
+      ],
+      "ui": {
+        "buttons": {
+          "next": "← הבא",
+          "prev": "הקודם →",
+          "skip": "דלג על הסיור",
+          "finish": "!בוא נתחיל"
+        },
+        "accessibility": {
+          "closeLabel": "סגור",
+          "stepOf": "שלב {current} מתוך {total}"
+        },
+        "tourButton": "🎯 התחל סיור",
+        "languageLabel": "שפה"
+      }
+    }
