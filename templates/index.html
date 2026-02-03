@@ -1123,6 +1123,10 @@
                     <span class="nav-item-icon">🔒</span>
                     <span>Secure Files</span>
                 </a>
+                <a class="nav-item" data-panel="code-scan">
+                    <span class="nav-item-icon">📜</span>
+                    <span>Code Scan</span>
+                </a>
                 <a class="nav-item" data-panel="my-words">
                     <span class="nav-item-icon">📝</span>
                     <span>My Words</span>
@@ -1279,8 +1283,61 @@
                 </div>
             </div>
 
-            <!-- My Words Panel -->
-            <div class="panel" id="panel-my-words">
+            <!-- Code Scan Panel -->
+            <div class="panel" id="panel-code-scan">
+                <div class="panel-header">
+                    <h1 class="panel-title">📜 Code Scan</h1>
+                    <p class="panel-subtitle">Remove secrets, credentials, and sensitive data from source code before sharing</p>
+                </div>
+
+                <div class="md-card">
+                    <div class="drop-zone" id="codeDropZone">
+                        <div class="drop-zone-icon">📜</div>
+                        <div class="drop-zone-text">Drop code files here or click to browse</div>
+                        <div class="drop-zone-subtext">Supports source code (.go, .py, .js, .java, etc.), config files (.env, .yaml, .json), and more</div>
+                        <input type="file" class="file-input" id="codeFileInput" multiple accept=".go,.py,.js,.ts,.jsx,.tsx,.java,.cs,.c,.cpp,.h,.hpp,.rb,.php,.swift,.kt,.scala,.rs,.r,.pl,.pm,.sh,.bash,.ps1,.psm1,.vb,.fs,.lua,.groovy,.dart,.env,.yaml,.yml,.json,.xml,.toml,.ini,.conf,.cfg,.properties,.tf,.hcl,.sql,.graphql,.html,.htm,.css,.scss,.sass,.less,.vue,.svelte,.md,.rst,.txt">
+                    </div>
+
+                    <div class="file-list" id="codeFileList"></div>
+
+                    <!-- Pattern Preview Panel -->
+                    <div class="preview-panel" id="codePreviewPanel">
+                        <div class="preview-header">
+                            <span>🔬</span>
+                            <span>Detected Secrets Preview</span>
+                        </div>
+                        <div class="preview-badges" id="codePreviewBadges"></div>
+                        <div id="codePreviewMessage"></div>
+                    </div>
+
+                    <div class="progress-container" id="codeProgressContainer">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="codeProgressFill"></div>
+                        </div>
+                        <div class="progress-text" id="codeProgressText">Processing files...</div>
+                    </div>
+
+                    <div style="margin-top: 24px; display: flex; gap: 12px;">
+                        <button class="md-button md-button-filled" id="codeProcessBtn" disabled>
+                            📜 Scan & Sanitize Code
+                        </button>
+                        <button class="md-button md-button-outlined" id="codeClearBtn">
+                            🗑️ Clear
+                        </button>
+                    </div>
+                </div>
+
+                <!-- What Gets Detected Card -->
+                <div class="md-card" style="margin-top: 24px;">
+                    <h3 style="margin-bottom: 16px;">🔍 What Gets Detected & Sanitized</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px;">
+                        <div style="padding: 12px; background: var(--md-surface-2); border-radius: 8px;">
+                            <div style="font-weight: 500; margin-bottom: 8px;">🔑 Credentials & Keys</div>
+                            <div style="font-size: 13px; color: var(--md-on-surface-variant);">API keys, AWS/Azure/GCP credentials, private keys, passwords, connection strings</div>
+                        </div>
+                        <div style="padding: 12px; background: var(--md-surface-2); border-radius: 8px;">
+                            <div style="font-weight: 500; margin-bottom: 8px;">📍 Location Data</div>
+                            <div style="font-size: 13px; color: var(--md-on-surface-variant);">GPS coordinates (decimal, DMS), geo URIs, hardcoded locations</div>
                 <div class="panel-header">
                     <h1 class="panel-title">📝 My Sensitive Words</h1>
                     <p class="panel-subtitle">Manage your personal sensitive terms (stored encrypted in browser)</p>
@@ -2671,6 +2728,426 @@
         // Wire up buttons
         document.getElementById('processBtn').addEventListener('click', processFiles);
         document.getElementById('clearBtn').addEventListener('click', clearFiles);
+
+        // ========================================
+        // CODE SCAN FUNCTIONALITY
+        // ========================================
+        
+        let selectedCodeFiles = [];
+        let codeProcessingResults = [];
+
+        function initializeCodeUpload() {
+            const codeDropZone = document.getElementById('codeDropZone');
+            const codeFileInput = document.getElementById('codeFileInput');
+
+            codeDropZone.onclick = function(e) {
+                if (e.target === this || e.target.classList.contains('drop-zone-icon') || 
+                    e.target.classList.contains('drop-zone-text') || e.target.classList.contains('drop-zone-subtext')) {
+                    e.stopPropagation();
+                    codeFileInput.click();
+                }
+            };
+
+            codeDropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                codeDropZone.classList.add('dragover');
+            });
+
+            codeDropZone.addEventListener('dragleave', () => {
+                codeDropZone.classList.remove('dragover');
+            });
+
+            codeDropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                codeDropZone.classList.remove('dragover');
+                handleCodeFiles(e.dataTransfer.files);
+            });
+
+            codeFileInput.addEventListener('change', (e) => {
+                handleCodeFiles(e.target.files);
+            });
+
+            // Wire up code scan buttons
+            document.getElementById('codeProcessBtn').addEventListener('click', processCodeFiles);
+            document.getElementById('codeClearBtn').addEventListener('click', clearCodeFiles);
+        }
+
+        function handleCodeFiles(files) {
+            const fileArray = Array.from(files);
+            
+            if (fileArray.length > maxFileCount) {
+                alert(`Maximum ${maxFileCount} files allowed`);
+                return;
+            }
+
+            selectedCodeFiles = [];
+            codeProcessingResults = [];
+            document.getElementById('codeResultsSection').style.display = 'none';
+            document.getElementById('codeProgressContainer').classList.remove('visible');
+
+            fileArray.forEach(file => {
+                if (file.size > maxFileSizeMB * 1024 * 1024) {
+                    alert(`File "${file.name}" exceeds ${maxFileSizeMB}MB`);
+                    return;
+                }
+                selectedCodeFiles.push({
+                    file: file,
+                    id: Date.now() + Math.random(),
+                    status: 'ready',
+                    results: null
+                });
+            });
+
+            updateCodeProcessButton();
+            displayCodeFileList();
+            previewCodePatterns(selectedCodeFiles);
+        }
+
+        function displayCodeFileList() {
+            const fileList = document.getElementById('codeFileList');
+            
+            if (selectedCodeFiles.length === 0) {
+                fileList.innerHTML = '';
+                return;
+            }
+
+            fileList.innerHTML = selectedCodeFiles.map(fileObj => {
+                const file = fileObj.file;
+                const sizeStr = formatFileSize(file.size);
+                const ext = file.name.split('.').pop().toUpperCase();
+
+                return `
+                    <div class="file-item">
+                        <div class="file-icon">${ext}</div>
+                        <div class="file-info">
+                            <div class="file-name">${escapeHtml(file.name)}</div>
+                            <div class="file-size">${sizeStr}</div>
+                        </div>
+                        <div class="file-status ${fileObj.status}">${getStatusText(fileObj.status)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function updateCodeProcessButton() {
+            document.getElementById('codeProcessBtn').disabled = selectedCodeFiles.length === 0;
+        }
+
+        // Code-specific pattern detection (includes GPS coordinates)
+        function detectCodePatterns(text) {
+            const patterns = {
+                // Existing patterns
+                ips: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
+                emails: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+                adAccounts: /\b[A-Z0-9-]+\\[a-zA-Z0-9._-]{4,15}\b|\b[a-zA-Z0-9._-]{4,15}@[a-zA-Z0-9.-]+\b/g,
+                jwt: /eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+/g,
+                privateKeys: /-----BEGIN[^-]*KEY-----/g,
+                passwords: /password["':=\s]+["']?[^"',\s]{3,50}/gi,
+                
+                // Code-specific patterns
+                awsKeys: /AKIA[0-9A-Z]{16}/g,
+                awsSecret: /[A-Za-z0-9/+=]{40}/g,
+                genericApiKey: /['"][a-zA-Z0-9_-]{20,}['"]/g,
+                connectionStrings: /(?:mongodb|mysql|postgres|redis|amqp):\/\/[^\s"']+/gi,
+                
+                // GPS Coordinates - Decimal Degrees (e.g., 32.0853, 34.7818 or -33.8688, 151.2093)
+                gpsDecimal: /-?\d{1,3}\.\d{4,},\s*-?\d{1,3}\.\d{4,}/g,
+                
+                // GPS Coordinates - DMS (e.g., 32°5'7"N or 32°5'7.08"N)
+                gpsDMS: /\d{1,3}°\d{1,2}'[\d.]+["″]?[NSEW]?/gi,
+                
+                // Geo URI (e.g., geo:32.0853,34.7818)
+                geoUri: /geo:-?\d+\.?\d*,-?\d+\.?\d*/gi,
+                
+                // Internal URLs
+                internalUrls: /https?:\/\/(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)[^\s"']*/gi
+            };
+
+            const results = {
+                ips: new Set(),
+                emails: new Set(),
+                adAccounts: new Set(),
+                jwt: 0,
+                privateKeys: 0,
+                passwords: 0,
+                awsKeys: 0,
+                apiKeys: 0,
+                connectionStrings: 0,
+                gpsCoordinates: 0,
+                internalUrls: 0,
+                total: 0
+            };
+
+            // Count patterns
+            const ipMatches = text.match(patterns.ips);
+            if (ipMatches) ipMatches.forEach(ip => results.ips.add(ip));
+
+            const emailMatches = text.match(patterns.emails);
+            if (emailMatches) emailMatches.forEach(email => results.emails.add(email));
+
+            const adMatches = text.match(patterns.adAccounts);
+            if (adMatches) adMatches.forEach(account => results.adAccounts.add(account));
+
+            results.jwt = (text.match(patterns.jwt) || []).length;
+            results.privateKeys = (text.match(patterns.privateKeys) || []).length;
+            results.passwords = (text.match(patterns.passwords) || []).length;
+            results.awsKeys = (text.match(patterns.awsKeys) || []).length;
+            results.apiKeys = (text.match(patterns.genericApiKey) || []).length;
+            results.connectionStrings = (text.match(patterns.connectionStrings) || []).length;
+            results.internalUrls = (text.match(patterns.internalUrls) || []).length;
+
+            // GPS coordinates (combine all formats)
+            const gpsDecimalMatches = (text.match(patterns.gpsDecimal) || []).length;
+            const gpsDMSMatches = (text.match(patterns.gpsDMS) || []).length;
+            const geoUriMatches = (text.match(patterns.geoUri) || []).length;
+            results.gpsCoordinates = gpsDecimalMatches + gpsDMSMatches + geoUriMatches;
+
+            // Calculate total
+            results.total = results.ips.size + results.emails.size + results.adAccounts.size + 
+                           results.jwt + results.privateKeys + results.passwords +
+                           results.awsKeys + results.apiKeys + results.connectionStrings +
+                           results.gpsCoordinates + results.internalUrls;
+
+            return results;
+        }
+
+        async function previewCodePatterns(files) {
+            const previewPanel = document.getElementById('codePreviewPanel');
+            const previewBadges = document.getElementById('codePreviewBadges');
+            const previewMessage = document.getElementById('codePreviewMessage');
+
+            previewBadges.innerHTML = '';
+            previewMessage.innerHTML = '';
+
+            let totalPatterns = {
+                ips: 0, emails: 0, adAccounts: 0, jwt: 0, privateKeys: 0,
+                passwords: 0, awsKeys: 0, apiKeys: 0, connectionStrings: 0,
+                gpsCoordinates: 0, internalUrls: 0, total: 0
+            };
+
+            let filesAnalyzed = 0;
+
+            for (const fileObj of files) {
+                const file = fileObj.file;
+                if (file.size > 5 * 1024 * 1024) continue; // Skip files > 5MB for preview
+
+                try {
+                    const text = await file.text();
+                    if (text.includes('\0')) continue; // Skip binary
+
+                    const patterns = detectCodePatterns(text);
+                    totalPatterns.ips += patterns.ips.size;
+                    totalPatterns.emails += patterns.emails.size;
+                    totalPatterns.adAccounts += patterns.adAccounts.size;
+                    totalPatterns.jwt += patterns.jwt;
+                    totalPatterns.privateKeys += patterns.privateKeys;
+                    totalPatterns.passwords += patterns.passwords;
+                    totalPatterns.awsKeys += patterns.awsKeys;
+                    totalPatterns.apiKeys += patterns.apiKeys;
+                    totalPatterns.connectionStrings += patterns.connectionStrings;
+                    totalPatterns.gpsCoordinates += patterns.gpsCoordinates;
+                    totalPatterns.internalUrls += patterns.internalUrls;
+                    totalPatterns.total += patterns.total;
+                    filesAnalyzed++;
+                } catch (error) {
+                    console.log('Could not preview:', file.name);
+                }
+            }
+
+            if (filesAnalyzed > 0) {
+                previewPanel.classList.add('visible');
+
+                const badges = [];
+                if (totalPatterns.gpsCoordinates > 0) badges.push(`<div class="preview-badge"><span>📍 GPS Coordinates</span><span class="preview-badge-count">${totalPatterns.gpsCoordinates}</span></div>`);
+                if (totalPatterns.awsKeys > 0) badges.push(`<div class="preview-badge"><span>☁️ AWS Keys</span><span class="preview-badge-count">${totalPatterns.awsKeys}</span></div>`);
+                if (totalPatterns.apiKeys > 0) badges.push(`<div class="preview-badge"><span>🔑 API Keys</span><span class="preview-badge-count">${totalPatterns.apiKeys}</span></div>`);
+                if (totalPatterns.connectionStrings > 0) badges.push(`<div class="preview-badge"><span>🔗 Connection Strings</span><span class="preview-badge-count">${totalPatterns.connectionStrings}</span></div>`);
+                if (totalPatterns.privateKeys > 0) badges.push(`<div class="preview-badge"><span>🔐 Private Keys</span><span class="preview-badge-count">${totalPatterns.privateKeys}</span></div>`);
+                if (totalPatterns.passwords > 0) badges.push(`<div class="preview-badge"><span>🔒 Passwords</span><span class="preview-badge-count">${totalPatterns.passwords}</span></div>`);
+                if (totalPatterns.ips > 0) badges.push(`<div class="preview-badge"><span>🌐 IP Addresses</span><span class="preview-badge-count">${totalPatterns.ips}</span></div>`);
+                if (totalPatterns.internalUrls > 0) badges.push(`<div class="preview-badge"><span>🏠 Internal URLs</span><span class="preview-badge-count">${totalPatterns.internalUrls}</span></div>`);
+                if (totalPatterns.emails > 0) badges.push(`<div class="preview-badge"><span>📧 Emails</span><span class="preview-badge-count">${totalPatterns.emails}</span></div>`);
+
+                previewBadges.innerHTML = badges.join('');
+
+                if (totalPatterns.total === 0) {
+                    previewMessage.innerHTML = `<div class="preview-warning"><span>⚠️</span><span><strong>No secrets detected</strong> - The code appears clean, but will still be scanned for patterns.</span></div>`;
+                } else {
+                    previewMessage.innerHTML = `<div class="preview-success"><span>✅</span><span><strong>${totalPatterns.total} potential secrets detected</strong> across ${filesAnalyzed} file(s) - Ready for sanitization</span></div>`;
+                }
+            } else {
+                previewPanel.classList.remove('visible');
+            }
+        }
+
+        async function processCodeFiles() {
+            if (selectedCodeFiles.length === 0) return;
+
+            const progressContainer = document.getElementById('codeProgressContainer');
+            const progressFill = document.getElementById('codeProgressFill');
+            const progressText = document.getElementById('codeProgressText');
+            const processBtn = document.getElementById('codeProcessBtn');
+
+            processBtn.disabled = true;
+            processBtn.textContent = '⏳ Scanning...';
+            progressContainer.classList.add('visible');
+            codeProcessingResults = [];
+
+            for (let i = 0; i < selectedCodeFiles.length; i++) {
+                const fileObj = selectedCodeFiles[i];
+                const progress = ((i) / selectedCodeFiles.length) * 100;
+
+                progressFill.style.width = `${progress}%`;
+                progressText.textContent = `Scanning ${fileObj.file.name}...`;
+
+                fileObj.status = 'processing';
+                displayCodeFileList();
+
+                try {
+                    const result = await processCodeFile(fileObj.file);
+                    fileObj.results = result;
+                    codeProcessingResults.push(result);
+                    fileObj.status = 'complete';
+                } catch (error) {
+                    console.error('Processing error:', error);
+                    fileObj.status = 'error';
+                }
+
+                displayCodeFileList();
+            }
+
+            progressFill.style.width = '100%';
+            progressText.textContent = 'Scan complete!';
+
+            processBtn.disabled = false;
+            processBtn.textContent = '📜 Scan & Sanitize Code';
+
+            displayCodeResults();
+        }
+
+        async function processCodeFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('mode', 'code'); // Tell backend this is code scanning mode
+
+            const personalWords = getPersonalWordsForSanitization();
+            if (personalWords) {
+                setCookie('sensitive_words', personalWords, 1);
+            }
+
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.status === 401) {
+                const data = await response.json();
+                alert(data.message || 'Session expired. Please log in again.');
+                window.location.href = '/auth/oidc/login';
+                throw new Error('Session expired');
+            }
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            return await response.json();
+        }
+
+        function displayCodeResults() {
+            const resultsSection = document.getElementById('codeResultsSection');
+            const resultsGrid = document.getElementById('codeResultsGrid');
+            const fileResults = document.getElementById('codeFileResults');
+
+            resultsSection.style.display = 'block';
+
+            const aggregated = {
+                totalIPs: 0, totalAD: 0, totalJWT: 0, totalKeys: 0,
+                totalSensitive: 0, totalGPS: 0
+            };
+
+            codeProcessingResults.forEach(result => {
+                const files = result.files || [result];
+                files.forEach(f => {
+                    aggregated.totalIPs += f.total_ips || 0;
+                    aggregated.totalAD += f.ad_accounts || 0;
+                    aggregated.totalJWT += f.jwt_tokens || 0;
+                    aggregated.totalKeys += f.private_keys || 0;
+                    aggregated.totalSensitive += f.sensitive_terms || 0;
+                    aggregated.totalGPS += f.gps_coordinates || 0;
+                });
+            });
+
+            resultsGrid.innerHTML = `
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalGPS}</div>
+                    <div class="metric-label">GPS Coordinates</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalKeys}</div>
+                    <div class="metric-label">Keys & Secrets</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalIPs}</div>
+                    <div class="metric-label">IP Addresses</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalAD}</div>
+                    <div class="metric-label">AD Accounts</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${aggregated.totalSensitive}</div>
+                    <div class="metric-label">Sensitive Terms</div>
+                </div>
+            `;
+
+            // File results
+            fileResults.innerHTML = selectedCodeFiles.map(fileObj => {
+                if (!fileObj.results) return '';
+                const result = fileObj.results;
+                const files = result.files || [result];
+
+                return files.map(fileResult => `
+                    <div class="file-result">
+                        <div class="file-result-header">
+                            <span class="file-result-name">📄 ${escapeHtml(fileResult.filename || fileObj.file.name)}</span>
+                            <span class="file-result-time">⏱️ ${fileResult.processing_time || 'N/A'}</span>
+                        </div>
+                        <div class="file-result-content">
+                            <div class="categories-grid">
+                                <div class="category-item"><span class="category-name">GPS Coordinates</span><span class="category-count">${fileResult.gps_coordinates || 0}</span></div>
+                                <div class="category-item"><span class="category-name">IP Addresses</span><span class="category-count">${fileResult.total_ips || 0}</span></div>
+                                <div class="category-item"><span class="category-name">Private Keys</span><span class="category-count">${fileResult.private_keys || 0}</span></div>
+                                <div class="category-item"><span class="category-name">AD Accounts</span><span class="category-count">${fileResult.ad_accounts || 0}</span></div>
+                                <div class="category-item"><span class="category-name">Sensitive Terms</span><span class="category-count">${fileResult.sensitive_terms || 0}</span></div>
+                                <div class="category-item"><span class="category-name">User Words</span><span class="category-count">${fileResult.user_words || 0}</span></div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }).join('');
+
+            // Download buttons
+            document.getElementById('codeDownloadButtons').innerHTML = `
+                <a href="/download/sanitized" class="md-button md-button-filled">📦 Download All Files</a>
+                <a href="/mappings/csv" class="md-button md-button-outlined">📊 Mappings (CSV)</a>
+            `;
+        }
+
+        function clearCodeFiles() {
+            selectedCodeFiles = [];
+            document.getElementById('codeFileInput').value = '';
+            document.getElementById('codeFileList').innerHTML = '';
+            document.getElementById('codeProgressContainer').classList.remove('visible');
+            document.getElementById('codeResultsSection').style.display = 'none';
+            document.getElementById('codePreviewPanel').classList.remove('visible');
+            updateCodeProcessButton();
+        }
+
+        // Initialize code upload on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeCodeUpload();
+        });
 
         // ==================== SPOTLIGHT TOUR ENGINE ====================
         window.yossarianTour = (function() {
