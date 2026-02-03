@@ -1313,7 +1313,13 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] File upload started: user=%s, files=%d, mode=%s", username, len(files), runMode)
+	// Get scan mode (log or code)
+	scanMode := r.FormValue("mode")
+	if scanMode == "" {
+		scanMode = "log" // Default to log scanning
+	}
+
+	log.Printf("[INFO] File upload started: user=%s, files=%d, runMode=%s, scanMode=%s", username, len(files), runMode, scanMode)
 
 	// Check if detailed report was requested
 	shouldGenerateDetailedReport := r.FormValue("generate_detailed_report") == "true"
@@ -1424,6 +1430,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// === Regular file processing (both frontend and worker mode) ===
 	results := make([]map[string]interface{}, 0)
+	rejectedFiles := make([]map[string]interface{}, 0)
 	totalOriginalSize := 0
 	totalSanitizedSize := 0
 
@@ -1436,6 +1443,43 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		if fileHeader.Size > int64(maxFileSizeMB)*1024*1024 {
 			log.Printf("[ERROR] File rejected: %s exceeds %dMB limit", fileHeader.Filename, maxFileSizeMB)
 			continue
+		}
+
+		// Validate file extension based on scan mode (skip for ZIP files - they're handled separately)
+		ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+		if ext != ".zip" {
+			if scanMode == "code" {
+				// Code mode: reject .log files
+				if ext == ".log" {
+					log.Printf("[WARN] File rejected: %s - .log files not allowed in code scan mode", fileHeader.Filename)
+					rejectedFiles = append(rejectedFiles, map[string]interface{}{
+						"filename": fileHeader.Filename,
+						"reason":   "Log files (.log) are not allowed in Code Scan mode. Use Secure Files instead.",
+					})
+					continue
+				}
+			} else {
+				// Log mode: reject code files
+				codeExtensions := map[string]bool{
+					".go": true, ".py": true, ".js": true, ".ts": true, ".jsx": true, ".tsx": true,
+					".java": true, ".cs": true, ".c": true, ".cpp": true, ".h": true, ".hpp": true,
+					".rb": true, ".php": true, ".swift": true, ".kt": true, ".scala": true, ".rs": true,
+					".r": true, ".pl": true, ".pm": true, ".sh": true, ".bash": true, ".ps1": true,
+					".psm1": true, ".vb": true, ".fs": true, ".lua": true, ".groovy": true, ".dart": true,
+					".env": true, ".yaml": true, ".yml": true, ".toml": true, ".ini": true, ".conf": true,
+					".cfg": true, ".properties": true, ".tf": true, ".hcl": true, ".sql": true,
+					".graphql": true, ".html": true, ".htm": true, ".css": true, ".scss": true,
+					".sass": true, ".less": true, ".vue": true, ".svelte": true, ".md": true, ".rst": true,
+				}
+				if codeExtensions[ext] {
+					log.Printf("[WARN] File rejected: %s - code files not allowed in log scan mode (use Code Scan)", fileHeader.Filename)
+					rejectedFiles = append(rejectedFiles, map[string]interface{}{
+						"filename": fileHeader.Filename,
+						"reason":   "Code files are not allowed in Secure Files mode. Use Code Scan instead.",
+					})
+					continue
+				}
+			}
 		}
 
 		log.Printf("[DEBUG] Processing file: %s (%d bytes)", fileHeader.Filename, fileHeader.Size)
@@ -1523,6 +1567,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		"total_original":    totalOriginalSize,
 		"total_sanitized":   totalSanitizedSize,
 		"total_ip_mappings": len(ipMappings),
+		"rejected_files":    rejectedFiles,
+		"total_rejected":    len(rejectedFiles),
 		"status":            "completed",
 	})
 }

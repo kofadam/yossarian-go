@@ -2492,8 +2492,30 @@
             const resultsSection = document.getElementById('resultsSection');
             const resultsGrid = document.getElementById('resultsGrid');
             const fileResults = document.getElementById('fileResults');
-            
             resultsSection.style.display = 'block';
+
+            // Check for rejected files
+            let allRejected = [];
+            processingResults.forEach(result => {
+                if (result.rejected_files && result.rejected_files.length > 0) {
+                    allRejected = allRejected.concat(result.rejected_files);
+                }
+            });
+
+            // Display rejection warnings if any
+            if (allRejected.length > 0) {
+                const warningHtml = `
+                    <div style="background: #ffebee; border-left: 4px solid #d32f2f; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+                        <div style="font-weight: 500; color: #d32f2f; margin-bottom: 8px;">⚠️ ${allRejected.length} file(s) rejected</div>
+                        ${allRejected.map(r => `
+                            <div style="font-size: 13px; color: #b71c1c; margin-top: 4px;">
+                                <strong>${escapeHtml(r.filename)}</strong>: ${escapeHtml(r.reason)}
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+                resultsGrid.insertAdjacentHTML('beforebegin', warningHtml);
+            }
 
             const aggregated = {
                 totalIPs: 0,
@@ -2502,8 +2524,8 @@
                 totalKeys: 0,
                 totalSensitive: 0
             };
-
             processingResults.forEach(result => {
+                const files = result.files || [result];
                 const files = result.files || [result];
                 files.forEach(f => {
                     aggregated.totalIPs += f.total_ips || 0;
@@ -3082,15 +3104,37 @@
             const resultsSection = document.getElementById('codeResultsSection');
             const resultsGrid = document.getElementById('codeResultsGrid');
             const fileResults = document.getElementById('codeFileResults');
-
             resultsSection.style.display = 'block';
+
+            // Check for rejected files
+            let allRejected = [];
+            codeProcessingResults.forEach(result => {
+                if (result.rejected_files && result.rejected_files.length > 0) {
+                    allRejected = allRejected.concat(result.rejected_files);
+                }
+            });
+
+            // Display rejection warnings if any
+            if (allRejected.length > 0) {
+                const warningHtml = `
+                    <div style="background: #ffebee; border-left: 4px solid #d32f2f; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+                        <div style="font-weight: 500; color: #d32f2f; margin-bottom: 8px;">⚠️ ${allRejected.length} file(s) rejected</div>
+                        ${allRejected.map(r => `
+                            <div style="font-size: 13px; color: #b71c1c; margin-top: 4px;">
+                                <strong>${escapeHtml(r.filename)}</strong>: ${escapeHtml(r.reason)}
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+                resultsGrid.insertAdjacentHTML('beforebegin', warningHtml);
+            }
 
             const aggregated = {
                 totalIPs: 0, totalAD: 0, totalJWT: 0, totalKeys: 0,
                 totalSensitive: 0, totalGPS: 0
             };
-
             codeProcessingResults.forEach(result => {
+                const files = result.files || [result];
                 const files = result.files || [result];
                 files.forEach(f => {
                     aggregated.totalIPs += f.total_ips || 0;
