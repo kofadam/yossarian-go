@@ -1336,8 +1336,32 @@
                             <div style="font-size: 13px; color: var(--md-on-surface-variant);">API keys, AWS/Azure/GCP credentials, private keys, passwords, connection strings</div>
                         </div>
                         <div style="padding: 12px; background: var(--md-surface-2); border-radius: 8px;">
-                            <div style="font-weight: 500; margin-bottom: 8px;">📍 Location Data</div>
-                            <div style="font-size: 13px; color: var(--md-on-surface-variant);">GPS coordinates (decimal, DMS), geo URIs, hardcoded locations</div>
+                            <div style="font-weight: 500; margin-bottom: 8px;">🔗 Internal Resources</div>
+                            <div style="font-size: 13px; color: var(--md-on-surface-variant);">Internal URLs, hostnames, server addresses, database endpoints</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="codeResultsSection" style="display: none;">
+                    <div class="md-card">
+                        <h3 style="margin-bottom: 20px;">📊 Results Summary</h3>
+                        <div class="results-grid" id="codeResultsGrid"></div>
+                    </div>
+
+                    <div class="md-card">
+                        <h3 style="margin-bottom: 20px;">📄 File-by-File Results</h3>
+                        <div id="codeFileResults"></div>
+                    </div>
+
+                    <div class="md-card">
+                        <h3 style="margin-bottom: 20px;">⬇️ Downloads</h3>
+                        <div style="display: flex; gap: 12px; flex-wrap: wrap;" id="codeDownloadButtons"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- My Words Panel -->
+            <div class="panel" id="panel-my-words">
                 <div class="panel-header">
                     <h1 class="panel-title">📝 My Sensitive Words</h1>
                     <p class="panel-subtitle">Manage your personal sensitive terms (stored encrypted in browser)</p>
@@ -3074,14 +3098,14 @@
                     aggregated.totalJWT += f.jwt_tokens || 0;
                     aggregated.totalKeys += f.private_keys || 0;
                     aggregated.totalSensitive += f.sensitive_terms || 0;
-                    aggregated.totalGPS += f.gps_coordinates || 0;
+                    aggregated.totalGPS += f.internal_urls || 0;
                 });
             });
 
             resultsGrid.innerHTML = `
                 <div class="metric-card">
                     <div class="metric-value">${aggregated.totalGPS}</div>
-                    <div class="metric-label">GPS Coordinates</div>
+                    <div class="metric-label">Internal URLs</div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-value">${aggregated.totalKeys}</div>
@@ -3115,7 +3139,7 @@
                         </div>
                         <div class="file-result-content">
                             <div class="categories-grid">
-                                <div class="category-item"><span class="category-name">GPS Coordinates</span><span class="category-count">${fileResult.gps_coordinates || 0}</span></div>
+                                <div class="category-item"><span class="category-name">Internal URLs</span><span class="category-count">${fileResult.internal_urls || 0}</span></div>
                                 <div class="category-item"><span class="category-name">IP Addresses</span><span class="category-count">${fileResult.total_ips || 0}</span></div>
                                 <div class="category-item"><span class="category-name">Private Keys</span><span class="category-count">${fileResult.private_keys || 0}</span></div>
                                 <div class="category-item"><span class="category-name">AD Accounts</span><span class="category-count">${fileResult.ad_accounts || 0}</span></div>
