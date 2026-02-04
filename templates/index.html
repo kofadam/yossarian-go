@@ -2528,10 +2528,16 @@
                 }
             });
 
+            // Remove any previous rejection warning
+            const existingWarning = document.getElementById('codeRejectionWarning');
+            if (existingWarning) {
+                existingWarning.remove();
+            }
+            
             // Display rejection warnings if any
             if (allRejected.length > 0) {
                 const warningHtml = `
-                    <div style="background: #ffebee; border-left: 4px solid #d32f2f; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+                    <div id="codeRejectionWarning" style="background: #ffebee; border-left: 4px solid #d32f2f; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
                         <div style="font-weight: 500; color: #d32f2f; margin-bottom: 8px;">⚠️ ${allRejected.length} file(s) rejected</div>
                         ${allRejected.map(r => `
                             <div style="font-size: 13px; color: #b71c1c; margin-top: 4px;">
@@ -3043,7 +3049,7 @@
                 previewPanel.classList.add('visible');
 
                 const badges = [];
-                if (totalPatterns.gpsCoordinates > 0) badges.push(`<div class="preview-badge"><span>📍 GPS Coordinates</span><span class="preview-badge-count">${totalPatterns.gpsCoordinates}</span></div>`);
+                if (totalPatterns.gpsCoordinates > 0) badges.push(`<div class="preview-badge"><span>📍 Location Coordinates</span><span class="preview-badge-count">${totalPatterns.gpsCoordinates}</span></div>`);
                 if (totalPatterns.awsKeys > 0) badges.push(`<div class="preview-badge"><span>☁️ AWS Keys</span><span class="preview-badge-count">${totalPatterns.awsKeys}</span></div>`);
                 if (totalPatterns.apiKeys > 0) badges.push(`<div class="preview-badge"><span>🔑 API Keys</span><span class="preview-badge-count">${totalPatterns.apiKeys}</span></div>`);
                 if (totalPatterns.connectionStrings > 0) badges.push(`<div class="preview-badge"><span>🔗 Connection Strings</span><span class="preview-badge-count">${totalPatterns.connectionStrings}</span></div>`);
@@ -3155,10 +3161,16 @@
                 }
             });
 
+            // Remove any previous rejection warning
+            const existingWarning = document.getElementById('codeRejectionWarning');
+            if (existingWarning) {
+                existingWarning.remove();
+            }
+            
             // Display rejection warnings if any
             if (allRejected.length > 0) {
                 const warningHtml = `
-                    <div style="background: #ffebee; border-left: 4px solid #d32f2f; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+                    <div id="codeRejectionWarning" style="background: #ffebee; border-left: 4px solid #d32f2f; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
                         <div style="font-weight: 500; color: #d32f2f; margin-bottom: 8px;">⚠️ ${allRejected.length} file(s) rejected</div>
                         ${allRejected.map(r => `
                             <div style="font-size: 13px; color: #b71c1c; margin-top: 4px;">
@@ -3234,10 +3246,27 @@
                     </div>
                 `).join('');
             }).join('');
-
             // Download buttons - check scan mode first
             const selectedCodeScanMode = document.querySelector('input[name="codeScanMode"]:checked').value;
             let codeButtonsHTML = '';
+            
+            // Check if all files were rejected (no successful files)
+            let successfulFiles = 0;
+            codeProcessingResults.forEach(result => {
+                const files = result.files || [];
+                successfulFiles += files.length;
+            });
+            
+            if (successfulFiles === 0 && allRejected.length > 0) {
+                // All files were rejected - no downloads available
+                codeButtonsHTML = `
+                    <div style="flex-basis: 100%; padding: 12px; background: #ffebee; border-radius: 8px;">
+                        <strong>⚠️ No files to download</strong> - All uploaded files were rejected. Please use the correct panel for your file type.
+                    </div>
+                `;
+                document.getElementById('codeDownloadButtons').innerHTML = codeButtonsHTML;
+                return;
+            }
             
             if (selectedCodeScanMode === 'report_only') {
                 // Report only mode - no sanitized files to download
