@@ -316,6 +316,43 @@ var (
 	safePassword       = "CHANGE_ME_PASSWORD"
 	safeJWT            = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IlJFUExBQ0VfTUUiLCJpYXQiOjE1MTYyMzkwMjJ9.REPLACE_ME_SIGNATURE"
 	safePrivateKey     = "-----BEGIN PRIVATE KEY-----\nUkVQTEFDRV9NRV9QUklWQVRFX0tFWQ==\n-----END PRIVATE KEY-----"
+	safeCoordinate     = "0.0000, 0.0000" // Null Island - safe placeholder for coordinates
+)
+
+// Location coordinate patterns for code scanning
+var (
+	// Decimal Degrees: 32.0853, 34.7818 or -33.8688, 151.2093
+	coordDecimalRegex = regexp.MustCompile(`-?\d{1,3}\.\d{4,},\s*-?\d{1,3}\.\d{4,}`)
+	// DMS format: 32°5'7"N or 51°30'26"N
+	coordDMSRegex = regexp.MustCompile(`\d{1,3}°\d{1,2}'[\d.]+["″]?[NSEW]?`)
+	// Geo URI: geo:32.0853,34.7818 or geo:37.7749,-122.4194,100
+	coordGeoURIRegex = regexp.MustCompile(`geo:-?\d{1,3}\.\d+,-?\d{1,3}\.\d+(?:,\d+)?`)
+)
+
+// API key patterns for code scanning (provider-specific, precise patterns)
+var (
+	// AWS Access Key ID: Always starts with AKIA, exactly 20 characters
+	awsKeyRegex = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+	// Stripe API keys: sk_live_ or sk_test_ followed by alphanumeric
+	stripeKeyRegex = regexp.MustCompile(`sk_(live|test)_[a-zA-Z0-9]{24,}`)
+	// GitHub Personal Access Token: ghp_ followed by 36 alphanumeric chars
+	githubTokenRegex = regexp.MustCompile(`ghp_[a-zA-Z0-9]{36}`)
+	// Slack tokens: xoxb-, xoxa-, xoxp-, xoxr-, xoxs- followed by alphanumeric and dashes
+	slackTokenRegex = regexp.MustCompile(`xox[baprs]-[0-9a-zA-Z-]{10,48}`)
+	// OpenAI API keys: sk- followed by alphanumeric (48+ chars) or sk-proj-
+	openaiKeyRegex = regexp.MustCompile(`sk-(?:proj-)?[a-zA-Z0-9]{32,}`)
+	// SendGrid API keys: SG. followed by specific pattern
+	sendgridKeyRegex = regexp.MustCompile(`SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}`)
+)
+
+// Safe replacement values for API keys
+var (
+	safeAWSKey      = "[AWS-KEY-REDACTED]"
+	safeStripeKey   = "[STRIPE-KEY-REDACTED]"
+	safeGithubToken = "[GITHUB-TOKEN-REDACTED]"
+	safeSlackToken  = "[SLACK-TOKEN-REDACTED]"
+	safeOpenAIKey   = "[OPENAI-KEY-REDACTED]"
+	safeSendGridKey = "[SENDGRID-KEY-REDACTED]"
 )
 
 // replaceInternalURLPreservingPath replaces internal hostnames while preserving scheme, port, and path
@@ -1256,6 +1293,8 @@ func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, f
 		"user_words":      0,
 		"ip_addresses":    0,
 		"internal_urls":   0,
+		"location_coords": 0,
+		"api_keys":        0,
 	}
 
 	result := text
@@ -1306,22 +1345,120 @@ func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, f
 				// Connection string format :password@
 				return ":" + safePassword + "@"
 			}
-			// Config format password=xxx or password: xxx
-			for _, sep := range []string{"=", ":", " "} {
-				if idx := strings.Index(strings.ToLower(match), "password"+sep); idx >= 0 {
-					prefix := match[:idx+8+len(sep)]
-					// Check for quotes
-					rest := match[idx+8+len(sep):]
-					if strings.HasPrefix(rest, "\"") {
-						return prefix + "\"" + safePassword + "\""
-					} else if strings.HasPrefix(rest, "'") {
-						return prefix + "'" + safePassword + "'"
+			// Config format: "password": "value" or password = "value" or password: value
+			lowerMatch := strings.ToLower(match)
+			pwdIdx := strings.Index(lowerMatch, "password")
+			if pwdIdx >= 0 {
+				afterPwd := match[pwdIdx+8:] // after "password"
+				// Find the last quote in the match (closing quote of value)
+				lastQuoteIdx := strings.LastIndexAny(afterPwd, "\"'")
+				// Find the second-to-last quote (opening quote of value)
+				if lastQuoteIdx > 0 {
+					openQuoteIdx := strings.LastIndexAny(afterPwd[:lastQuoteIdx], "\"'")
+					if openQuoteIdx >= 0 {
+						// Everything before and including the opening quote is the prefix
+						quoteChar := afterPwd[openQuoteIdx]
+						prefix := match[:pwdIdx+8] + afterPwd[:openQuoteIdx+1]
+						return prefix + safePassword + string(quoteChar)
 					}
-					return prefix + safePassword
+				}
+				// Fallback: find first separator sequence and replace after it
+				for i := 0; i < len(afterPwd); i++ {
+					c := afterPwd[i]
+					if c != ':' && c != '=' && c != ' ' && c != '\t' && c != '"' && c != '\'' {
+						// Found start of value
+						prefix := match[:pwdIdx+8] + afterPwd[:i]
+						return prefix + safePassword
+					}
 				}
 			}
 			return safePassword
 		})
+	}
+
+	// 3b. Detect and optionally replace API keys (provider-specific patterns)
+	// AWS Access Keys
+	awsMatches := awsKeyRegex.FindAllStringIndex(result, -1)
+	stats["api_keys"] += len(awsMatches)
+	if trackReplacements && len(awsMatches) > 0 {
+		for _, match := range awsMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("AWS_Key", filename, lineNum, original, safeAWSKey)
+		}
+	}
+	if shouldReplace {
+		result = awsKeyRegex.ReplaceAllString(result, safeAWSKey)
+	}
+
+	// Stripe API keys
+	stripeMatches := stripeKeyRegex.FindAllStringIndex(result, -1)
+	stats["api_keys"] += len(stripeMatches)
+	if trackReplacements && len(stripeMatches) > 0 {
+		for _, match := range stripeMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Stripe_Key", filename, lineNum, original, safeStripeKey)
+		}
+	}
+	if shouldReplace {
+		result = stripeKeyRegex.ReplaceAllString(result, safeStripeKey)
+	}
+
+	// GitHub Personal Access Tokens
+	githubMatches := githubTokenRegex.FindAllStringIndex(result, -1)
+	stats["api_keys"] += len(githubMatches)
+	if trackReplacements && len(githubMatches) > 0 {
+		for _, match := range githubMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("GitHub_Token", filename, lineNum, original, safeGithubToken)
+		}
+	}
+	if shouldReplace {
+		result = githubTokenRegex.ReplaceAllString(result, safeGithubToken)
+	}
+
+	// Slack tokens
+	slackMatches := slackTokenRegex.FindAllStringIndex(result, -1)
+	stats["api_keys"] += len(slackMatches)
+	if trackReplacements && len(slackMatches) > 0 {
+		for _, match := range slackMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Slack_Token", filename, lineNum, original, safeSlackToken)
+		}
+	}
+	if shouldReplace {
+		result = slackTokenRegex.ReplaceAllString(result, safeSlackToken)
+	}
+
+	// OpenAI API keys
+	openaiMatches := openaiKeyRegex.FindAllStringIndex(result, -1)
+	stats["api_keys"] += len(openaiMatches)
+	if trackReplacements && len(openaiMatches) > 0 {
+		for _, match := range openaiMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("OpenAI_Key", filename, lineNum, original, safeOpenAIKey)
+		}
+	}
+	if shouldReplace {
+		result = openaiKeyRegex.ReplaceAllString(result, safeOpenAIKey)
+	}
+
+	// SendGrid API keys
+	sendgridMatches := sendgridKeyRegex.FindAllStringIndex(result, -1)
+	stats["api_keys"] += len(sendgridMatches)
+	if trackReplacements && len(sendgridMatches) > 0 {
+		for _, match := range sendgridMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("SendGrid_Key", filename, lineNum, original, safeSendGridKey)
+		}
+	}
+	if shouldReplace {
+		result = sendgridKeyRegex.ReplaceAllString(result, safeSendGridKey)
 	}
 
 	// 4. Detect and optionally replace internal URLs (preserve port and path)
@@ -1370,7 +1507,50 @@ func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, f
 		})
 	}
 
-	// 6. Replace user words (same as log mode)
+	// 6. Detect and optionally replace location coordinates
+	// Decimal Degrees format (e.g., 32.0853, 34.7818)
+	decimalMatches := coordDecimalRegex.FindAllStringIndex(result, -1)
+	stats["location_coords"] += len(decimalMatches)
+	if trackReplacements && len(decimalMatches) > 0 {
+		for _, match := range decimalMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Location_Coordinate", filename, lineNum, original, safeCoordinate)
+		}
+	}
+	if shouldReplace && len(decimalMatches) > 0 {
+		result = coordDecimalRegex.ReplaceAllString(result, safeCoordinate)
+	}
+
+	// DMS format (e.g., 32°5'7"N)
+	dmsMatches := coordDMSRegex.FindAllStringIndex(result, -1)
+	stats["location_coords"] += len(dmsMatches)
+	if trackReplacements && len(dmsMatches) > 0 {
+		for _, match := range dmsMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Location_Coordinate", filename, lineNum, original, "0°0'0\"N")
+		}
+	}
+	if shouldReplace && len(dmsMatches) > 0 {
+		result = coordDMSRegex.ReplaceAllString(result, "0°0'0\"N")
+	}
+
+	// Geo URI format (e.g., geo:32.0853,34.7818)
+	geoURIMatches := coordGeoURIRegex.FindAllStringIndex(result, -1)
+	stats["location_coords"] += len(geoURIMatches)
+	if trackReplacements && len(geoURIMatches) > 0 {
+		for _, match := range geoURIMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Location_Coordinate", filename, lineNum, original, "geo:0.0000,0.0000")
+		}
+	}
+	if shouldReplace && len(geoURIMatches) > 0 {
+		result = coordGeoURIRegex.ReplaceAllString(result, "geo:0.0000,0.0000")
+	}
+
+	// 7. Replace user words (same as log mode)
 	for _, word := range userWords {
 		if word != "" && len(word) > 2 {
 			if trackReplacements {
@@ -1397,11 +1577,11 @@ func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, f
 	}
 
 	if codeScanMode == "report_only" {
-		log.Printf("[DEBUG] Code scan (report only): %s - IPs:%d, URLs:%d, Keys:%d, JWT:%d, Passwords:%d",
-			filename, stats["ip_addresses"], stats["internal_urls"], stats["private_keys"], stats["jwt_tokens"], stats["passwords"])
+		log.Printf("[DEBUG] Code scan (report only): %s - IPs:%d, URLs:%d, Keys:%d, JWT:%d, Passwords:%d, Coords:%d",
+			filename, stats["ip_addresses"], stats["internal_urls"], stats["private_keys"], stats["jwt_tokens"], stats["passwords"], stats["location_coords"])
 	} else {
-		log.Printf("[DEBUG] Code scan (sanitized): %s - IPs:%d, URLs:%d, Keys:%d, JWT:%d, Passwords:%d",
-			filename, stats["ip_addresses"], stats["internal_urls"], stats["private_keys"], stats["jwt_tokens"], stats["passwords"])
+		log.Printf("[DEBUG] Code scan (sanitized): %s - IPs:%d, URLs:%d, Keys:%d, JWT:%d, Passwords:%d, Coords:%d",
+			filename, stats["ip_addresses"], stats["internal_urls"], stats["private_keys"], stats["jwt_tokens"], stats["passwords"], stats["location_coords"])
 	}
 
 	return result, stats
@@ -1766,6 +1946,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			"sensitive_terms":   sanitizeStats["sensitive_terms"],
 			"user_words":        sanitizeStats["user_words"],
 			"internal_urls":     sanitizeStats["internal_urls"],
+			"location_coords":   sanitizeStats["location_coords"],
+			"api_keys":          sanitizeStats["api_keys"],
 			"sanitized_content": sanitized,
 			"status":            "sanitized",
 		}
