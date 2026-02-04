@@ -2526,7 +2526,6 @@
             };
             processingResults.forEach(result => {
                 const files = result.files || [result];
-                const files = result.files || [result];
                 files.forEach(f => {
                     aggregated.totalIPs += f.total_ips || 0;
                     aggregated.totalAD += f.ad_accounts || 0;
@@ -3133,8 +3132,7 @@
                 totalIPs: 0, totalAD: 0, totalJWT: 0, totalKeys: 0,
                 totalSensitive: 0, totalGPS: 0
             };
-            codeProcessingResults.forEach(result => {
-                const files = result.files || [result];
+            codecodeProcessingResults.forEach(result => {
                 const files = result.files || [result];
                 files.forEach(f => {
                     aggregated.totalIPs += f.total_ips || 0;
