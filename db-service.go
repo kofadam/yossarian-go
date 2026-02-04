@@ -828,16 +828,15 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 			afterTime = time.Now().Add(-8 * time.Hour) // Fallback
 		}
 		sqliteFormat := afterTime.Format("2006-01-02 15:04:05")
-
 		// Show all jobs, but hide completed jobs older than cutoff
 		rows, err = db.Query(`SELECT job_id, status, total_files, processed_files,
-					created_at, completed_at FROM batch_jobs
+					created_at, completed_at, COALESCE(generate_detailed_report, 0) FROM batch_jobs
 					WHERE username = ? AND (status != 'completed' OR completed_at IS NULL OR completed_at >= ?)
 					ORDER BY created_at DESC LIMIT 50`, username, sqliteFormat)
 	} else {
 		// No filter, return all jobs
 		rows, err = db.Query(`SELECT job_id, status, total_files, processed_files,
-					created_at, completed_at FROM batch_jobs
+					created_at, completed_at, COALESCE(generate_detailed_report, 0) FROM batch_jobs
 					WHERE username = ? ORDER BY created_at DESC LIMIT 50`, username)
 	}
 	if err != nil {
@@ -851,18 +850,18 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 		var jobID, status, createdAt string
 		var totalFiles, processedFiles int
 		var completedAt *string
-
-		if err := rows.Scan(&jobID, &status, &totalFiles, &processedFiles, &createdAt, &completedAt); err != nil {
+		var generateDetailedReport int
+		if err := rows.Scan(&jobID, &status, &totalFiles, &processedFiles, &createdAt, &completedAt, &generateDetailedReport); err != nil {
 			continue
 		}
-
 		jobs = append(jobs, map[string]interface{}{
-			"job_id":          jobID,
-			"status":          status,
-			"total_files":     totalFiles,
-			"processed_files": processedFiles,
-			"created_at":      createdAt,
-			"completed_at":    completedAt,
+			"job_id":                   jobID,
+			"status":                   status,
+			"total_files":              totalFiles,
+			"processed_files":          processedFiles,
+			"created_at":               createdAt,
+			"completed_at":             completedAt,
+			"generate_detailed_report": generateDetailedReport == 1,
 		})
 	}
 

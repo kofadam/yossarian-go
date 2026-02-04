@@ -4027,6 +4027,27 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		log.Printf("[WORKER] Uploaded summary report (%d bytes)", len(summaryReport))
 	}
 
+	// 3. Detailed Replacement Report (if requested)
+	if generateDetailedReport && len(detailedReplacements) > 0 {
+		log.Printf("[WORKER] Generating detailed report with %d replacements", len(detailedReplacements))
+		var detailedReportBuilder strings.Builder
+		detailedReportBuilder.WriteString("Type,File,Line,Original,Replacement\n")
+		for _, repl := range detailedReplacements {
+			// Escape CSV fields
+			original := strings.ReplaceAll(repl.Original, "\"", "\"\"")
+			sanitized := strings.ReplaceAll(repl.Sanitized, "\"", "\"\"")
+			detailedReportBuilder.WriteString(fmt.Sprintf("%s,%s,%d,\"%s\",\"%s\"\n",
+				repl.Category, repl.File, repl.Line, original, sanitized))
+		}
+		detailedReport := detailedReportBuilder.String()
+		detailedReportObjectName := fmt.Sprintf("%s/%s/reports/detailed-report.csv", username, jobID)
+		if err := uploadToMinIO(ctx, detailedReportObjectName, bytes.NewReader([]byte(detailedReport)), int64(len(detailedReport))); err != nil {
+			log.Printf("[WORKER] Warning: Failed to upload detailed report: %v", err)
+		} else {
+			log.Printf("[WORKER] Uploaded detailed report (%d bytes, %d replacements)", len(detailedReport), len(detailedReplacements))
+		}
+	}
+
 	// Upload output.zip to MinIO
 	outputObjectName := fmt.Sprintf("%s/%s/output.zip", username, jobID)
 	if err := uploadToMinIO(ctx, outputObjectName, bytes.NewReader(outputZipData), int64(len(outputZipData))); err != nil {

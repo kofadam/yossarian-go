@@ -1575,6 +1575,7 @@
                         <div class="report-downloads">
                             <button onclick="downloadReport('${job.job_id}', 'ip-mappings.csv')" class="btn-report">📊 IP Mappings</button>
                             <button onclick="downloadReport('${job.job_id}', 'summary.json')" class="btn-report">📄 Summary</button>
+                            ${job.generate_detailed_report ? `<button onclick="downloadReport('${job.job_id}', 'detailed-report.csv')" class="btn-report">📋 Detailed Report</button>` : ''}
                         </div>
                         <div class="security-warning">
                             ⚠️ <strong>Security Notice:</strong> Reports contain mapping details and should <strong>NOT</strong> be shared externally. Only share the sanitized ZIP file.
