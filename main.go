@@ -306,6 +306,51 @@ var (
 	// commentRegex    = regexp.MustCompile(`(?m)^#.*$`)
 	sensitiveRegex *regexp.Regexp
 )
+
+// Safe replacement values for code scanning (RFC-compliant placeholders)
+var (
+	safeIPCounter      = 1
+	safeIPBase         = "192.0.2." // RFC 5737 TEST-NET-1 for documentation
+	safeInternalURL    = "https://example.com/api/endpoint"
+	safeInternalHost   = "example.com" // Base host for URL replacement
+	safePassword       = "CHANGE_ME_PASSWORD"
+	safeJWT            = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IlJFUExBQ0VfTUUiLCJpYXQiOjE1MTYyMzkwMjJ9.REPLACE_ME_SIGNATURE"
+	safePrivateKey     = "-----BEGIN PRIVATE KEY-----\nUkVQTEFDRV9NRV9QUklWQVRFX0tFWQ==\n-----END PRIVATE KEY-----"
+)
+
+// replaceInternalURLPreservingPath replaces internal hostnames while preserving scheme, port, and path
+func replaceInternalURLPreservingPath(originalURL string) string {
+	// Parse the URL to extract components
+	parsed, err := url.Parse(originalURL)
+	if err != nil {
+		return safeInternalURL // Fallback if parsing fails
+	}
+
+	// Build safe URL preserving port and path
+	scheme := parsed.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+
+	// Get port if present
+	port := parsed.Port()
+	host := safeInternalHost
+	if port != "" {
+		host = host + ":" + port
+	}
+
+	// Reconstruct URL with safe host but original port and path
+	safeURL := scheme + "://" + host + parsed.Path
+	if parsed.RawQuery != "" {
+		safeURL += "?" + parsed.RawQuery
+	}
+	if parsed.Fragment != "" {
+		safeURL += "#" + parsed.Fragment
+	}
+
+	return safeURL
+}
+
 var sensitiveTermsMap = make(map[string]string)
 
 func loadSensitiveTerms() {
@@ -1193,6 +1238,171 @@ func sanitizeText(text string, userWords []string, trackReplacements bool, filen
 			log.Printf("[DEBUG] Pattern detection - Internal URLs: %d found", stats["internal_urls"])
 		}
 	}
+	return result, stats
+}
+
+// sanitizeCodeFile handles code-specific sanitization with safe replacement values
+// codeScanMode: "report_only" (detect only), "sanitize_safe" (replace with safe values), "sanitize_report" (both)
+func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, filename string, codeScanMode string) (string, map[string]int) {
+	mapMutex.Lock()
+	defer mapMutex.Unlock()
+
+	stats := map[string]int{
+		"private_keys":    0,
+		"jwt_tokens":      0,
+		"passwords":       0,
+		"ad_accounts":     0,
+		"sensitive_terms": 0,
+		"user_words":      0,
+		"ip_addresses":    0,
+		"internal_urls":   0,
+	}
+
+	result := text
+	shouldReplace := codeScanMode != "report_only"
+
+	// 1. Detect and optionally replace private keys
+	privateKeyMatches := privateKeyRegex.FindAllStringIndex(result, -1)
+	stats["private_keys"] = len(privateKeyMatches)
+	if trackReplacements && len(privateKeyMatches) > 0 {
+		for _, match := range privateKeyMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Private_Key", filename, lineNum, original, safePrivateKey)
+		}
+	}
+	if shouldReplace {
+		result = privateKeyRegex.ReplaceAllString(result, safePrivateKey)
+	}
+
+	// 2. Detect and optionally replace JWT tokens
+	jwtMatches := jwtRegex.FindAllStringIndex(result, -1)
+	stats["jwt_tokens"] = len(jwtMatches)
+	if trackReplacements && len(jwtMatches) > 0 {
+		for _, match := range jwtMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("JWT_Token", filename, lineNum, original, safeJWT)
+		}
+	}
+	if shouldReplace {
+		result = jwtRegex.ReplaceAllString(result, safeJWT)
+	}
+
+	// 3. Detect and optionally replace passwords
+	passwordMatches := passwordRegex.FindAllStringIndex(result, -1)
+	stats["passwords"] = len(passwordMatches)
+	if trackReplacements && len(passwordMatches) > 0 {
+		for _, match := range passwordMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Password", filename, lineNum, original, safePassword)
+		}
+	}
+	if shouldReplace {
+		result = passwordRegex.ReplaceAllStringFunc(result, func(match string) string {
+			// Preserve the structure: password= or :xxx@
+			if strings.Contains(match, "@") {
+				// Connection string format :password@
+				return ":" + safePassword + "@"
+			}
+			// Config format password=xxx or password: xxx
+			for _, sep := range []string{"=", ":", " "} {
+				if idx := strings.Index(strings.ToLower(match), "password"+sep); idx >= 0 {
+					prefix := match[:idx+8+len(sep)]
+					// Check for quotes
+					rest := match[idx+8+len(sep):]
+					if strings.HasPrefix(rest, "\"") {
+						return prefix + "\"" + safePassword + "\""
+					} else if strings.HasPrefix(rest, "'") {
+						return prefix + "'" + safePassword + "'"
+					}
+					return prefix + safePassword
+				}
+			}
+			return safePassword
+		})
+	}
+
+	// 4. Detect and optionally replace internal URLs (preserve port and path)
+	internalURLMatches := internalURLRegex.FindAllStringIndex(result, -1)
+	stats["internal_urls"] = len(internalURLMatches)
+	if trackReplacements && len(internalURLMatches) > 0 {
+		for _, match := range internalURLMatches {
+			original := result[match[0]:match[1]]
+			safeURL := replaceInternalURLPreservingPath(original)
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Internal_URL", filename, lineNum, original, safeURL)
+		}
+	}
+	if shouldReplace {
+		result = internalURLRegex.ReplaceAllStringFunc(result, replaceInternalURLPreservingPath)
+	}
+
+	// 5. Detect and optionally replace IP addresses with safe IPs
+	ipMatches := ipRegex.FindAllStringIndex(result, -1)
+	localIPCounter := 1
+	ipSafeMap := make(map[string]string)
+
+	// First pass: count and map IPs
+	for _, match := range ipMatches {
+		ip := result[match[0]:match[1]]
+		if _, exists := ipSafeMap[ip]; !exists {
+			ipSafeMap[ip] = fmt.Sprintf("%s%d", safeIPBase, localIPCounter)
+			localIPCounter++
+			if localIPCounter > 254 {
+				localIPCounter = 1 // Wrap around
+			}
+		}
+	}
+	stats["ip_addresses"] = len(ipMatches)
+
+	if trackReplacements && len(ipMatches) > 0 {
+		for _, match := range ipMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("IP_Address", filename, lineNum, original, ipSafeMap[original])
+		}
+	}
+	if shouldReplace {
+		result = ipRegex.ReplaceAllStringFunc(result, func(ip string) string {
+			return ipSafeMap[ip]
+		})
+	}
+
+	// 6. Replace user words (same as log mode)
+	for _, word := range userWords {
+		if word != "" && len(word) > 2 {
+			if trackReplacements {
+				startPos := 0
+				for {
+					idx := strings.Index(result[startPos:], word)
+					if idx == -1 {
+						break
+					}
+					actualPos := startPos + idx
+					lineNum := strings.Count(result[:actualPos], "\n") + 1
+					recordReplacement("User_Word", filename, lineNum, word, "[USER-SENSITIVE]")
+					startPos = actualPos + len(word)
+					stats["user_words"]++
+				}
+			} else {
+				count := strings.Count(result, word)
+				stats["user_words"] += count
+			}
+			if shouldReplace {
+				result = strings.ReplaceAll(result, word, "[USER-SENSITIVE]")
+			}
+		}
+	}
+
+	if codeScanMode == "report_only" {
+		log.Printf("[DEBUG] Code scan (report only): %s - IPs:%d, URLs:%d, Keys:%d, JWT:%d, Passwords:%d",
+			filename, stats["ip_addresses"], stats["internal_urls"], stats["private_keys"], stats["jwt_tokens"], stats["passwords"])
+	} else {
+		log.Printf("[DEBUG] Code scan (sanitized): %s - IPs:%d, URLs:%d, Keys:%d, JWT:%d, Passwords:%d",
+			filename, stats["ip_addresses"], stats["internal_urls"], stats["private_keys"], stats["jwt_tokens"], stats["passwords"])
+	}
 
 	return result, stats
 }
@@ -1339,11 +1549,14 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if scanMode == "" {
 		scanMode = "log" // Default to log scanning
 	}
-
-	log.Printf("[INFO] File upload started: user=%s, files=%d, runMode=%s, scanMode=%s", username, len(files), runMode, scanMode)
-
-	// Check if detailed report was requested
-	shouldGenerateDetailedReport := r.FormValue("generate_detailed_report") == "true"
+	// Get code scan mode (report_only, sanitize_safe, sanitize_report)
+	codeScanMode := r.FormValue("code_scan_mode")
+	if codeScanMode == "" {
+		codeScanMode = "sanitize_safe" // Default to sanitize with safe values
+	}
+	log.Printf("[INFO] File upload started: user=%s, files=%d, runMode=%s, scanMode=%s, codeScanMode=%s", username, len(files), runMode, scanMode, codeScanMode)
+	// Check if detailed report was requested (for log mode or code report_only/sanitize_report modes)
+	shouldGenerateDetailedReport := r.FormValue("generate_detailed_report") == "true" || (scanMode == "code" && (codeScanMode == "sanitize_report" || codeScanMode == "report_only"))
 	if shouldGenerateDetailedReport {
 		replacementMutex.Lock()
 		detailedReplacements = []Replacement{}
@@ -1527,9 +1740,14 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[INFO] Sanitizing file: %s (%.2f KB)", fileHeader.Filename, float64(len(content))/1024)
 		// Sanitize content
 		fileStartTime := time.Now()
-		sanitized, sanitizeStats := sanitizeText(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename, scanMode)
+		var sanitized string
+		var sanitizeStats map[string]int
+		if scanMode == "code" {
+			sanitized, sanitizeStats = sanitizeCodeFile(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename, codeScanMode)
+		} else {
+			sanitized, sanitizeStats = sanitizeText(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename, scanMode)
+		}
 		processingTime := time.Since(fileStartTime)
-
 		log.Printf("[PERF] Sanitized %s in %.2fs", fileHeader.Filename, processingTime.Seconds())
 
 		// Metrics removed - single file processing is not the primary use case in v0.13.0+

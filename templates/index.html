@@ -1316,13 +1316,32 @@
                         </div>
                         <div class="progress-text" id="codeProgressText">Processing files...</div>
                     </div>
-                    <!-- Detailed Report Checkbox -->
-                    <div style="margin-top: 16px; display: flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" id="codeDetailedReportCheckbox" style="width: 18px; height: 18px;">
-                        <label for="codeDetailedReportCheckbox" style="cursor: pointer;">
-                            <strong>Generate detailed replacement report (CSV)</strong>
-                            <div style="font-size: 12px; color: var(--md-on-surface-variant);">Shows line numbers, original values, and replacements for learning</div>
-                        </label>
+                    <!-- Code Scan Mode Selection -->
+                    <div style="margin-top: 16px; padding: 16px; background: var(--md-surface-2); border-radius: 12px;">
+                        <div style="font-weight: 500; margin-bottom: 12px;">📋 Scan Mode</div>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
+                                <input type="radio" name="codeScanMode" value="report_only" style="margin-top: 3px;">
+                                <div>
+                                    <strong>Report Only</strong>
+                                    <div style="font-size: 12px; color: var(--md-on-surface-variant);">Scan and report issues without modifying code - perfect for review</div>
+                                </div>
+                            </label>
+                            <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
+                                <input type="radio" name="codeScanMode" value="sanitize_safe" checked style="margin-top: 3px;">
+                                <div>
+                                    <strong>Sanitize with Safe Values</strong>
+                                    <div style="font-size: 12px; color: var(--md-on-surface-variant);">Replace secrets with valid placeholder data (code stays runnable)</div>
+                                </div>
+                            </label>
+                            <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
+                                <input type="radio" name="codeScanMode" value="sanitize_report" style="margin-top: 3px;">
+                                <div>
+                                    <strong>Sanitize + Generate Report</strong>
+                                    <div style="font-size: 12px; color: var(--md-on-surface-variant);">Replace secrets AND generate detailed CSV report with line numbers</div>
+                                </div>
+                            </label>
+                        </div>
                     </div>
                     <div style="margin-top: 24px; display: flex; gap: 12px;">
                         <button class="md-button md-button-filled" id="codeProcessBtn" disabled>
@@ -2822,6 +2841,20 @@
             // Wire up code scan buttons
             document.getElementById('codeProcessBtn').addEventListener('click', processCodeFiles);
             document.getElementById('codeClearBtn').addEventListener('click', clearCodeFiles);
+            
+            // Update button text when scan mode changes
+            document.querySelectorAll('input[name="codeScanMode"]').forEach(radio => {
+                radio.addEventListener('change', updateCodeScanButtonText);
+            });
+        }
+        function updateCodeScanButtonText() {
+            const mode = document.querySelector('input[name="codeScanMode"]:checked').value;
+            const btn = document.getElementById('codeProcessBtn');
+            if (mode === 'report_only') {
+                btn.textContent = '📋 Scan Code';
+            } else {
+                btn.textContent = '📜 Scan & Sanitize Code';
+            }
         }
 
         function handleCodeFiles(files) {
@@ -3072,7 +3105,7 @@
             progressText.textContent = 'Scan complete!';
 
             processBtn.disabled = false;
-            processBtn.textContent = '📜 Scan & Sanitize Code';
+            updateCodeScanButtonText();
 
             displayCodeResults();
         }
@@ -3081,9 +3114,9 @@
             const formData = new FormData();
             formData.append('file', file);
             formData.append('mode', 'code'); // Tell backend this is code scanning mode
-            // Check if detailed report is requested
-            const detailedReportChecked = document.getElementById('codeDetailedReportCheckbox').checked;
-            formData.append('generate_detailed_report', detailedReportChecked ? 'true' : 'false');
+            // Get selected code scan mode
+            const codeScanMode = document.querySelector('input[name="codeScanMode"]:checked').value;
+            formData.append('code_scan_mode', codeScanMode);
             const personalWords = getPersonalWordsForSanitization();
             if (personalWords) {
                 setCookie('sensitive_words', personalWords, 1);
@@ -3202,34 +3235,48 @@
                 `).join('');
             }).join('');
 
-            // Download buttons
-            let codeButtonsHTML = `
-                <a href="/download/sanitized" class="md-button md-button-filled">📦 Download All Files</a>
-            `;
+            // Download buttons - check scan mode first
+            const selectedCodeScanMode = document.querySelector('input[name="codeScanMode"]:checked').value;
+            let codeButtonsHTML = '';
             
-            // Add individual file download buttons
-            codeProcessingResults.forEach(result => {
-                const files = result.files || [result];
-                files.forEach(f => {
-                    if (f.filename) {
-                        codeButtonsHTML += `
-                            <a href="/download/sanitized/${encodeURIComponent(f.filename)}" 
-                               class="md-button md-button-outlined" 
-                               style="font-size: 13px;">
-                                📄 ${f.filename}
-                            </a>
-                        `;
-                    }
+            if (selectedCodeScanMode === 'report_only') {
+                // Report only mode - no sanitized files to download
+                codeButtonsHTML = `
+                    <div style="flex-basis: 100%; padding: 12px; background: var(--md-primary-container); border-radius: 8px; margin-bottom: 4px;">
+                        <strong>📋 Report Only Mode</strong> - Code was scanned but not modified. Review the detailed report below.
+                    </div>
+                `;
+            } else {
+                // Sanitize modes - show download buttons
+                codeButtonsHTML = `
+                    <a href="/download/sanitized" class="md-button md-button-filled">📦 Download All Files</a>
+                `;
+                
+                // Add individual file download buttons
+                codeProcessingResults.forEach(result => {
+                    const files = result.files || [result];
+                    files.forEach(f => {
+                        if (f.filename) {
+                            codeButtonsHTML += `
+                                <a href="/download/sanitized/${encodeURIComponent(f.filename)}" 
+                                   class="md-button md-button-outlined" 
+                                   style="font-size: 13px;">
+                                    📄 ${f.filename}
+                                </a>
+                            `;
+                        }
+                    });
                 });
-            });
+            }
             
             codeButtonsHTML += `
                 <a href="/mappings/csv" class="md-button md-button-outlined">📊 IP Mappings (CSV)</a>
                 <button class="md-button md-button-outlined" onclick="generateCodeReport()">📄 Processing Report (JSON)</button>
             `;
             
-            // Add detailed report button if checkbox was enabled
-            if (document.getElementById('codeDetailedReportCheckbox').checked) {
+            // Add detailed report button if report mode was selected
+            const codeScanMode = document.querySelector('input[name="codeScanMode"]:checked').value;
+            if (codeScanMode === 'report_only' || codeScanMode === 'sanitize_report') {
                 codeButtonsHTML += `
                     <a href="/download/detailed-report" class="md-button md-button-outlined">📋 Detailed Report (CSV)</a>
                 `;
