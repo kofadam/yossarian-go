@@ -297,7 +297,8 @@ var (
 
 // Simple patterns
 var (
-	ipRegex         = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+	ipRegex          = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+	internalURLRegex = regexp.MustCompile(`https?://(?:localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})[^\s"'<>]*`)
 	adRegex         = regexp.MustCompile(`\b[A-Z0-9-]+\\[a-zA-Z0-9._-]{4,15}\b|\b[a-zA-Z0-9._-]{4,15}@[a-zA-Z0-9.-]+\b|\b[A-Z0-9-]{4,15}\$\b|\b(?:A-M|B-P|D-[1-9CKLMQT]|H-[FP]|J-P|L-[1-9P]|S-C|T-[CL])-[A-Za-z0-9-]{6,11}\b|\bD-PC-[A-Za-z0-9-]{5,10}\b|\b(?:a-m|b-p|d-[1-9cklmqt]|h-[fp]|j-p|l-[1-9p]|s-c|t-[cl])-[a-zA-Z0-9-]{6,11}\b|\bd-pc-[a-zA-Z0-9-]{5,10}\b|\b(?:dvd|til|DVD|TIL)[0-9a-zA-Z]{1,20}\b|\\\\([A-Z0-9-]+)\\|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]{4,15})\\|\\Users\\([a-zA-Z0-9._-]{4,15})\\|/([a-zA-Z0-9._-]{4,15})/`)
 	jwtRegex        = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
 	privateKeyRegex = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
@@ -943,7 +944,7 @@ func lookupADAccount(account string) string {
 	return result.USN
 }
 
-func sanitizeText(text string, userWords []string, trackReplacements bool, filename string) (string, map[string]int) {
+func sanitizeText(text string, userWords []string, trackReplacements bool, filename string, scanMode string) (string, map[string]int) {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
 
@@ -958,6 +959,7 @@ func sanitizeText(text string, userWords []string, trackReplacements bool, filen
 		"sensitive_terms": 0,
 		"user_words":      0,
 		"ip_addresses":    0,
+		"internal_urls":   0,
 	}
 
 	result := text
@@ -1171,6 +1173,25 @@ func sanitizeText(text string, userWords []string, trackReplacements bool, filen
 	if len(uniqueIPs) > 0 {
 		log.Printf("[DEBUG] Pattern detection - IP addresses: %d total occurrences, %d unique",
 			stats["ip_addresses"], len(uniqueIPs))
+	}
+
+	// 8. Replace internal URLs (code scan mode only)
+	if scanMode == "code" {
+		internalURLMatches := internalURLRegex.FindAllStringIndex(result, -1)
+		stats["internal_urls"] = len(internalURLMatches)
+
+		if trackReplacements && len(internalURLMatches) > 0 {
+			for _, match := range internalURLMatches {
+				original := result[match[0]:match[1]]
+				lineNum := strings.Count(result[:match[0]], "\n") + 1
+				recordReplacement("Internal_URL", filename, lineNum, original, "[INTERNAL-URL-REDACTED]")
+			}
+		}
+
+		result = internalURLRegex.ReplaceAllString(result, "[INTERNAL-URL-REDACTED]")
+		if stats["internal_urls"] > 0 {
+			log.Printf("[DEBUG] Pattern detection - Internal URLs: %d found", stats["internal_urls"])
+		}
 	}
 
 	return result, stats
@@ -1504,10 +1525,9 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Printf("[INFO] Sanitizing file: %s (%.2f KB)", fileHeader.Filename, float64(len(content))/1024)
-
 		// Sanitize content
 		fileStartTime := time.Now()
-		sanitized, sanitizeStats := sanitizeText(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename)
+		sanitized, sanitizeStats := sanitizeText(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename, scanMode)
 		processingTime := time.Since(fileStartTime)
 
 		log.Printf("[PERF] Sanitized %s in %.2fs", fileHeader.Filename, processingTime.Seconds())
@@ -1527,6 +1547,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			"private_keys":      sanitizeStats["private_keys"],
 			"sensitive_terms":   sanitizeStats["sensitive_terms"],
 			"user_words":        sanitizeStats["user_words"],
+			"internal_urls":     sanitizeStats["internal_urls"],
 			"sanitized_content": sanitized,
 			"status":            "sanitized",
 		}
@@ -3304,9 +3325,9 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		}
 
 		log.Printf("[WORKER] Sanitizing file %d/%d: %s", i+1, len(extractedFiles), file.Name)
-
 		// Call your existing sanitize function (no user words for batch jobs)
-		sanitizedContent, stats := sanitizeText(file.Content, nil, false, file.Name)
+		// Worker processes ZIP files which are always log mode for now
+		sanitizedContent, stats := sanitizeText(file.Content, nil, false, file.Name, "log")
 
 		// Aggregate stats
 		totalStats["ip_addresses"] += stats["total_ips"]

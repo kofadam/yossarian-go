@@ -1316,7 +1316,14 @@
                         </div>
                         <div class="progress-text" id="codeProgressText">Processing files...</div>
                     </div>
-
+                    <!-- Detailed Report Checkbox -->
+                    <div style="margin-top: 16px; display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="codeDetailedReportCheckbox" style="width: 18px; height: 18px;">
+                        <label for="codeDetailedReportCheckbox" style="cursor: pointer;">
+                            <strong>Generate detailed replacement report (CSV)</strong>
+                            <div style="font-size: 12px; color: var(--md-on-surface-variant);">Shows line numbers, original values, and replacements for learning</div>
+                        </label>
+                    </div>
                     <div style="margin-top: 24px; display: flex; gap: 12px;">
                         <button class="md-button md-button-filled" id="codeProcessBtn" disabled>
                             📜 Scan & Sanitize Code
@@ -3074,7 +3081,9 @@
             const formData = new FormData();
             formData.append('file', file);
             formData.append('mode', 'code'); // Tell backend this is code scanning mode
-
+            // Check if detailed report is requested
+            const detailedReportChecked = document.getElementById('codeDetailedReportCheckbox').checked;
+            formData.append('generate_detailed_report', detailedReportChecked ? 'true' : 'false');
             const personalWords = getPersonalWordsForSanitization();
             if (personalWords) {
                 setCookie('sensitive_words', personalWords, 1);
@@ -3132,7 +3141,7 @@
                 totalIPs: 0, totalAD: 0, totalJWT: 0, totalKeys: 0,
                 totalSensitive: 0, totalGPS: 0
             };
-            codecodeProcessingResults.forEach(result => {
+            codeProcessingResults.forEach(result => {
                 const files = result.files || [result];
                 files.forEach(f => {
                     aggregated.totalIPs += f.total_ips || 0;
@@ -3194,12 +3203,59 @@
             }).join('');
 
             // Download buttons
-            document.getElementById('codeDownloadButtons').innerHTML = `
+            let codeButtonsHTML = `
                 <a href="/download/sanitized" class="md-button md-button-filled">📦 Download All Files</a>
-                <a href="/mappings/csv" class="md-button md-button-outlined">📊 Mappings (CSV)</a>
             `;
+            
+            // Add individual file download buttons
+            codeProcessingResults.forEach(result => {
+                const files = result.files || [result];
+                files.forEach(f => {
+                    if (f.filename) {
+                        codeButtonsHTML += `
+                            <a href="/download/sanitized/${encodeURIComponent(f.filename)}" 
+                               class="md-button md-button-outlined" 
+                               style="font-size: 13px;">
+                                📄 ${f.filename}
+                            </a>
+                        `;
+                    }
+                });
+            });
+            
+            codeButtonsHTML += `
+                <a href="/mappings/csv" class="md-button md-button-outlined">📊 IP Mappings (CSV)</a>
+                <button class="md-button md-button-outlined" onclick="generateCodeReport()">📄 Processing Report (JSON)</button>
+            `;
+            
+            // Add detailed report button if checkbox was enabled
+            if (document.getElementById('codeDetailedReportCheckbox').checked) {
+                codeButtonsHTML += `
+                    <a href="/download/detailed-report" class="md-button md-button-outlined">📋 Detailed Report (CSV)</a>
+                `;
+            }
+            
+            document.getElementById('codeDownloadButtons').innerHTML = codeButtonsHTML;
         }
-
+        function generateCodeReport() {
+            if (codeProcessingResults.length === 0) {
+                alert('No processing results available');
+                return;
+            }
+            const report = {
+                generated: new Date().toISOString(),
+                scanMode: 'code',
+                totalFiles: codeProcessingResults.length,
+                results: codeProcessingResults
+            };
+            const blob = new Blob([JSON.stringify(report, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'code-scan-report.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
         function clearCodeFiles() {
             selectedCodeFiles = [];
             document.getElementById('codeFileInput').value = '';
