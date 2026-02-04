@@ -73,7 +73,10 @@ func initDB() error {
 		completed_at DATETIME,
 		input_path TEXT,
 		output_path TEXT,
-		error_message TEXT
+		error_message TEXT,
+		scan_mode TEXT DEFAULT 'log',
+		code_scan_mode TEXT DEFAULT 'sanitize_safe',
+		generate_detailed_report INTEGER DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS idx_batch_jobs_username ON batch_jobs(username);
 	CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status);
@@ -96,7 +99,23 @@ func initDB() error {
 	if err != nil {
 		return err
 	}
-
+	
+	// Run migrations for existing databases (add columns if they don't exist)
+	migrations := []string{
+		"ALTER TABLE batch_jobs ADD COLUMN scan_mode TEXT DEFAULT 'log'",
+		"ALTER TABLE batch_jobs ADD COLUMN code_scan_mode TEXT DEFAULT 'sanitize_safe'",
+		"ALTER TABLE batch_jobs ADD COLUMN generate_detailed_report INTEGER DEFAULT 0",
+	}
+	for _, migration := range migrations {
+		_, err := db.Exec(migration)
+		if err != nil {
+			// Ignore "duplicate column" errors - column already exists
+			if !strings.Contains(err.Error(), "duplicate column") {
+				log.Printf("[DB] Migration note: %v", err)
+			}
+		}
+	}
+	
 	// Insert default org settings
 	defaultSettings := `
 	INSERT OR IGNORE INTO org_settings (key, value) VALUES 
@@ -703,25 +722,37 @@ func jobCreateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		JobID      string `json:"job_id"`
-		Username   string `json:"username"`
-		InputPath  string `json:"input_path"`
-		OutputPath string `json:"output_path"`
+		JobID                  string `json:"job_id"`
+		Username               string `json:"username"`
+		InputPath              string `json:"input_path"`
+		OutputPath             string `json:"output_path"`
+		ScanMode               string `json:"scan_mode"`
+		CodeScanMode           string `json:"code_scan_mode"`
+		GenerateDetailedReport bool   `json:"generate_detailed_report"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-
 	if req.JobID == "" || req.Username == "" {
 		http.Error(w, "job_id and username are required", http.StatusBadRequest)
 		return
 	}
-
+	// Set defaults
+	if req.ScanMode == "" {
+		req.ScanMode = "log"
+	}
+	if req.CodeScanMode == "" {
+		req.CodeScanMode = "sanitize_safe"
+	}
+	detailedReportInt := 0
+	if req.GenerateDetailedReport {
+		detailedReportInt = 1
+	}
 	_, err := db.Exec(`INSERT INTO batch_jobs 
-		(job_id, username, status, input_path, output_path) 
-		VALUES (?, ?, 'queued', ?, ?)`,
-		req.JobID, req.Username, req.InputPath, req.OutputPath)
+		(job_id, username, status, input_path, output_path, scan_mode, code_scan_mode, generate_detailed_report) 
+		VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)`,
+		req.JobID, req.Username, req.InputPath, req.OutputPath, req.ScanMode, req.CodeScanMode, detailedReportInt)
 
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
@@ -746,24 +777,28 @@ func jobStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var job struct {
-		JobID          string  `json:"job_id"`
-		Username       string  `json:"username"`
-		Status         string  `json:"status"`
-		TotalFiles     int     `json:"total_files"`
-		ProcessedFiles int     `json:"processed_files"`
-		CreatedAt      string  `json:"created_at"`
-		StartedAt      *string `json:"started_at"`
-		CompletedAt    *string `json:"completed_at"`
-		InputPath      *string `json:"input_path"`
-		OutputPath     *string `json:"output_path"`
-		ErrorMessage   *string `json:"error_message"`
+		JobID                  string  `json:"job_id"`
+		Username               string  `json:"username"`
+		Status                 string  `json:"status"`
+		TotalFiles             int     `json:"total_files"`
+		ProcessedFiles         int     `json:"processed_files"`
+		CreatedAt              string  `json:"created_at"`
+		StartedAt              *string `json:"started_at"`
+		CompletedAt            *string `json:"completed_at"`
+		InputPath              *string `json:"input_path"`
+		OutputPath             *string `json:"output_path"`
+		ErrorMessage           *string `json:"error_message"`
+		ScanMode               string  `json:"scan_mode"`
+		CodeScanMode           string  `json:"code_scan_mode"`
+		GenerateDetailedReport int     `json:"generate_detailed_report"`
 	}
-
 	err := db.QueryRow(`SELECT job_id, username, status, total_files, processed_files, 
-		created_at, started_at, completed_at, input_path, output_path, error_message 
+		created_at, started_at, completed_at, input_path, output_path, error_message,
+		COALESCE(scan_mode, 'log'), COALESCE(code_scan_mode, 'sanitize_safe'), COALESCE(generate_detailed_report, 0)
 		FROM batch_jobs WHERE job_id = ?`, jobID).Scan(
 		&job.JobID, &job.Username, &job.Status, &job.TotalFiles, &job.ProcessedFiles,
-		&job.CreatedAt, &job.StartedAt, &job.CompletedAt, &job.InputPath, &job.OutputPath, &job.ErrorMessage)
+		&job.CreatedAt, &job.StartedAt, &job.CompletedAt, &job.InputPath, &job.OutputPath, &job.ErrorMessage,
+		&job.ScanMode, &job.CodeScanMode, &job.GenerateDetailedReport)
 
 	if err != nil {
 		http.NotFound(w, r)

@@ -1,17 +1,16 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
-
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
-
-	// "compress/gzip"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -326,28 +325,33 @@ var (
 	// DMS format: 32°5'7"N or 51°30'26"N
 	coordDMSRegex = regexp.MustCompile(`\d{1,3}°\d{1,2}'[\d.]+["″]?[NSEW]?`)
 	// Geo URI: geo:32.0853,34.7818 or geo:37.7749,-122.4194,100
-	coordGeoURIRegex = regexp.MustCompile(`geo:-?\d{1,3}\.\d+,-?\d{1,3}\.\d+(?:,\d+)?`)
+	coordGeoURIRegex  = regexp.MustCompile(`geo:-?\d{1,3}\.\d+,-?\d{1,3}\.\d+(?:,\d+)?`)
+	coordObjectRegex  = regexp.MustCompile(`(?i)\{\s*["']?(lat|latitude)["']?\s*:\s*(-?\d{1,3}\.\d{2,})\s*,\s*["']?(lng|lon|long|longitude)["']?\s*:\s*(-?\d{1,3}\.\d{2,})\s*\}`)
 )
 
 // API key patterns for code scanning (provider-specific, precise patterns)
 var (
 	// AWS Access Key ID: Always starts with AKIA, exactly 20 characters
-	awsKeyRegex = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+	awsKeyRegex       = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+	awsSecretRegex    = regexp.MustCompile(`(?i)(aws_secret_access_key|aws_secret_key|secretAccessKey)["'\s:=]+["']?([A-Za-z0-9/+=]{40})["']?`)
+	genericSecretRegex = regexp.MustCompile(`(?i)(jwt_secret|jwt_key|jwtSecret|secret_key|secretKey|api_secret|apiSecret)["'\s:=]+["']?([^"'\s,]{10,100})["']?`)
 	// Stripe API keys: sk_live_ or sk_test_ followed by alphanumeric
 	stripeKeyRegex = regexp.MustCompile(`sk_(live|test)_[a-zA-Z0-9]{24,}`)
 	// GitHub Personal Access Token: ghp_ followed by 36 alphanumeric chars
 	githubTokenRegex = regexp.MustCompile(`ghp_[a-zA-Z0-9]{36}`)
 	// Slack tokens: xoxb-, xoxa-, xoxp-, xoxr-, xoxs- followed by alphanumeric and dashes
-	slackTokenRegex = regexp.MustCompile(`xox[baprs]-[0-9a-zA-Z-]{10,48}`)
+	slackTokenRegex = regexp.MustCompile(`xox[baprs]-[0-9a-zA-Z-]{10,80}`)
 	// OpenAI API keys: sk- followed by alphanumeric (48+ chars) or sk-proj-
 	openaiKeyRegex = regexp.MustCompile(`sk-(?:proj-)?[a-zA-Z0-9]{32,}`)
 	// SendGrid API keys: SG. followed by specific pattern
-	sendgridKeyRegex = regexp.MustCompile(`SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}`)
+	sendgridKeyRegex = regexp.MustCompile(`SG\.[a-zA-Z0-9_-]{20,30}\.[a-zA-Z0-9_-]{40,50}`)
 )
 
 // Safe replacement values for API keys
 var (
-	safeAWSKey      = "[AWS-KEY-REDACTED]"
+	safeAWSKey       = "[AWS-KEY-REDACTED]"
+	safeAWSSecret     = "[AWS-SECRET-REDACTED]"
+	safeGenericSecret = "[SECRET-REDACTED]"
 	safeStripeKey   = "[STRIPE-KEY-REDACTED]"
 	safeGithubToken = "[GITHUB-TOKEN-REDACTED]"
 	safeSlackToken  = "[SLACK-TOKEN-REDACTED]"
@@ -1341,7 +1345,8 @@ func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, f
 	if shouldReplace {
 		result = passwordRegex.ReplaceAllStringFunc(result, func(match string) string {
 			// Preserve the structure: password= or :xxx@
-			if strings.Contains(match, "@") {
+			// Only treat as connection string if it STARTS with : and ENDS with @
+			if strings.HasPrefix(match, ":") && strings.HasSuffix(match, "@") {
 				// Connection string format :password@
 				return ":" + safePassword + "@"
 			}
@@ -1389,6 +1394,76 @@ func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, f
 	}
 	if shouldReplace {
 		result = awsKeyRegex.ReplaceAllString(result, safeAWSKey)
+	}
+
+	// AWS Secret Keys
+	awsSecretMatches := awsSecretRegex.FindAllStringSubmatchIndex(result, -1)
+	stats["api_keys"] += len(awsSecretMatches)
+	if trackReplacements && len(awsSecretMatches) > 0 {
+		for _, match := range awsSecretMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("AWS_Secret", filename, lineNum, original, safeAWSSecret)
+		}
+	}
+	if shouldReplace {
+		result = awsSecretRegex.ReplaceAllStringFunc(result, func(match string) string {
+			// Preserve the key name, only replace the value
+			lowerMatch := strings.ToLower(match)
+			for _, prefix := range []string{"aws_secret_access_key", "aws_secret_key", "secretaccesskey"} {
+				if idx := strings.Index(lowerMatch, prefix); idx >= 0 {
+					afterKey := match[idx+len(prefix):]
+					// Find where the value starts
+					for i := 0; i < len(afterKey); i++ {
+						c := afterKey[i]
+						if c != '"' && c != '\'' && c != ':' && c != '=' && c != ' ' && c != '\t' {
+							// Found start of value, preserve prefix
+							keyPart := match[:idx+len(prefix)] + afterKey[:i]
+							// Check if there's a quote
+							if i > 0 && (afterKey[i-1] == '"' || afterKey[i-1] == '\'') {
+								return keyPart + safeAWSSecret + string(afterKey[i-1])
+							}
+							return keyPart + safeAWSSecret
+						}
+					}
+				}
+			}
+			return safeAWSSecret
+		})
+	}
+
+	// Generic secrets (JWT_SECRET, API_SECRET, etc.)
+	genericSecretMatches := genericSecretRegex.FindAllStringSubmatchIndex(result, -1)
+	stats["api_keys"] += len(genericSecretMatches)
+	if trackReplacements && len(genericSecretMatches) > 0 {
+		for _, match := range genericSecretMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Secret", filename, lineNum, original, safeGenericSecret)
+		}
+	}
+	if shouldReplace {
+		result = genericSecretRegex.ReplaceAllStringFunc(result, func(match string) string {
+			// Find the last quote (closing quote of value)
+			lastQuoteIdx := strings.LastIndexAny(match, "\"'")
+			if lastQuoteIdx > 0 {
+				// Find the opening quote of the value
+				openQuoteIdx := strings.LastIndexAny(match[:lastQuoteIdx], "\"'")
+				if openQuoteIdx >= 0 {
+					quoteChar := match[openQuoteIdx]
+					// Preserve everything up to and including opening quote
+					prefix := match[:openQuoteIdx+1]
+					return prefix + safeGenericSecret + string(quoteChar)
+				}
+			}
+			// Fallback: find = or : and replace after it
+			for _, sep := range []string{"= ", "=", ": ", ":"} {
+				if idx := strings.Index(match, sep); idx >= 0 {
+					return match[:idx+len(sep)] + safeGenericSecret
+				}
+			}
+			return safeGenericSecret
+		})
 	}
 
 	// Stripe API keys
@@ -1550,6 +1625,20 @@ func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, f
 		result = coordGeoURIRegex.ReplaceAllString(result, "geo:0.0000,0.0000")
 	}
 
+	// Object format coordinates (e.g., { lat: 37.7749, lng: -122.4194 })
+	objectMatches := coordObjectRegex.FindAllStringIndex(result, -1)
+	stats["location_coords"] += len(objectMatches)
+	if trackReplacements && len(objectMatches) > 0 {
+		for _, match := range objectMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Location_Coordinate", filename, lineNum, original, "{ lat: 0.0000, lng: 0.0000 }")
+		}
+	}
+	if shouldReplace && len(objectMatches) > 0 {
+		result = coordObjectRegex.ReplaceAllString(result, "{ lat: 0.0000, lng: 0.0000 }")
+	}
+
 	// 7. Replace user words (same as log mode)
 	for _, word := range userWords {
 		if word != "" && len(word) > 2 {
@@ -1608,7 +1697,7 @@ func isBinaryContent(content []byte) bool {
 
 func isArchiveFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	archives := []string{".zip", ".tar", ".gz", ".rar", ".7z"}
+	archives := []string{".zip", ".tar", ".gz", ".rar", ".7z", ".tgz"}
 	for _, archive := range archives {
 		if ext == archive || strings.HasSuffix(strings.ToLower(filename), ".tar.gz") {
 			return true
@@ -1756,55 +1845,90 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// === NEW v0.13.0: Frontend Mode - ZIP files go to MinIO ===
+	// === NEW v0.13.0: Frontend Mode - Archive files go to MinIO ===
 	if runMode == "frontend" {
 		for _, fileHeader := range files {
-			if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
-				log.Printf("[FRONTEND] ZIP file detected: %s - uploading to MinIO", fileHeader.Filename)
-
+			ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+			filename := strings.ToLower(fileHeader.Filename)
+			isZip := ext == ".zip"
+			isTarGz := ext == ".tgz" || strings.HasSuffix(filename, ".tar.gz")
+			
+			if isZip || isTarGz {
+				archiveType := "ZIP"
+				if isTarGz {
+					archiveType = "tar.gz"
+				}
+				log.Printf("[FRONTEND] %s file detected: %s - uploading to MinIO", archiveType, fileHeader.Filename)
 				file, err := fileHeader.Open()
 				if err != nil {
-					log.Printf("[ERROR] Failed to open ZIP: %v", err)
-					http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
+					log.Printf("[ERROR] Failed to open archive: %v", err)
+					http.Error(w, "Failed to read archive file", http.StatusInternalServerError)
 					return
 				}
-
-				// Read ZIP content
-				zipContent, err := io.ReadAll(file)
+				// Read archive content
+				archiveContent, err := io.ReadAll(file)
 				file.Close()
 				if err != nil {
-					log.Printf("[ERROR] Failed to read ZIP: %v", err)
-					http.Error(w, "Failed to read ZIP file", http.StatusInternalServerError)
+					log.Printf("[ERROR] Failed to read archive: %v", err)
+					http.Error(w, "Failed to read archive file", http.StatusInternalServerError)
 					return
 				}
-
 				// Generate job ID
 				jobID := generateJobID(username)
 				ctx := context.Background()
-
-				// Upload to MinIO
+				// Upload to MinIO (always as input.zip for consistency, we detect type by content)
 				objectName := fmt.Sprintf("%s/%s/input.zip", username, jobID)
-				if err := uploadToMinIO(ctx, objectName, bytes.NewReader(zipContent), int64(len(zipContent))); err != nil {
+				if err := uploadToMinIO(ctx, objectName, bytes.NewReader(archiveContent), int64(len(archiveContent))); err != nil {
 					log.Printf("[ERROR] Failed to upload to MinIO: %v", err)
 					http.Error(w, "Failed to upload file", http.StatusInternalServerError)
 					return
 				}
-
-				// Count files in ZIP
-				zipReader, err := zip.NewReader(bytes.NewReader(zipContent), int64(len(zipContent)))
-				if err != nil {
-					log.Printf("[ERROR] Failed to read ZIP: %v", err)
-					http.Error(w, "Invalid ZIP file", http.StatusBadRequest)
-					return
+				// Count files in archive
+				var totalFiles int
+				if isZip {
+					zipReader, err := zip.NewReader(bytes.NewReader(archiveContent), int64(len(archiveContent)))
+					if err != nil {
+						log.Printf("[ERROR] Failed to read ZIP: %v", err)
+						http.Error(w, "Invalid ZIP file", http.StatusBadRequest)
+						return
+					}
+					totalFiles = len(zipReader.File)
+				} else {
+					// Count files in tar.gz
+					gzReader, err := gzip.NewReader(bytes.NewReader(archiveContent))
+					if err != nil {
+						log.Printf("[ERROR] Failed to read gzip: %v", err)
+						http.Error(w, "Invalid tar.gz file", http.StatusBadRequest)
+						return
+					}
+					tarReader := tar.NewReader(gzReader)
+					for {
+						header, err := tarReader.Next()
+						if err == io.EOF {
+							break
+						}
+						if err != nil {
+							log.Printf("[ERROR] Failed to read tar: %v", err)
+							http.Error(w, "Invalid tar.gz file", http.StatusBadRequest)
+							return
+						}
+						if header.Typeflag == tar.TypeReg {
+							totalFiles++
+						}
+					}
+					gzReader.Close()
 				}
-				totalFiles := len(zipReader.File)
 
 				// Create job record in database
+				shouldGenerateReport := codeScanMode == "report_only" || codeScanMode == "sanitize_report"
 				jobData := map[string]interface{}{
-					"job_id":      jobID,
-					"username":    username,
-					"total_files": totalFiles,
-					"status":      "queued",
+					"job_id":                   jobID,
+					"username":                 username,
+					"total_files":              totalFiles,
+					"status":                   "queued",
+					"scan_mode":                scanMode,
+					"code_scan_mode":           codeScanMode,
+					"generate_detailed_report": shouldGenerateReport,
 				}
 
 				jsonData, _ := json.Marshal(jobData)
@@ -3643,9 +3767,44 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	replacementMutex.Lock()
 	detailedReplacements = []Replacement{}
 	replacementMutex.Unlock()
-
 	log.Printf("[WORKER] Cleared global caches for new job")
-
+	
+	// Fetch job info to get scan modes
+	var scanMode, codeScanMode string
+	var generateDetailedReport bool
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
+	if err != nil {
+		log.Printf("[WORKER] Warning: could not fetch job info: %v, using defaults", err)
+		scanMode = "log"
+		codeScanMode = "sanitize_safe"
+		generateDetailedReport = false
+	} else {
+		defer resp.Body.Close()
+		var jobInfo struct {
+			ScanMode               string `json:"scan_mode"`
+			CodeScanMode           string `json:"code_scan_mode"`
+			GenerateDetailedReport int    `json:"generate_detailed_report"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
+			log.Printf("[WORKER] Warning: could not parse job info: %v, using defaults", err)
+			scanMode = "log"
+			codeScanMode = "sanitize_safe"
+			generateDetailedReport = false
+		} else {
+			scanMode = jobInfo.ScanMode
+			if scanMode == "" {
+				scanMode = "log"
+			}
+			codeScanMode = jobInfo.CodeScanMode
+			if codeScanMode == "" {
+				codeScanMode = "sanitize_safe"
+			}
+			generateDetailedReport = jobInfo.GenerateDetailedReport == 1
+		}
+	}
+	log.Printf("[WORKER] Job %s: scanMode=%s, codeScanMode=%s, detailedReport=%v", jobID, scanMode, codeScanMode, generateDetailedReport)
+	
 	// Update status to processing
 	updateJobStatus(jobID, "processing", 0, 0, "")
 	jobStartTime := time.Now()
@@ -3659,47 +3818,90 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	defer object.Close()
 
 	// Read the ZIP content
-	zipContent, err := io.ReadAll(object)
+	archiveContent, err := io.ReadAll(object)
 	if err != nil {
-		return fmt.Errorf("failed to read ZIP content: %v", err)
+		return fmt.Errorf("failed to read archive content: %v", err)
 	}
-
-	log.Printf("[WORKER] Downloaded input.zip for job %s (%d bytes)", jobID, len(zipContent))
-
-	// Extract and process files (reuse existing processBatchJob logic)
-	zipReader, err := zip.NewReader(bytes.NewReader(zipContent), int64(len(zipContent)))
-	if err != nil {
-		return fmt.Errorf("failed to read ZIP: %v", err)
-	}
-
-	// Extract files
+	log.Printf("[WORKER] Downloaded archive for job %s (%d bytes)", jobID, len(archiveContent))
+	
+	// Extract files based on archive type (detect by magic bytes)
 	var extractedFiles []ExtractedFile
-	for _, file := range zipReader.File {
-		if file.FileInfo().IsDir() {
-			continue
-		}
-
-		rc, err := file.Open()
+	
+	// Check if it's a gzip file (magic bytes: 1f 8b)
+	isGzip := len(archiveContent) >= 2 && archiveContent[0] == 0x1f && archiveContent[1] == 0x8b
+	// Check if it's a ZIP file (magic bytes: 50 4b 03 04)
+	isZip := len(archiveContent) >= 4 && archiveContent[0] == 0x50 && archiveContent[1] == 0x4b && archiveContent[2] == 0x03 && archiveContent[3] == 0x04
+	
+	if isGzip {
+		// Handle tar.gz / tgz files
+		log.Printf("[WORKER] Detected gzip archive, extracting as tar.gz")
+		gzReader, err := gzip.NewReader(bytes.NewReader(archiveContent))
 		if err != nil {
-			log.Printf("[WORKER] Failed to open file %s: %v", file.Name, err)
-			continue
+			return fmt.Errorf("failed to create gzip reader: %v", err)
 		}
-
-		content, err := io.ReadAll(rc)
-		rc.Close()
+		defer gzReader.Close()
+		
+		tarReader := tar.NewReader(gzReader)
+		for {
+			header, err := tarReader.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Printf("[WORKER] Error reading tar entry: %v", err)
+				break
+			}
+			if header.Typeflag == tar.TypeDir {
+				continue
+			}
+			if header.Typeflag != tar.TypeReg {
+				continue
+			}
+			content, err := io.ReadAll(tarReader)
+			if err != nil {
+				log.Printf("[WORKER] Failed to read file %s: %v", header.Name, err)
+				continue
+			}
+			extractedFiles = append(extractedFiles, ExtractedFile{
+				Name:    header.Name,
+				Content: string(content),
+				Mode:    os.FileMode(header.Mode),
+				ModTime: header.ModTime,
+			})
+		}
+	} else if isZip {
+		// Handle ZIP files
+		log.Printf("[WORKER] Detected ZIP archive, extracting")
+		zipReader, err := zip.NewReader(bytes.NewReader(archiveContent), int64(len(archiveContent)))
 		if err != nil {
-			log.Printf("[WORKER] Failed to read file %s: %v", file.Name, err)
-			continue
+			return fmt.Errorf("failed to read ZIP: %v", err)
 		}
-
-		extractedFiles = append(extractedFiles, ExtractedFile{
-			Name:    file.Name,
-			Content: string(content), // Convert []byte to string
-			Mode:    file.Mode(),
-			ModTime: file.Modified,
-		})
+		for _, file := range zipReader.File {
+			if file.FileInfo().IsDir() {
+				continue
+			}
+			rc, err := file.Open()
+			if err != nil {
+				log.Printf("[WORKER] Failed to open file %s: %v", file.Name, err)
+				continue
+			}
+			content, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				log.Printf("[WORKER] Failed to read file %s: %v", file.Name, err)
+				continue
+			}
+			extractedFiles = append(extractedFiles, ExtractedFile{
+				Name:    file.Name,
+				Content: string(content),
+				Mode:    file.Mode(),
+				ModTime: file.Modified,
+			})
+		}
+	} else {
+		return fmt.Errorf("unsupported archive format (not ZIP or gzip)")
 	}
-
+	
 	log.Printf("[WORKER] Extracted %d files from job %s", len(extractedFiles), jobID)
 
 	// Create output ZIP (streaming approach to reduce memory)
@@ -3714,8 +3916,10 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		"passwords":       0,
 		"sensitive_terms": 0,
 		"user_words":      0,
+		"internal_urls":   0,
+		"location_coords": 0,
+		"api_keys":        0,
 	}
-
 	for i, file := range extractedFiles {
 		// Check if job was cancelled
 		if isJobCancelled(jobID) {
@@ -3723,20 +3927,31 @@ func processBatchJobFromMinIO(jobID, username string) error {
 			updateJobStatus(jobID, "cancelled", len(extractedFiles), i, "Cancelled by user")
 			return fmt.Errorf("job cancelled by user")
 		}
-
-		log.Printf("[WORKER] Sanitizing file %d/%d: %s", i+1, len(extractedFiles), file.Name)
-		// Call your existing sanitize function (no user words for batch jobs)
-		// Worker processes ZIP files which are always log mode for now
-		sanitizedContent, stats := sanitizeText(file.Content, nil, false, file.Name, "log")
-
+		log.Printf("[WORKER] Sanitizing file %d/%d: %s (mode=%s)", i+1, len(extractedFiles), file.Name, scanMode)
+		
+		// Use appropriate sanitization function based on scan mode
+		var sanitizedContent string
+		var stats map[string]int
+		if scanMode == "code" {
+			sanitizedContent, stats = sanitizeCodeFile(file.Content, nil, generateDetailedReport, file.Name, codeScanMode)
+		} else {
+			sanitizedContent, stats = sanitizeText(file.Content, nil, generateDetailedReport, file.Name, "log")
+		}
+		
 		// Aggregate stats
-		totalStats["ip_addresses"] += stats["total_ips"]
+		totalStats["ip_addresses"] += stats["ip_addresses"]
+		if stats["total_ips"] > 0 {
+			totalStats["ip_addresses"] += stats["total_ips"]
+		}
 		totalStats["ad_accounts"] += stats["ad_accounts"]
 		totalStats["jwt_tokens"] += stats["jwt_tokens"]
 		totalStats["private_keys"] += stats["private_keys"]
 		totalStats["passwords"] += stats["passwords"]
 		totalStats["sensitive_terms"] += stats["sensitive_terms"]
 		totalStats["user_words"] += stats["user_words"]
+		totalStats["internal_urls"] += stats["internal_urls"]
+		totalStats["location_coords"] += stats["location_coords"]
+		totalStats["api_keys"] += stats["api_keys"]
 
 		// Write directly to ZIP (streaming - don't hold all files in memory)
 		header := &zip.FileHeader{

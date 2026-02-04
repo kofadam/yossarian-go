@@ -1295,7 +1295,7 @@
                         <div class="drop-zone-icon">📜</div>
                         <div class="drop-zone-text">Drop code files here or click to browse</div>
                         <div class="drop-zone-subtext">Supports source code (.go, .py, .js, .java, etc.), config files (.env, .yaml, .json), and more</div>
-                        <input type="file" class="file-input" id="codeFileInput" multiple accept=".go,.py,.js,.ts,.jsx,.tsx,.java,.cs,.c,.cpp,.h,.hpp,.rb,.php,.swift,.kt,.scala,.rs,.r,.pl,.pm,.sh,.bash,.ps1,.psm1,.vb,.fs,.lua,.groovy,.dart,.env,.yaml,.yml,.json,.xml,.toml,.ini,.conf,.cfg,.properties,.tf,.hcl,.sql,.graphql,.html,.htm,.css,.scss,.sass,.less,.vue,.svelte,.md,.rst,.txt">
+                        <input type="file" class="file-input" id="codeFileInput" multiple accept=".go,.py,.js,.ts,.jsx,.tsx,.java,.cs,.c,.cpp,.h,.hpp,.rb,.php,.swift,.kt,.scala,.rs,.r,.pl,.pm,.sh,.bash,.ps1,.psm1,.vb,.fs,.lua,.groovy,.dart,.env,.yaml,.yml,.json,.xml,.toml,.ini,.conf,.cfg,.properties,.tf,.hcl,.sql,.graphql,.html,.htm,.css,.scss,.sass,.less,.vue,.svelte,.md,.rst,.txt,.zip,.tar,.gz,.tgz">
                     </div>
 
                     <div class="file-list" id="codeFileList"></div>
@@ -2168,9 +2168,9 @@
             // Analyze each file (sample first 100KB for large files)
             for (const fileObj of files) {
                 const file = fileObj.file;
-
-                // Skip ZIP files (batch processing)
-                if (file.name.toLowerCase().endsWith('.zip')) {
+                // Skip archive files (batch processing)
+                const fileName = file.name.toLowerCase();
+                if (fileName.endsWith('.zip') || fileName.endsWith('.tar.gz') || fileName.endsWith('.tgz')) {
                     continue;
                 }
 
@@ -2282,16 +2282,17 @@
             
             fetch('/clear-download-cache', { method: 'POST' }).catch(() => {});
             
-            // Check if any file is a ZIP (batch job)
-            let hasZipFile = false;
+            // Check if any file is an archive (batch job)
+            let hasArchiveFile = false;
             
             fileArray.forEach(file => {
                 if (file.size > maxFileSizeMB * 1024 * 1024) {
                     alert(`File "${file.name}" exceeds ${maxFileSizeMB}MB`);
                     return;
                 }
-                if (file.name.toLowerCase().endsWith('.zip')) {
-                    hasZipFile = true;
+                const fileName = file.name.toLowerCase();
+                if (fileName.endsWith('.zip') || fileName.endsWith('.tar.gz') || fileName.endsWith('.tgz')) {
+                    hasArchiveFile = true;
                 }
                 selectedFiles.push({
                     file: file,
@@ -2310,7 +2311,7 @@
             const detailedReportCheckbox = document.getElementById('detailedReportCheckbox');
             const detailedReportContainer = detailedReportCheckbox.closest('div[style*="margin-top: 16px"]');
             
-            if (hasZipFile) {
+            if (hasArchiveFile) {
                 detailedReportCheckbox.disabled = true;
                 detailedReportCheckbox.checked = false;
                 detailedReportContainer.style.opacity = '0.5';
@@ -2416,10 +2417,11 @@
         }
 
         async function processFile(file) {
-            // Check if this is a ZIP file for batch processing
-            const isZipFile = file.name.toLowerCase().endsWith('.zip');
+            // Check if this is an archive file for batch processing
+            const fileName = file.name.toLowerCase();
+            const isArchiveFile = fileName.endsWith('.zip') || fileName.endsWith('.tar.gz') || fileName.endsWith('.tgz');
             
-            if (isZipFile) {
+            if (isArchiveFile) {
                 // Submit as batch job
                 return await submitBatchJob(file);
             }
@@ -3073,17 +3075,27 @@
 
         async function processCodeFiles() {
             if (selectedCodeFiles.length === 0) return;
-
+            
+            // Check if any file is an archive (batch job)
+            const archiveFile = selectedCodeFiles.find(f => {
+                const name = f.file.name.toLowerCase();
+                return name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.tgz');
+            });
+            
+            if (archiveFile) {
+                // Handle as batch job
+                await processCodeArchive(archiveFile.file);
+                return;
+            }
+            
             const progressContainer = document.getElementById('codeProgressContainer');
             const progressFill = document.getElementById('codeProgressFill');
             const progressText = document.getElementById('codeProgressText');
             const processBtn = document.getElementById('codeProcessBtn');
-
             processBtn.disabled = true;
             processBtn.textContent = '⏳ Scanning...';
             progressContainer.classList.add('visible');
             codeProcessingResults = [];
-
             for (let i = 0; i < selectedCodeFiles.length; i++) {
                 const fileObj = selectedCodeFiles[i];
                 const progress = ((i) / selectedCodeFiles.length) * 100;
@@ -3116,6 +3128,64 @@
             displayCodeResults();
         }
 
+        async function processCodeArchive(file) {
+            const processBtn = document.getElementById('codeProcessBtn');
+            processBtn.disabled = true;
+            processBtn.textContent = '⏳ Uploading archive...';
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('mode', 'code');
+            
+            // Get selected code scan mode
+            const codeScanMode = document.querySelector('input[name="codeScanMode"]:checked').value;
+            formData.append('code_scan_mode', codeScanMode);
+            
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.status === 401) {
+                    const data = await response.json();
+                    alert(data.message || 'Session expired. Please log in again.');
+                    window.location.href = '/auth/oidc/login';
+                    return;
+                }
+                
+                const data = await response.json();
+                
+                if (data.job_id) {
+                    // Batch job created - show success and redirect to My Jobs
+                    const message = `✅ Code scan batch job submitted!\n\nJob ID: ${data.job_id}\nFiles: ${data.total_files || 'unknown'}\nMode: ${codeScanMode}\n\nClick OK to view your jobs.`;
+                    alert(message);
+                    
+                    // Switch to My Jobs panel
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                    document.querySelector('[data-panel="my-jobs"]').classList.add('active');
+                    document.getElementById('panel-my-jobs').classList.add('active');
+                    
+                    // Refresh jobs list
+                    if (typeof loadJobs === 'function') {
+                        loadJobs();
+                    }
+                    
+                    // Clear the code scan panel
+                    clearCodeFiles();
+                } else {
+                    alert('Unexpected response from server');
+                }
+            } catch (error) {
+                console.error('Archive upload error:', error);
+                alert('Failed to upload archive: ' + error.message);
+            } finally {
+                processBtn.disabled = false;
+                updateCodeScanButtonText();
+            }
+        }
+        
         async function processCodeFile(file) {
             const formData = new FormData();
             formData.append('file', file);
