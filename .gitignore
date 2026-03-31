@@ -53,3 +53,6 @@ docker-compose.dev.yml
 *.old
 test/
 test.txt
+*.tgz
+*.tar
+test
