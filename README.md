@@ -3,9 +3,9 @@
 ![Go Version](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)
 ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-Native-326CE5?logo=kubernetes)
-![Helm](https://img.shields.io/badge/Helm-v0.13.20-0F1689?logo=helm)
+![Helm](https://img.shields.io/badge/Helm-v0.13.22-0F1689?logo=helm)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-v0.13.20-blue)
+![Version](https://img.shields.io/badge/Version-v0.13.22-blue)
 
 🛡️ **Enterprise sanitization for logs AND source code**
 
@@ -66,6 +66,7 @@ open http://localhost:8080
 - **Air-Gap Ready**: No external dependencies
 - **Enterprise SSO**: OIDC/Keycloak integration
 - **API Key Auth**: Stateless authentication for CI/CD pipelines
+- **Export Approval**: Dual-attestation with ECDSA digital signatures
 - **Prometheus Metrics**: Full observability with Grafana dashboards
 
 ---
@@ -91,8 +92,15 @@ open http://localhost:8080
 
 ---
 
-## 🔄 What's New in v0.13.20
+## 🔄 What's New in v0.13.22
 
+- ✅ **Export Approval Workflow** - Security officer review and approval before export
+- ✅ **Digital Signatures** - ECDSA P-256 signed manifests for chain of custody verification
+- ✅ **Approval Queue UI** - Dedicated panel for security officers with pending job review
+- ✅ **Verification Guide** - OpenSSL-based signature verification for external recipients
+- ✅ **Public Key Export** - Share verification keys with vendors and auditors
+
+### v0.13.20
 - ✅ **Code Scan Feature** - Sanitize source code with safe placeholder values
 - ✅ **Archive Support** - ZIP and tar.gz batch processing for Code Scan
 - ✅ **Enhanced Secret Detection** - AWS, Stripe, GitHub, Slack, OpenAI, SendGrid keys
