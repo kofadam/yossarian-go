@@ -1283,6 +1283,10 @@
                     <span>Approvals</span>
                     <span id="approvalBadgeCount" style="background: #f57c00; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; display: none; margin-left: auto;">0</span>
                 </a>
+                <a class="nav-item" data-panel="verify">
+                    <span class="nav-item-icon">🔍</span>
+                    <span>Verify</span>
+                </a>
                 <a class="nav-item" data-panel="help">
                     <span class="nav-item-icon">📚</span>
                     <span>Help</span>
@@ -1667,6 +1671,40 @@
                 </div>
             </div>
 
+            <!-- Verify Panel -->
+            <div class="panel" id="panel-verify">
+                <div class="panel-header">
+                    <h1 class="panel-title">🔍 Verify Export Integrity</h1>
+                    <p class="panel-subtitle">Verify that sanitized files were properly scanned and approved. All cryptographic checks run server-side.</p>
+                </div>
+
+                <div class="md-card">
+                    <h3 style="margin-bottom: 16px;">Select a Job to Verify</h3>
+                    <div style="display: flex; gap: 12px; align-items: end;">
+                        <div class="md-textfield" style="flex: 1;">
+                            <label>Job ID</label>
+                            <select id="verifyJobSelect" style="padding: 12px 16px; border: 1px solid var(--md-outline); border-radius: 8px; font-size: 14px; font-family: inherit; width: 100%;">
+                                <option value="">Loading jobs...</option>
+                            </select>
+                        </div>
+                        <button class="md-button md-button-filled" onclick="runVerification()" id="verifyBtn">
+                            🔍 Verify
+                        </button>
+                    </div>
+                </div>
+
+                <div id="verifyResults" style="display: none;">
+                    <div class="md-card" id="verifyOverallCard">
+                        <div id="verifyOverallStatus" style="text-align: center; padding: 20px 0;"></div>
+                    </div>
+
+                    <div class="md-card">
+                        <h3 style="margin-bottom: 20px;">Verification Checks</h3>
+                        <div id="verifyChecks" style="display: flex; flex-direction: column; gap: 12px;"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Approval Queue Panel -->
             <div class="panel" id="panel-approvals">
                 <div class="panel-header">
@@ -1777,13 +1815,13 @@
                     approvalHTML = `
                         <div class="approval-info">
                             🔏 <strong>Approved</strong> by ${escapeHtml(job.approved_by || 'unknown')} • ${job.approved_at ? formatJobDate(job.approved_at) : ''}
-                            <div style="font-size: 12px; margin-top: 4px; opacity: 0.85;">Download includes signed manifest for verification</div>
+                            <div style="font-size: 12px; margin-top: 4px; opacity: 0.85;">Dual attestation complete — scan and approval signatures available in reports</div>
                         </div>
                     `;
                 } else if (job.approval_status === 'pending') {
                     approvalHTML = `
                         <div class="approval-pending-info">
-                            ⏳ <strong>Pending Approval</strong> — Awaiting security officer review. Download available without manifest.
+                            ⏳ <strong>Pending Approval</strong> — Awaiting security officer review. Scan attestation already signed.
                         </div>
                     `;
                 }
@@ -1791,28 +1829,22 @@
 
             let actions = '';
             if (job.status === 'completed') {
-                const downloadLabel = job.approval_status === 'approved' 
-                    ? '📥 Download Approved Export' 
-                    : '📥 Download Sanitized ZIP';
-                const downloadStyle = job.approval_status === 'approved'
-                    ? 'background: #1565c0;'
-                    : 'background: var(--md-success);';
-                
                 actions = `
                     <div>
                         ${approvalHTML}
                         <div style="display: flex; gap: 8px; margin-bottom: 8px; margin-top: 12px;">
-                            <a href="/jobs/download/${job.job_id}" class="md-button md-button-filled" style="${downloadStyle} font-size: 12px; padding: 6px 12px;">${downloadLabel}</a>
+                            <a href="/jobs/download/${job.job_id}" class="md-button md-button-filled" style="background: var(--md-success); font-size: 12px; padding: 6px 12px;">📥 Download Sanitized ZIP</a>
                             <button onclick="deleteJob('${job.job_id}')" class="md-button md-button-text" style="background: #ffebee; color: var(--md-error); font-size: 12px; padding: 6px 12px;">🗑️ Delete Job</button>
                         </div>
                         <div class="report-downloads">
                             <button onclick="downloadReport('${job.job_id}', 'ip-mappings.csv')" class="btn-report">📊 IP Mappings</button>
                             <button onclick="downloadReport('${job.job_id}', 'summary.json')" class="btn-report">📄 Summary</button>
                             ${job.generate_detailed_report ? `<button onclick="downloadReport('${job.job_id}', 'detailed-report.csv')" class="btn-report">📋 Detailed Report</button>` : ''}
-                            ${job.approval_status === 'approved' ? `<button onclick="downloadReport('${job.job_id}', 'manifest.json')" class="btn-report" style="background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7;">🔏 Manifest</button>` : ''}
+                            <button onclick="downloadReport('${job.job_id}', 'scan-attestation.json')" class="btn-report" style="background: #e3f2fd; color: #1565c0; border-color: #90caf9;">🔏 Scan Attestation</button>
+                            ${job.approval_status === 'approved' ? `<button onclick="downloadReport('${job.job_id}', 'approval-attestation.json')" class="btn-report" style="background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7;">✅ Approval Attestation</button>` : ''}
                         </div>
                         <div class="security-warning">
-                            ⚠️ <strong>Security Notice:</strong> Reports contain mapping details and should <strong>NOT</strong> be shared externally. Only share the sanitized ZIP file.
+                            ⚠️ <strong>Security Notice:</strong> Reports and attestations are internal documents and should <strong>NOT</strong> be shared externally. Only share the sanitized ZIP file.
                         </div>
                     </div>
                 `;            } else if (job.status === 'processing') {
@@ -2213,6 +2245,164 @@
             });
         }
 
+        // ========================================
+        // VERIFICATION FUNCTIONS
+        // ========================================
+
+        async function loadVerifyJobList() {
+            const select = document.getElementById('verifyJobSelect');
+            try {
+                const response = await fetch('/api/jobs/list');
+                const data = await response.json();
+
+                if (!data.jobs || data.jobs.length === 0) {
+                    select.innerHTML = '<option value="">No completed jobs found</option>';
+                    return;
+                }
+
+                const completedJobs = data.jobs.filter(j => j.status === 'completed');
+                if (completedJobs.length === 0) {
+                    select.innerHTML = '<option value="">No completed jobs found</option>';
+                    return;
+                }
+
+                select.innerHTML = '<option value="">— Select a job —</option>' +
+                    completedJobs.map(job => {
+                        const approvalIcon = job.approval_status === 'approved' ? '✅' :
+                                            job.approval_status === 'pending' ? '⏳' : '⚪';
+                        return `<option value="${job.job_id}">${approvalIcon} ${job.job_id} (${job.total_files} files)</option>`;
+                    }).join('');
+
+            } catch (error) {
+                select.innerHTML = '<option value="">Failed to load jobs</option>';
+            }
+        }
+
+        async function runVerification() {
+            const jobId = document.getElementById('verifyJobSelect').value;
+            if (!jobId) {
+                alert('Please select a job to verify');
+                return;
+            }
+
+            const btn = document.getElementById('verifyBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Verifying...';
+
+            const resultsDiv = document.getElementById('verifyResults');
+            resultsDiv.style.display = 'none';
+
+            try {
+                const response = await fetch(`/api/jobs/verify/${jobId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                displayVerificationResults(data);
+
+            } catch (error) {
+                document.getElementById('verifyOverallCard').innerHTML = `
+                    <div style="text-align: center; padding: 20px; color: var(--md-error);">
+                        ❌ Verification failed: ${escapeHtml(error.message)}
+                    </div>
+                `;
+                resultsDiv.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔍 Verify';
+            }
+        }
+
+        function displayVerificationResults(data) {
+            const resultsDiv = document.getElementById('verifyResults');
+            const overallDiv = document.getElementById('verifyOverallStatus');
+            const checksDiv = document.getElementById('verifyChecks');
+
+            // Overall status
+            const overallCard = document.getElementById('verifyOverallCard');
+            if (data.overall === 'passed') {
+                overallCard.style.background = 'linear-gradient(135deg, #e8f5e9, #c8e6c9)';
+                overallCard.style.borderLeft = '4px solid #2e7d32';
+                overallDiv.innerHTML = `
+                    <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
+                    <div style="font-size: 22px; font-weight: 500; color: #2e7d32; margin-bottom: 8px;">ALL CHECKS PASSED</div>
+                    <div style="font-size: 14px; color: #558b2f;">
+                        Job <strong>${escapeHtml(data.job_id)}</strong> — integrity verified, signatures valid
+                        ${data.approval_status === 'approved' ? ', approval chain intact' : ''}
+                    </div>
+                `;
+            } else if (data.overall === 'failed') {
+                overallCard.style.background = 'linear-gradient(135deg, #ffebee, #ffcdd2)';
+                overallCard.style.borderLeft = '4px solid #d32f2f';
+                overallDiv.innerHTML = `
+                    <div style="font-size: 48px; margin-bottom: 12px;">❌</div>
+                    <div style="font-size: 22px; font-weight: 500; color: #d32f2f; margin-bottom: 8px;">VERIFICATION FAILED</div>
+                    <div style="font-size: 14px; color: #b71c1c;">
+                        Job <strong>${escapeHtml(data.job_id)}</strong> — one or more checks failed. See details below.
+                    </div>
+                `;
+            } else {
+                overallCard.style.background = 'linear-gradient(135deg, #fff3e0, #ffe0b2)';
+                overallCard.style.borderLeft = '4px solid #f57c00';
+                overallDiv.innerHTML = `
+                    <div style="font-size: 48px; margin-bottom: 12px;">⏳</div>
+                    <div style="font-size: 22px; font-weight: 500; color: #e65100; margin-bottom: 8px;">PARTIALLY VERIFIED</div>
+                    <div style="font-size: 14px; color: #ef6c00;">
+                        Job <strong>${escapeHtml(data.job_id)}</strong> — some checks could not be completed (pending approval?)
+                    </div>
+                `;
+            }
+
+            // Individual checks
+            const checkOrder = [
+                { key: 'file_integrity', label: 'File Integrity', icon: '📦', desc: 'Output ZIP file exists and is readable' },
+                { key: 'scan_signature', label: 'Scan Signature', icon: '🔏', desc: 'Scan attestation is cryptographically signed by Yossarian' },
+                { key: 'file_hash_match', label: 'File Hash Match', icon: '🔗', desc: 'Output file hash matches the value recorded at scan time' },
+                { key: 'approval_signature', label: 'Approval Signature', icon: '✅', desc: 'Approval attestation is cryptographically signed' },
+                { key: 'chain_integrity', label: 'Chain of Custody', icon: '⛓️', desc: 'Approval attestation correctly references the scan attestation' },
+            ];
+
+            checksDiv.innerHTML = checkOrder.map(check => {
+                const result = data.checks[check.key];
+                if (!result) return '';
+
+                let statusIcon, statusColor, bgColor, borderColor;
+                if (result.status === 'passed') {
+                    statusIcon = '✅';
+                    statusColor = '#2e7d32';
+                    bgColor = '#f1f8e9';
+                    borderColor = '#4caf50';
+                } else if (result.status === 'failed') {
+                    statusIcon = '❌';
+                    statusColor = '#d32f2f';
+                    bgColor = '#ffebee';
+                    borderColor = '#f44336';
+                } else {
+                    statusIcon = '⏭️';
+                    statusColor = '#9e9e9e';
+                    bgColor = '#f5f5f5';
+                    borderColor = '#bdbdbd';
+                }
+
+                return `
+                    <div style="background: ${bgColor}; border-left: 4px solid ${borderColor}; border-radius: 8px; padding: 16px; display: flex; align-items: flex-start; gap: 16px;">
+                        <div style="font-size: 28px; line-height: 1;">${check.icon}</div>
+                        <div style="flex: 1;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                <div style="font-weight: 500; font-size: 15px; color: ${statusColor};">${check.label}</div>
+                                <div style="font-size: 14px;">${statusIcon} ${result.status.toUpperCase()}</div>
+                            </div>
+                            <div style="font-size: 13px; color: var(--md-on-surface-variant); margin-bottom: 4px;">${check.desc}</div>
+                            <div style="font-size: 13px; color: ${statusColor};">${escapeHtml(result.message)}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            resultsDiv.style.display = 'block';
+        }
+
         // Panel Navigation
         function switchToPanel(panelId) {
             // Update nav active state
@@ -2233,6 +2423,8 @@
                     loadJobs();
                 } else if (panelId === 'approvals') {
                     loadPendingApprovals();
+                } else if (panelId === 'verify') {
+                    loadVerifyJobList();
                 }
                 
                 // Update URL
@@ -2271,6 +2463,8 @@
                 switchToPanel('help');
             } else if (path === '/approvals') {
                 switchToPanel('approvals');
+            } else if (path === '/verify') {
+                switchToPanel('verify');
             } else if (path === '/admin') {
                 switchToPanel('admin');
             }
