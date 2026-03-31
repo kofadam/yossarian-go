@@ -12,27 +12,8 @@ spec:
     tls:
       secretName: yossarian-go-tls  # Must match certificate secretName
   routes:
-    # Worker: Download endpoints (large files)
-    - conditions:
-        - prefix: /jobs/download
-      services:
-        - name: yossarian-worker
-          port: 8080
-      timeoutPolicy:
-        idle: 300s
-        response: 300s
-    
-    # Worker: Report downloads
-    - conditions:
-        - prefix: /jobs/reports
-      services:
-        - name: yossarian-worker
-          port: 8080
-      timeoutPolicy:
-        idle: 60s
-        response: 60s
-    
-    # Frontend: All other routes (with session affinity)
+    # All traffic through frontend (session auth requires shared session store)
+    # Frontend handles MinIO downloads directly
     - conditions:
         - prefix: /
       services:
@@ -47,5 +28,5 @@ spec:
           sameSite: Lax
           secure: true
       timeoutPolicy:
-        idle: 60s
-        response: 60s
+        idle: 300s
+        response: 300s
