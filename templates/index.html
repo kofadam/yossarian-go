@@ -762,7 +762,7 @@
 
         .job-status.queued { background: #e3f2fd; color: #1976d2; }
         .job-status.processing { background: #fff3e0; color: #f57c00; }
-        .job-status.completed { background: #e8f5e8; color: #2e7d32; }
+        .job-status.completed { background: #e8f5e9; color: #2e7d32; }
         .job-status.failed { background: #ffebee; color: #d32f2f; }
 
         .job-details {
@@ -809,6 +809,149 @@
             font-size: 13px;
             color: #e65100;
             margin-top: 12px;
+        }
+
+        /* Approval Status Badges */
+        .approval-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .approval-badge.pending {
+            background: #fff3e0;
+            color: #e65100;
+        }
+
+        .approval-badge.approved {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .approval-badge.none {
+            background: #f5f5f5;
+            color: #9e9e9e;
+        }
+
+        .approval-info {
+            margin-top: 8px;
+            padding: 10px 14px;
+            background: #e8f5e9;
+            border-left: 4px solid #2e7d32;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #2e7d32;
+        }
+
+        .approval-pending-info {
+            margin-top: 8px;
+            padding: 10px 14px;
+            background: #fff3e0;
+            border-left: 4px solid #f57c00;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #e65100;
+        }
+
+        /* Approval Queue Panel */
+        .approval-job-item {
+            background: var(--md-surface-1);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            border: 1px solid var(--md-outline-variant);
+            border-left: 4px solid #f57c00;
+            transition: box-shadow 0.2s;
+        }
+
+        .approval-job-item:hover {
+            box-shadow: var(--md-elevation-2);
+        }
+
+        .approval-job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .approval-job-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
+
+        .approval-job-meta-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .approval-job-meta-label {
+            font-size: 11px;
+            color: var(--md-on-surface-variant);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 2px;
+        }
+
+        .approval-job-meta-value {
+            font-weight: 500;
+            color: var(--md-on-surface);
+        }
+
+        .approve-btn {
+            background: #2e7d32;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .approve-btn:hover {
+            background: #1b5e20;
+            box-shadow: var(--md-elevation-2);
+        }
+
+        .approve-btn:disabled {
+            background: #bdbdbd;
+            cursor: not-allowed;
+        }
+
+        /* Verification Key Card */
+        .public-key-display {
+            background: #263238;
+            color: #e0e0e0;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 200px;
+            overflow-y: auto;
+            margin: 12px 0;
+        }
+
+        .key-fingerprint {
+            font-family: monospace;
+            background: var(--md-surface-2);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            margin: 8px 0;
         }
 
         .report-downloads {
@@ -1134,6 +1277,11 @@
                 <a class="nav-item" data-panel="my-jobs">
                     <span class="nav-item-icon">📦</span>
                     <span>My Jobs</span>
+                </a>
+                <a class="nav-item" data-panel="approvals" id="approvalsNavItem" style="display: none;">
+                    <span class="nav-item-icon">✅</span>
+                    <span>Approvals</span>
+                    <span id="approvalBadgeCount" style="background: #f57c00; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; display: none; margin-left: auto;">0</span>
                 </a>
                 <a class="nav-item" data-panel="help">
                     <span class="nav-item-icon">📚</span>
@@ -1470,13 +1618,38 @@
                         <li style="margin-bottom: 12px;"><strong>Download</strong> - Review results and download secured files</li>
                     </ol>
                 </div>
+
+                <!-- Export Verification Guide -->
+                <div class="md-card">
+                    <h3 style="margin-bottom: 16px;">🔏 Export Verification</h3>
+                    <p style="margin-bottom: 16px;">
+                        Exported ZIP files that have been approved by a security officer include a digital signature. Recipients can verify the signature using the following steps:
+                    </p>
+                    <ol style="margin-left: 20px; margin-bottom: 16px;">
+                        <li style="margin-bottom: 8px;">Extract the downloaded ZIP — it contains <code>sanitized.zip</code>, <code>manifest.json</code>, and <code>manifest.sig</code></li>
+                        <li style="margin-bottom: 8px;">Obtain the public key from the Approvals panel or from your security officer</li>
+                        <li style="margin-bottom: 8px;">Save the public key as <code>public.pem</code></li>
+                        <li style="margin-bottom: 8px;">Verify with OpenSSL:
+                            <div style="background: #263238; color: #e0e0e0; padding: 12px; border-radius: 6px; margin-top: 8px; font-family: monospace; font-size: 13px;">
+                                # Decode the base64 signature<br>
+                                base64 -d manifest.sig > manifest.sig.der<br><br>
+                                # Verify the signature<br>
+                                openssl dgst -sha256 -verify public.pem -signature manifest.sig.der manifest.json
+                            </div>
+                        </li>
+                        <li style="margin-bottom: 8px;">A successful verification prints: <code>Verified OK</code></li>
+                    </ol>
+                    <p style="font-size: 13px; color: var(--md-on-surface-variant);">
+                        The manifest contains: scanner version, who scanned the file, who approved it, timestamps, file hash, and detection statistics.
+                    </p>
+                </div>
             </div>
 
             <!-- My Jobs Panel -->
             <div class="panel" id="panel-my-jobs">
                 <div class="panel-header">
                     <h1 class="panel-title">📦 My Batch Jobs</h1>
-                    <p class="panel-subtitle">Track and download your sanitization jobs</p>
+                    <p class="panel-subtitle">Track and download your sanitization jobs. Completed jobs require security officer approval for signed export.</p>
                 </div>
 
                 <div class="md-card">
@@ -1490,6 +1663,39 @@
                     
                     <div id="jobsList" class="job-list">
                         <div class="loading">⏳ Loading jobs...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Approval Queue Panel -->
+            <div class="panel" id="panel-approvals">
+                <div class="panel-header">
+                    <h1 class="panel-title">✅ Export Approval Queue</h1>
+                    <p class="panel-subtitle">Review and approve completed sanitization jobs for export. Your approval adds a digital signature to verify the export chain of custody.</p>
+                </div>
+
+                <div class="md-card">
+                    <div class="card-header" style="border-bottom: 1px solid #e0e0e0; padding: 20px 24px 16px; margin: -24px -24px 24px -24px; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <h2 style="font-size: 18px; font-weight: 500; margin: 0;">Pending Approvals</h2>
+                            <div style="font-size: 14px; color: var(--md-on-surface-variant); margin-top: 4px;">Jobs awaiting security officer review</div>
+                        </div>
+                        <button class="md-button md-button-outlined" onclick="loadPendingApprovals()">🔄 Refresh</button>
+                    </div>
+
+                    <div id="pendingApprovalsList">
+                        <div class="loading">⏳ Loading pending approvals...</div>
+                    </div>
+                </div>
+
+                <!-- Verification Key Card -->
+                <div class="md-card" style="margin-top: 24px;">
+                    <h3 style="margin-bottom: 8px;">🔑 Verification Public Key</h3>
+                    <p style="font-size: 14px; color: var(--md-on-surface-variant); margin-bottom: 16px;">
+                        This public key can be shared with external parties to verify that exported files were scanned and approved through Yossarian.
+                    </p>
+                    <div id="publicKeySection">
+                        <button class="md-button md-button-outlined" onclick="loadPublicKey()">🔑 Load Public Key</button>
                     </div>
                 </div>
             </div>
@@ -1564,18 +1770,46 @@
                 `;
             }
 
+            // Approval status display
+            let approvalHTML = '';
+            if (job.status === 'completed') {
+                if (job.approval_status === 'approved') {
+                    approvalHTML = `
+                        <div class="approval-info">
+                            🔏 <strong>Approved</strong> by ${escapeHtml(job.approved_by || 'unknown')} • ${job.approved_at ? formatJobDate(job.approved_at) : ''}
+                            <div style="font-size: 12px; margin-top: 4px; opacity: 0.85;">Download includes signed manifest for verification</div>
+                        </div>
+                    `;
+                } else if (job.approval_status === 'pending') {
+                    approvalHTML = `
+                        <div class="approval-pending-info">
+                            ⏳ <strong>Pending Approval</strong> — Awaiting security officer review. Download available without manifest.
+                        </div>
+                    `;
+                }
+            }
+
             let actions = '';
             if (job.status === 'completed') {
+                const downloadLabel = job.approval_status === 'approved' 
+                    ? '📥 Download Approved Export' 
+                    : '📥 Download Sanitized ZIP';
+                const downloadStyle = job.approval_status === 'approved'
+                    ? 'background: #1565c0;'
+                    : 'background: var(--md-success);';
+                
                 actions = `
                     <div>
-                        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-                            <a href="/jobs/download/${job.job_id}" class="md-button md-button-filled" style="background: var(--md-success); font-size: 12px; padding: 6px 12px;">📥 Download Sanitized ZIP</a>
+                        ${approvalHTML}
+                        <div style="display: flex; gap: 8px; margin-bottom: 8px; margin-top: 12px;">
+                            <a href="/jobs/download/${job.job_id}" class="md-button md-button-filled" style="${downloadStyle} font-size: 12px; padding: 6px 12px;">${downloadLabel}</a>
                             <button onclick="deleteJob('${job.job_id}')" class="md-button md-button-text" style="background: #ffebee; color: var(--md-error); font-size: 12px; padding: 6px 12px;">🗑️ Delete Job</button>
                         </div>
                         <div class="report-downloads">
                             <button onclick="downloadReport('${job.job_id}', 'ip-mappings.csv')" class="btn-report">📊 IP Mappings</button>
                             <button onclick="downloadReport('${job.job_id}', 'summary.json')" class="btn-report">📄 Summary</button>
                             ${job.generate_detailed_report ? `<button onclick="downloadReport('${job.job_id}', 'detailed-report.csv')" class="btn-report">📋 Detailed Report</button>` : ''}
+                            ${job.approval_status === 'approved' ? `<button onclick="downloadReport('${job.job_id}', 'manifest.json')" class="btn-report" style="background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7;">🔏 Manifest</button>` : ''}
                         </div>
                         <div class="security-warning">
                             ⚠️ <strong>Security Notice:</strong> Reports contain mapping details and should <strong>NOT</strong> be shared externally. Only share the sanitized ZIP file.
@@ -1610,7 +1844,10 @@
                 <div class="job-item ${job.status}">
                     <div class="job-header">
                         <div class="job-id">${getStatusIcon(job.status)} ${escapeHtml(job.job_id)}</div>
-                        <div class="job-status ${job.status}">${job.status}</div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            ${job.status === 'completed' && job.approval_status ? `<span class="approval-badge ${job.approval_status}">${job.approval_status === 'approved' ? '🔏 Approved' : job.approval_status === 'pending' ? '⏳ Pending' : ''}</span>` : ''}
+                            <div class="job-status ${job.status}">${job.status.toUpperCase()}</div>
+                        </div>
                     </div>
                     
                     <div class="job-details">
@@ -1768,6 +2005,214 @@
             }
         }
 
+        // ========================================
+        // APPROVAL QUEUE FUNCTIONS
+        // ========================================
+        
+        async function loadPendingApprovals() {
+            const container = document.getElementById('pendingApprovalsList');
+            container.innerHTML = '<div class="loading">⏳ Loading pending approvals...</div>';
+
+            try {
+                const response = await fetch('/api/jobs/pending-approval');
+                if (!response.ok) {
+                    if (response.status === 403) {
+                        container.innerHTML = '<div style="padding: 24px; text-align: center; color: var(--md-on-surface-variant);">🔒 Security officer or admin role required</div>';
+                        return;
+                    }
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (!data.jobs || data.jobs.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">✅</div>
+                            <div class="empty-state-text">No pending approvals</div>
+                            <div class="empty-state-subtext">All completed jobs have been reviewed</div>
+                        </div>
+                    `;
+                    // Update badge
+                    const badge = document.getElementById('approvalBadgeCount');
+                    badge.style.display = 'none';
+                    return;
+                }
+
+                // Update badge count
+                const badge = document.getElementById('approvalBadgeCount');
+                badge.textContent = data.total;
+                badge.style.display = '';
+
+                container.innerHTML = data.jobs.map(job => `
+                    <div class="approval-job-item" id="approval-${job.job_id}">
+                        <div class="approval-job-header">
+                            <div>
+                                <div class="job-id" style="margin-bottom: 4px;">📦 ${escapeHtml(job.job_id)}</div>
+                                <div style="font-size: 13px; color: var(--md-on-surface-variant);">Submitted by <strong>${escapeHtml(job.username)}</strong></div>
+                            </div>
+                            <span class="approval-badge pending">⏳ Pending Review</span>
+                        </div>
+                        
+                        <div class="approval-job-meta">
+                            <div class="approval-job-meta-item">
+                                <div class="approval-job-meta-label">Files</div>
+                                <div class="approval-job-meta-value">${job.total_files}</div>
+                            </div>
+                            <div class="approval-job-meta-item">
+                                <div class="approval-job-meta-label">Created</div>
+                                <div class="approval-job-meta-value">${formatJobDate(job.created_at)}</div>
+                            </div>
+                            <div class="approval-job-meta-item">
+                                <div class="approval-job-meta-label">Completed</div>
+                                <div class="approval-job-meta-value">${job.completed_at ? formatJobDate(job.completed_at) : '-'}</div>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <button class="approve-btn" onclick="approveJob('${job.job_id}', this)" id="approve-btn-${job.job_id}">
+                                ✅ Approve for Export
+                            </button>
+                            <a href="/jobs/download/${job.job_id}" class="md-button md-button-outlined" style="font-size: 13px;">
+                                📥 Preview Download
+                            </a>
+                        </div>
+                    </div>
+                `).join('');
+
+            } catch (error) {
+                console.error('Failed to load pending approvals:', error);
+                container.innerHTML = `
+                    <div style="background: #ffebee; color: #d32f2f; padding: 12px 16px; border-radius: 8px; border-left: 4px solid #d32f2f;">
+                        ❌ Failed to load pending approvals: ${escapeHtml(error.message)}
+                    </div>
+                `;
+            }
+        }
+
+        async function approveJob(jobId, buttonEl) {
+            if (!confirm(`Approve job ${jobId} for export?\n\nThis will:\n• Record your identity as the approver\n• Generate a signed manifest (ECDSA)\n• Bundle the manifest with the download\n\nThis action is permanent and cannot be undone.`)) {
+                return;
+            }
+
+            // Disable button
+            buttonEl.disabled = true;
+            buttonEl.textContent = '⏳ Signing...';
+
+            try {
+                const response = await fetch('/api/jobs/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ job_id: jobId })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.message || `HTTP ${response.status}`);
+                }
+
+                const result = await response.json();
+
+                // Update the item in-place
+                const item = document.getElementById(`approval-${jobId}`);
+                if (item) {
+                    item.style.borderLeftColor = '#2e7d32';
+                    item.innerHTML = `
+                        <div style="display: flex; align-items: center; gap: 16px; padding: 8px 0;">
+                            <span style="font-size: 32px;">✅</span>
+                            <div>
+                                <div style="font-weight: 500; color: #2e7d32;">Approved Successfully</div>
+                                <div style="font-size: 13px; color: var(--md-on-surface-variant); margin-top: 4px;">
+                                    Job ${escapeHtml(jobId)} approved by ${escapeHtml(result.approved_by)} • 
+                                    ${result.signed ? 'Manifest signed ✓' : 'Manifest pending'}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // Update badge count
+                const badge = document.getElementById('approvalBadgeCount');
+                const currentCount = parseInt(badge.textContent) || 0;
+                if (currentCount > 1) {
+                    badge.textContent = currentCount - 1;
+                } else {
+                    badge.style.display = 'none';
+                }
+
+            } catch (error) {
+                console.error('Approval error:', error);
+                alert(`Failed to approve job: ${error.message}`);
+                buttonEl.disabled = false;
+                buttonEl.textContent = '✅ Approve for Export';
+            }
+        }
+
+        async function loadPublicKey() {
+            const section = document.getElementById('publicKeySection');
+            section.innerHTML = '<div class="loading">⏳ Loading key...</div>';
+
+            try {
+                const response = await fetch('/api/signing-key/public');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                section.innerHTML = `
+                    <div style="margin-bottom: 12px;">
+                        <div style="font-size: 13px; color: var(--md-on-surface-variant); margin-bottom: 4px;">Key ID</div>
+                        <div class="key-fingerprint">${escapeHtml(data.key_id)}</div>
+                    </div>
+                    <div style="margin-bottom: 12px;">
+                        <div style="font-size: 13px; color: var(--md-on-surface-variant); margin-bottom: 4px;">Fingerprint</div>
+                        <div class="key-fingerprint">${escapeHtml(data.fingerprint)}</div>
+                    </div>
+                    <div style="margin-bottom: 12px;">
+                        <div style="font-size: 13px; color: var(--md-on-surface-variant); margin-bottom: 4px;">Algorithm</div>
+                        <div class="key-fingerprint">${escapeHtml(data.algorithm)}</div>
+                    </div>
+                    <div style="margin-bottom: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <div style="font-size: 13px; color: var(--md-on-surface-variant);">Public Key (PEM)</div>
+                            <button class="md-button md-button-text" style="font-size: 12px; padding: 4px 12px;" onclick="copyPublicKey()">📋 Copy</button>
+                        </div>
+                        <div class="public-key-display" id="publicKeyPEM">${escapeHtml(data.public_key_pem)}</div>
+                    </div>
+                    <div style="font-size: 13px; color: var(--md-on-surface-variant);">
+                        <strong>Verify command:</strong>
+                        <div style="background: #263238; color: #e0e0e0; padding: 8px 12px; border-radius: 6px; margin-top: 4px; font-family: monospace; font-size: 12px;">
+                            ${escapeHtml(data.verify_command)}
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                section.innerHTML = `
+                    <div style="color: var(--md-error); padding: 12px;">
+                        ❌ Failed to load public key: ${escapeHtml(error.message)}
+                        <br><button class="md-button md-button-outlined" style="margin-top: 8px;" onclick="loadPublicKey()">🔄 Retry</button>
+                    </div>
+                `;
+            }
+        }
+
+        function copyPublicKey() {
+            const keyText = document.getElementById('publicKeyPEM').textContent;
+            navigator.clipboard.writeText(keyText).then(() => {
+                alert('Public key copied to clipboard!');
+            }).catch(() => {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = keyText;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                alert('Public key copied to clipboard!');
+            });
+        }
+
         // Panel Navigation
         function switchToPanel(panelId) {
             // Update nav active state
@@ -1786,6 +2231,8 @@
                 // Load data when panel becomes active
                 if (panelId === 'my-jobs') {
                     loadJobs();
+                } else if (panelId === 'approvals') {
+                    loadPendingApprovals();
                 }
                 
                 // Update URL
@@ -1822,6 +2269,8 @@
                 switchToPanel('my-jobs');
             } else if (path === '/help') {
                 switchToPanel('help');
+            } else if (path === '/approvals') {
+                switchToPanel('approvals');
             } else if (path === '/admin') {
                 switchToPanel('admin');
             }
@@ -1995,7 +2444,7 @@
             initializeFileUpload();
             loadOrgSettings(); // Load disclaimer and documentation settings
             
-            // Load user info
+            // Load user info and check roles
             fetch('/api/userinfo')
                 .then(r => r.json())
                 .then(data => {
@@ -2003,8 +2452,25 @@
                         document.getElementById('userName').textContent = data.username;
                         document.getElementById('userRole').textContent = 'Authenticated';
                         document.getElementById('userAvatar').textContent = data.username.charAt(0).toUpperCase();
-                        // Show admin nav if user is admin
-                        // TODO: Check user role
+                    }
+                })
+                .catch(() => {});
+
+            // Check if user has security-officer or admin role by testing the pending-approval endpoint
+            fetch('/api/jobs/pending-approval')
+                .then(r => {
+                    if (r.ok) {
+                        // User has security-officer or admin role — show Approvals nav
+                        document.getElementById('approvalsNavItem').style.display = '';
+                        return r.json();
+                    }
+                    return null;
+                })
+                .then(data => {
+                    if (data && data.total > 0) {
+                        const badge = document.getElementById('approvalBadgeCount');
+                        badge.textContent = data.total;
+                        badge.style.display = '';
                     }
                 })
                 .catch(() => {});
