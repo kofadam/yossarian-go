@@ -1841,7 +1841,8 @@
                             <button onclick="downloadReport('${job.job_id}', 'summary.json')" class="btn-report">📄 Summary</button>
                             ${job.generate_detailed_report ? `<button onclick="downloadReport('${job.job_id}', 'detailed-report.csv')" class="btn-report">📋 Detailed Report</button>` : ''}
                             <button onclick="downloadReport('${job.job_id}', 'scan-attestation.json')" class="btn-report" style="background: #e3f2fd; color: #1565c0; border-color: #90caf9;">🔏 Scan Attestation</button>
-                            ${job.approval_status === 'approved' ? `<button onclick="downloadReport('${job.job_id}', 'approval-attestation.json')" class="btn-report" style="background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7;">✅ Approval Attestation</button>` : ''}
+                            <button onclick="downloadReport('${job.job_id}', 'scan-attestation.sig')" class="btn-report" style="background: #e3f2fd; color: #1565c0; border-color: #90caf9; font-size: 11px;">.sig</button>
+                            ${job.approval_status === 'approved' ? `<button onclick="downloadReport('${job.job_id}', 'approval-attestation.json')" class="btn-report" style="background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7;">✅ Approval Attestation</button><button onclick="downloadReport('${job.job_id}', 'approval-attestation.sig')" class="btn-report" style="background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7; font-size: 11px;">.sig</button>` : ''}
                         </div>
                         <div class="security-warning">
                             ⚠️ <strong>Security Notice:</strong> Reports and attestations are internal documents and should <strong>NOT</strong> be shared externally. Only share the sanitized ZIP file.
