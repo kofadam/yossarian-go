@@ -93,7 +93,15 @@ func initDB() error {
 		is_active INTEGER DEFAULT 1
 	);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-	CREATE INDEX IF NOT EXISTS idx_api_keys_username ON api_keys(username);`
+	CREATE INDEX IF NOT EXISTS idx_api_keys_username ON api_keys(username);
+
+	CREATE TABLE IF NOT EXISTS signing_keys (
+		key_id TEXT PRIMARY KEY,
+		private_key_pem TEXT NOT NULL,
+		public_key_pem TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		active BOOLEAN DEFAULT 1
+	);`
 
 	_, err = db.Exec(createTableSQL)
 	if err != nil {
@@ -105,6 +113,11 @@ func initDB() error {
 		"ALTER TABLE batch_jobs ADD COLUMN scan_mode TEXT DEFAULT 'log'",
 		"ALTER TABLE batch_jobs ADD COLUMN code_scan_mode TEXT DEFAULT 'sanitize_safe'",
 		"ALTER TABLE batch_jobs ADD COLUMN generate_detailed_report INTEGER DEFAULT 0",
+		"ALTER TABLE batch_jobs ADD COLUMN approval_status TEXT DEFAULT 'none'",
+		"ALTER TABLE batch_jobs ADD COLUMN approved_by TEXT",
+		"ALTER TABLE batch_jobs ADD COLUMN approved_at DATETIME",
+		"ALTER TABLE batch_jobs ADD COLUMN manifest_json TEXT",
+		"ALTER TABLE batch_jobs ADD COLUMN manifest_signature TEXT",
 	}
 	for _, migration := range migrations {
 		_, err := db.Exec(migration)
@@ -791,14 +804,19 @@ func jobStatusHandler(w http.ResponseWriter, r *http.Request) {
 		ScanMode               string  `json:"scan_mode"`
 		CodeScanMode           string  `json:"code_scan_mode"`
 		GenerateDetailedReport int     `json:"generate_detailed_report"`
+		ApprovalStatus         string  `json:"approval_status"`
+		ApprovedBy             *string `json:"approved_by"`
+		ApprovedAt             *string `json:"approved_at"`
 	}
 	err := db.QueryRow(`SELECT job_id, username, status, total_files, processed_files, 
 		created_at, started_at, completed_at, input_path, output_path, error_message,
-		COALESCE(scan_mode, 'log'), COALESCE(code_scan_mode, 'sanitize_safe'), COALESCE(generate_detailed_report, 0)
+		COALESCE(scan_mode, 'log'), COALESCE(code_scan_mode, 'sanitize_safe'), COALESCE(generate_detailed_report, 0),
+		COALESCE(approval_status, 'none'), approved_by, approved_at
 		FROM batch_jobs WHERE job_id = ?`, jobID).Scan(
 		&job.JobID, &job.Username, &job.Status, &job.TotalFiles, &job.ProcessedFiles,
 		&job.CreatedAt, &job.StartedAt, &job.CompletedAt, &job.InputPath, &job.OutputPath, &job.ErrorMessage,
-		&job.ScanMode, &job.CodeScanMode, &job.GenerateDetailedReport)
+		&job.ScanMode, &job.CodeScanMode, &job.GenerateDetailedReport,
+		&job.ApprovalStatus, &job.ApprovedBy, &job.ApprovedAt)
 
 	if err != nil {
 		http.NotFound(w, r)
@@ -830,13 +848,15 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 		sqliteFormat := afterTime.Format("2006-01-02 15:04:05")
 		// Show all jobs, but hide completed jobs older than cutoff
 		rows, err = db.Query(`SELECT job_id, status, total_files, processed_files,
-					created_at, completed_at, COALESCE(generate_detailed_report, 0) FROM batch_jobs
+					created_at, completed_at, COALESCE(generate_detailed_report, 0),
+					COALESCE(approval_status, 'none'), approved_by, approved_at FROM batch_jobs
 					WHERE username = ? AND (status != 'completed' OR completed_at IS NULL OR completed_at >= ?)
 					ORDER BY created_at DESC LIMIT 50`, username, sqliteFormat)
 	} else {
 		// No filter, return all jobs
 		rows, err = db.Query(`SELECT job_id, status, total_files, processed_files,
-					created_at, completed_at, COALESCE(generate_detailed_report, 0) FROM batch_jobs
+					created_at, completed_at, COALESCE(generate_detailed_report, 0),
+					COALESCE(approval_status, 'none'), approved_by, approved_at FROM batch_jobs
 					WHERE username = ? ORDER BY created_at DESC LIMIT 50`, username)
 	}
 	if err != nil {
@@ -847,11 +867,12 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 
 	jobs := []map[string]interface{}{}
 	for rows.Next() {
-		var jobID, status, createdAt string
+		var jobID, status, createdAt, approvalStatus string
 		var totalFiles, processedFiles int
-		var completedAt *string
+		var completedAt, approvedBy, approvedAt *string
 		var generateDetailedReport int
-		if err := rows.Scan(&jobID, &status, &totalFiles, &processedFiles, &createdAt, &completedAt, &generateDetailedReport); err != nil {
+		if err := rows.Scan(&jobID, &status, &totalFiles, &processedFiles, &createdAt, &completedAt, &generateDetailedReport,
+			&approvalStatus, &approvedBy, &approvedAt); err != nil {
 			continue
 		}
 		jobs = append(jobs, map[string]interface{}{
@@ -862,6 +883,9 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 			"created_at":               createdAt,
 			"completed_at":             completedAt,
 			"generate_detailed_report": generateDetailedReport == 1,
+			"approval_status":          approvalStatus,
+			"approved_by":              approvedBy,
+			"approved_at":              approvedAt,
 		})
 	}
 
@@ -906,7 +930,10 @@ func jobUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		// Set timestamps based on status
 		if *req.Status == "processing" {
 			updates = append(updates, "started_at = CURRENT_TIMESTAMP")
-		} else if *req.Status == "completed" || *req.Status == "failed" {
+		} else if *req.Status == "completed" {
+			updates = append(updates, "completed_at = CURRENT_TIMESTAMP")
+			updates = append(updates, "approval_status = 'pending'")
+		} else if *req.Status == "failed" {
 			updates = append(updates, "completed_at = CURRENT_TIMESTAMP")
 		}
 	}
@@ -941,6 +968,216 @@ func jobUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
+func jobApproveHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		JobID      string `json:"job_id"`
+		ApprovedBy string `json:"approved_by"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.JobID == "" || req.ApprovedBy == "" {
+		http.Error(w, "job_id and approved_by are required", http.StatusBadRequest)
+		return
+	}
+
+	// Verify job exists and is completed
+	var status string
+	err := db.QueryRow("SELECT status FROM batch_jobs WHERE job_id = ?", req.JobID).Scan(&status)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if status != "completed" {
+		http.Error(w, "Only completed jobs can be approved", http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Exec(`UPDATE batch_jobs 
+		SET approval_status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP 
+		WHERE job_id = ?`, req.ApprovedBy, req.JobID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to approve job %s: %v", req.JobID, err)
+		http.Error(w, "Failed to approve job", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[APPROVAL] Job %s approved by %s", req.JobID, req.ApprovedBy)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "approved",
+		"job_id":      req.JobID,
+		"approved_by": req.ApprovedBy,
+	})
+}
+
+func jobPendingApprovalHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query(`SELECT job_id, username, status, total_files, processed_files,
+		created_at, completed_at, COALESCE(approval_status, 'none')
+		FROM batch_jobs 
+		WHERE status = 'completed' AND approval_status = 'pending'
+		ORDER BY completed_at DESC LIMIT 100`)
+	if err != nil {
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	jobs := []map[string]interface{}{}
+	for rows.Next() {
+		var jobID, username, status, createdAt, approvalStatus string
+		var totalFiles, processedFiles int
+		var completedAt *string
+
+		if err := rows.Scan(&jobID, &username, &status, &totalFiles, &processedFiles,
+			&createdAt, &completedAt, &approvalStatus); err != nil {
+			continue
+		}
+
+		jobs = append(jobs, map[string]interface{}{
+			"job_id":          jobID,
+			"username":        username,
+			"status":          status,
+			"total_files":     totalFiles,
+			"processed_files": processedFiles,
+			"created_at":      createdAt,
+			"completed_at":    completedAt,
+			"approval_status": approvalStatus,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jobs":  jobs,
+		"total": len(jobs),
+	})
+}
+
+func signingKeyGetHandler(w http.ResponseWriter, r *http.Request) {
+	var keyData struct {
+		KeyID         string `json:"key_id"`
+		PrivateKeyPEM string `json:"private_key_pem"`
+		PublicKeyPEM  string `json:"public_key_pem"`
+	}
+
+	err := db.QueryRow(`SELECT key_id, private_key_pem, public_key_pem 
+		FROM signing_keys WHERE active = 1 LIMIT 1`).Scan(
+		&keyData.KeyID, &keyData.PrivateKeyPEM, &keyData.PublicKeyPEM)
+
+	if err == sql.ErrNoRows {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"status": "not_found"})
+		return
+	}
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(keyData)
+}
+
+func signingKeyStoreHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		KeyID         string `json:"key_id"`
+		PrivateKeyPEM string `json:"private_key_pem"`
+		PublicKeyPEM  string `json:"public_key_pem"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.KeyID == "" || req.PrivateKeyPEM == "" || req.PublicKeyPEM == "" {
+		http.Error(w, "key_id, private_key_pem, and public_key_pem are required", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec(`INSERT OR REPLACE INTO signing_keys 
+		(key_id, private_key_pem, public_key_pem, active) VALUES (?, ?, ?, 1)`,
+		req.KeyID, req.PrivateKeyPEM, req.PublicKeyPEM)
+	if err != nil {
+		log.Printf("[ERROR] Failed to store signing key: %v", err)
+		http.Error(w, "Failed to store key", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[SIGNING] Stored signing key: %s", req.KeyID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "stored", "key_id": req.KeyID})
+}
+
+func signingKeyPublicHandler(w http.ResponseWriter, r *http.Request) {
+	var publicKeyPEM string
+
+	err := db.QueryRow(`SELECT public_key_pem FROM signing_keys WHERE active = 1 LIMIT 1`).Scan(&publicKeyPEM)
+	if err == sql.ErrNoRows {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"status": "no_key", "message": "No signing key configured"})
+		return
+	}
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"public_key_pem": publicKeyPEM,
+	})
+}
+
+func manifestStoreHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		JobID             string `json:"job_id"`
+		ManifestJSON      string `json:"manifest_json"`
+		ManifestSignature string `json:"manifest_signature"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.JobID == "" || req.ManifestJSON == "" || req.ManifestSignature == "" {
+		http.Error(w, "job_id, manifest_json, and manifest_signature are required", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec(`UPDATE batch_jobs 
+		SET manifest_json = ?, manifest_signature = ? 
+		WHERE job_id = ?`, req.ManifestJSON, req.ManifestSignature, req.JobID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to store manifest for job %s: %v", req.JobID, err)
+		http.Error(w, "Failed to store manifest", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[MANIFEST] Stored signed manifest for job %s", req.JobID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "stored", "job_id": req.JobID})
+}
+
 func jobDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "DELETE" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1459,6 +1696,14 @@ func main() {
 	http.HandleFunc("/jobs/delete/", jobDeleteHandler)
 	http.HandleFunc("/jobs/cleanup", jobCleanupListHandler)
 	http.HandleFunc("/batch/next", batchNextHandler)
+
+	// Approval and signing endpoints
+	http.HandleFunc("/jobs/approve", jobApproveHandler)
+	http.HandleFunc("/jobs/pending-approval", jobPendingApprovalHandler)
+	http.HandleFunc("/signing-key/get", signingKeyGetHandler)
+	http.HandleFunc("/signing-key/store", signingKeyStoreHandler)
+	http.HandleFunc("/signing-key/public", signingKeyPublicHandler)
+	http.HandleFunc("/jobs/manifest/store", manifestStoreHandler)
 
 	// API key endpoints
 	http.HandleFunc("/api-keys/create", apiKeyCreateHandler)

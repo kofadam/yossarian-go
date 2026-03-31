@@ -6,9 +6,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
+	"encoding/base64"
+	"encoding/pem"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 	"crypto/rand"
@@ -118,7 +123,193 @@ var (
 	cacheMutex    sync.RWMutex
 )
 
+// Signing key cache (loaded once from db-service)
+var (
+	signingKey       *ecdsa.PrivateKey
+	signingPublicPEM string
+	signingKeyID     string
+	signingKeyMutex  sync.Mutex
+)
+
 // Batch processing (MinIO-based, no local storage needed)
+
+// === Export Approval & Digital Signature Functions ===
+
+// getOrCreateSigningKey retrieves the ECDSA signing key from db-service, or generates a new one
+func getOrCreateSigningKey() (*ecdsa.PrivateKey, string, string, error) {
+	signingKeyMutex.Lock()
+	defer signingKeyMutex.Unlock()
+
+	// Return cached key if available
+	if signingKey != nil {
+		return signingKey, signingPublicPEM, signingKeyID, nil
+	}
+
+	// Try to fetch existing key from db-service
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/signing-key/get", adServiceURL))
+	if err == nil && resp.StatusCode == 200 {
+		defer resp.Body.Close()
+		var keyData struct {
+			KeyID         string `json:"key_id"`
+			PrivateKeyPEM string `json:"private_key_pem"`
+			PublicKeyPEM  string `json:"public_key_pem"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&keyData); err == nil && keyData.PrivateKeyPEM != "" {
+			// Parse the stored private key
+			block, _ := pem.Decode([]byte(keyData.PrivateKeyPEM))
+			if block != nil {
+				privKey, err := x509.ParseECPrivateKey(block.Bytes)
+				if err == nil {
+					signingKey = privKey
+					signingPublicPEM = keyData.PublicKeyPEM
+					signingKeyID = keyData.KeyID
+					log.Printf("[SIGNING] Loaded existing signing key: %s", signingKeyID)
+					return signingKey, signingPublicPEM, signingKeyID, nil
+				}
+				log.Printf("[SIGNING] Failed to parse stored key: %v", err)
+			}
+		}
+	}
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	// Generate new ECDSA P-256 key pair
+	log.Printf("[SIGNING] Generating new ECDSA P-256 signing key...")
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("failed to generate signing key: %v", err)
+	}
+
+	// Encode private key to PEM
+	privKeyBytes, err := x509.MarshalECPrivateKey(privKey)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("failed to marshal private key: %v", err)
+	}
+	privKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: privKeyBytes,
+	})
+
+	// Encode public key to PEM
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("failed to marshal public key: %v", err)
+	}
+	pubKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubKeyBytes,
+	})
+
+	// Generate key ID from public key fingerprint
+	pubKeyHash := sha256.Sum256(pubKeyBytes)
+	keyID := fmt.Sprintf("yoss-%s", hex.EncodeToString(pubKeyHash[:8]))
+
+	// Store in db-service
+	storeData, _ := json.Marshal(map[string]string{
+		"key_id":          keyID,
+		"private_key_pem": string(privKeyPEM),
+		"public_key_pem":  string(pubKeyPEM),
+	})
+	storeResp, err := client.Post(
+		fmt.Sprintf("%s/signing-key/store", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(storeData),
+	)
+	if err != nil {
+		log.Printf("[SIGNING] Warning: failed to store key in database: %v (key will work for this session)", err)
+	} else {
+		storeResp.Body.Close()
+		log.Printf("[SIGNING] Stored new signing key in database: %s", keyID)
+	}
+
+	// Cache locally
+	signingKey = privKey
+	signingPublicPEM = string(pubKeyPEM)
+	signingKeyID = keyID
+
+	log.Printf("[SIGNING] New signing key generated: %s", keyID)
+	return signingKey, signingPublicPEM, signingKeyID, nil
+}
+
+// signManifest signs a manifest JSON with the ECDSA private key and returns a base64-encoded signature
+func signManifest(manifestJSON []byte) (string, error) {
+	privKey, _, _, err := getOrCreateSigningKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to get signing key: %v", err)
+	}
+
+	// Hash the manifest
+	hash := sha256.Sum256(manifestJSON)
+
+	// Sign with ECDSA
+	signature, err := ecdsa.SignASN1(rand.Reader, privKey, hash[:])
+	if err != nil {
+		return "", fmt.Errorf("failed to sign manifest: %v", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(signature), nil
+}
+
+// generateExportManifest creates the manifest JSON for a completed and approved job
+func generateExportManifest(jobID, scannedBy, approvedBy, approvedAt string, totalFiles int, outputZipHash string) ([]byte, error) {
+	_, publicPEM, keyID, err := getOrCreateSigningKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get signing key: %v", err)
+	}
+
+	// Compute public key fingerprint
+	block, _ := pem.Decode([]byte(publicPEM))
+	fingerprint := ""
+	if block != nil {
+		fpHash := sha256.Sum256(block.Bytes)
+		fingerprint = "SHA256:" + base64.StdEncoding.EncodeToString(fpHash[:])
+	}
+
+	// Fetch scan summary from MinIO if available
+	scanStats := map[string]int{}
+	ctx := context.Background()
+	summaryPath := fmt.Sprintf("%s/%s/reports/summary.json", scannedBy, jobID)
+	summaryObj, err := downloadFromMinIO(ctx, summaryPath)
+	if err == nil {
+		defer summaryObj.Close()
+		var summary struct {
+			PatternsFound map[string]int `json:"patterns_found"`
+		}
+		if err := json.NewDecoder(summaryObj).Decode(&summary); err == nil {
+			scanStats = summary.PatternsFound
+		}
+	}
+
+	manifest := map[string]interface{}{
+		"version": "1.0",
+		"job_id":  jobID,
+		"scan": map[string]interface{}{
+			"scanner":         "yossarian-go",
+			"scanner_version": Version,
+			"scanned_by":      scannedBy,
+			"scanned_at":      time.Now().Format(time.RFC3339),
+			"total_files":     totalFiles,
+			"detections":      scanStats,
+		},
+		"approval": map[string]interface{}{
+			"approved_by": approvedBy,
+			"approved_at": approvedAt,
+			"role":        "security-officer",
+		},
+		"file_hash": map[string]string{
+			"algorithm": "SHA-256",
+			"value":     outputZipHash,
+		},
+		"signing_key": map[string]string{
+			"key_id":      keyID,
+			"fingerprint": fingerprint,
+		},
+	}
+
+	return json.MarshalIndent(manifest, "", "  ")
+}
 
 func recordReplacement(category, filename string, lineNum int, original, sanitized string) {
 	replacementMutex.Lock()
@@ -3019,9 +3210,8 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Download from MinIO
+	// Download the sanitized output.zip from MinIO
 	minioPath := fmt.Sprintf("%s/%s/output.zip", jobInfo.Username, jobID)
-
 	log.Printf("[DOWNLOAD] Fetching from MinIO: %s", minioPath)
 
 	obj, err := downloadFromMinIO(context.Background(), minioPath)
@@ -3030,26 +3220,72 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Output file not found", http.StatusNotFound)
 		return
 	}
-	defer obj.Close()
 
-	// Get file info for content length
-	stat, err := obj.Stat()
+	outputData, err := io.ReadAll(obj)
+	obj.Close()
 	if err != nil {
-		log.Printf("[ERROR] Failed to stat MinIO object: %v", err)
-		http.Error(w, "Failed to get file info", http.StatusInternalServerError)
+		log.Printf("[ERROR] Failed to read output file: %v", err)
+		http.Error(w, "Failed to read output file", http.StatusInternalServerError)
 		return
 	}
 
-	// Stream file to user
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized-%s.zip\"", jobID))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size))
+	// Check if job is approved — if so, bundle with manifest and signature
+	ctx := context.Background()
+	manifestPath := fmt.Sprintf("%s/%s/reports/manifest.json", jobInfo.Username, jobID)
+	sigPath := fmt.Sprintf("%s/%s/reports/manifest.sig", jobInfo.Username, jobID)
 
-	if _, err := io.Copy(w, obj); err != nil {
-		log.Printf("[ERROR] Failed to stream file: %v", err)
+	manifestObj, manifestErr := downloadFromMinIO(ctx, manifestPath)
+	sigObj, sigErr := downloadFromMinIO(ctx, sigPath)
+
+	hasManifest := manifestErr == nil && sigErr == nil
+
+	if hasManifest {
+		// Bundle: create a wrapper ZIP containing sanitized.zip + manifest.json + manifest.sig
+		manifestData, _ := io.ReadAll(manifestObj)
+		manifestObj.Close()
+		sigData, _ := io.ReadAll(sigObj)
+		sigObj.Close()
+
+		var bundleBuf bytes.Buffer
+		bundleWriter := zip.NewWriter(&bundleBuf)
+
+		// Add sanitized.zip
+		zipEntry, _ := bundleWriter.Create("sanitized.zip")
+		zipEntry.Write(outputData)
+
+		// Add manifest.json
+		manifestEntry, _ := bundleWriter.Create("manifest.json")
+		manifestEntry.Write(manifestData)
+
+		// Add manifest.sig
+		sigEntry, _ := bundleWriter.Create("manifest.sig")
+		sigEntry.Write(sigData)
+
+		bundleWriter.Close()
+
+		bundleData := bundleBuf.Bytes()
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"approved-%s.zip\"", jobID))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bundleData)))
+		w.Write(bundleData)
+
+		log.Printf("[DOWNLOAD] Completed (approved bundle): %s (%d bytes, includes manifest+sig)", minioPath, len(bundleData))
+	} else {
+		// No manifest — serve just the sanitized ZIP
+		if manifestObj != nil {
+			manifestObj.Close()
+		}
+		if sigObj != nil {
+			sigObj.Close()
+		}
+
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized-%s.zip\"", jobID))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(outputData)))
+		w.Write(outputData)
+
+		log.Printf("[DOWNLOAD] Completed (no manifest): %s (%d bytes)", minioPath, len(outputData))
 	}
-
-	log.Printf("[DOWNLOAD] Completed: %s (%d bytes)", minioPath, stat.Size)
 }
 
 func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -3150,8 +3386,16 @@ func jobReportsDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		minioObjectName = fmt.Sprintf("%s/%s/reports/summary.json", jobInfo.Username, jobID)
 		contentType = "application/json"
 		filename = fmt.Sprintf("%s-summary.json", jobID)
+	case "manifest.json":
+		minioObjectName = fmt.Sprintf("%s/%s/reports/manifest.json", jobInfo.Username, jobID)
+		contentType = "application/json"
+		filename = fmt.Sprintf("%s-manifest.json", jobID)
+	case "manifest.sig":
+		minioObjectName = fmt.Sprintf("%s/%s/reports/manifest.sig", jobInfo.Username, jobID)
+		contentType = "application/octet-stream"
+		filename = fmt.Sprintf("%s-manifest.sig", jobID)
 	default:
-		http.Error(w, "Invalid report type. Valid types: ip-mappings.csv, detailed-report.csv, summary.json", http.StatusBadRequest)
+		http.Error(w, "Invalid report type. Valid types: ip-mappings.csv, detailed-report.csv, summary.json, manifest.json, manifest.sig", http.StatusBadRequest)
 		return
 	}
 	// Download from MinIO
@@ -3282,6 +3526,9 @@ func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 	deleteFromMinIO(ctx, outputObj)
 	deleteFromMinIO(ctx, reportsPrefix+"ip-mappings.csv")
 	deleteFromMinIO(ctx, reportsPrefix+"summary.json")
+	deleteFromMinIO(ctx, reportsPrefix+"detailed-report.csv")
+	deleteFromMinIO(ctx, reportsPrefix+"manifest.json")
+	deleteFromMinIO(ctx, reportsPrefix+"manifest.sig")
 
 	log.Printf("[AUDIT] Job deleted: user=%s, job=%s", username, jobID)
 	w.Header().Set("Content-Type", "application/json")
@@ -3289,6 +3536,237 @@ func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 		"status":  "deleted",
 		"job_id":  jobID,
 		"message": "Job and all associated files deleted successfully",
+	})
+}
+
+func jobApproveAPIHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Authenticate
+	username, _, isAuthenticated := apiKeyOrSessionAuth(r)
+	if !isAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "authentication_required"})
+		return
+	}
+
+	// Check security-officer role
+	if !hasRole(r, "security-officer") && !hasRole(r, "admin") {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "insufficient_role",
+			"message": "Security officer or admin role required to approve jobs.",
+		})
+		return
+	}
+
+	// Parse request
+	var req struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.JobID == "" {
+		http.Error(w, "job_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Get job info to verify it's completed and get the owner username
+	client := &http.Client{Timeout: 5 * time.Second}
+	statusResp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, req.JobID))
+	if err != nil {
+		http.Error(w, "Failed to get job status", http.StatusInternalServerError)
+		return
+	}
+	defer statusResp.Body.Close()
+
+	var jobInfo struct {
+		JobID      string `json:"job_id"`
+		Username   string `json:"username"`
+		Status     string `json:"status"`
+		TotalFiles int    `json:"total_files"`
+	}
+	if err := json.NewDecoder(statusResp.Body).Decode(&jobInfo); err != nil {
+		http.Error(w, "Failed to parse job info", http.StatusInternalServerError)
+		return
+	}
+
+	if jobInfo.Status != "completed" {
+		http.Error(w, "Only completed jobs can be approved", http.StatusBadRequest)
+		return
+	}
+
+	// Compute SHA-256 hash of the output.zip
+	ctx := context.Background()
+	outputPath := fmt.Sprintf("%s/%s/output.zip", jobInfo.Username, req.JobID)
+	outputObj, err := downloadFromMinIO(ctx, outputPath)
+	outputZipHash := "unavailable"
+	if err == nil {
+		outputData, readErr := io.ReadAll(outputObj)
+		outputObj.Close()
+		if readErr == nil {
+			hashBytes := sha256.Sum256(outputData)
+			outputZipHash = hex.EncodeToString(hashBytes[:])
+		}
+	}
+
+	// Record approval in database
+	approvedAt := time.Now().Format(time.RFC3339)
+	approveData, _ := json.Marshal(map[string]string{
+		"job_id":      req.JobID,
+		"approved_by": username,
+	})
+	approveResp, err := client.Post(
+		fmt.Sprintf("%s/jobs/approve", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(approveData),
+	)
+	if err != nil {
+		http.Error(w, "Failed to record approval", http.StatusInternalServerError)
+		return
+	}
+	approveResp.Body.Close()
+
+	// Generate and sign manifest
+	manifestJSON, err := generateExportManifest(req.JobID, jobInfo.Username, username, approvedAt, jobInfo.TotalFiles, outputZipHash)
+	if err != nil {
+		log.Printf("[ERROR] Failed to generate manifest for job %s: %v", req.JobID, err)
+		// Approval was recorded but manifest failed - not critical
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":      "approved",
+			"job_id":      req.JobID,
+			"approved_by": username,
+			"manifest":    false,
+			"warning":     "Approval recorded but manifest generation failed",
+		})
+		return
+	}
+
+	signature, err := signManifest(manifestJSON)
+	if err != nil {
+		log.Printf("[ERROR] Failed to sign manifest for job %s: %v", req.JobID, err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":      "approved",
+			"job_id":      req.JobID,
+			"approved_by": username,
+			"manifest":    false,
+			"warning":     "Approval recorded but signing failed",
+		})
+		return
+	}
+
+	// Store manifest in database
+	manifestStoreData, _ := json.Marshal(map[string]string{
+		"job_id":             req.JobID,
+		"manifest_json":      string(manifestJSON),
+		"manifest_signature": signature,
+	})
+	storeResp, err := client.Post(
+		fmt.Sprintf("%s/jobs/manifest/store", adServiceURL),
+		"application/json",
+		bytes.NewBuffer(manifestStoreData),
+	)
+	if err != nil {
+		log.Printf("[WARN] Failed to store manifest in database: %v", err)
+	} else {
+		storeResp.Body.Close()
+	}
+
+	// Also upload manifest and signature to MinIO for download bundling
+	manifestObjName := fmt.Sprintf("%s/%s/reports/manifest.json", jobInfo.Username, req.JobID)
+	uploadToMinIO(ctx, manifestObjName, bytes.NewReader(manifestJSON), int64(len(manifestJSON)))
+
+	sigObjName := fmt.Sprintf("%s/%s/reports/manifest.sig", jobInfo.Username, req.JobID)
+	sigBytes := []byte(signature)
+	uploadToMinIO(ctx, sigObjName, bytes.NewReader(sigBytes), int64(len(sigBytes)))
+
+	log.Printf("[APPROVAL] Job %s approved by %s (security-officer), manifest signed with key %s", req.JobID, username, signingKeyID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "approved",
+		"job_id":      req.JobID,
+		"approved_by": username,
+		"approved_at": approvedAt,
+		"manifest":    true,
+		"signed":      true,
+	})
+}
+
+func jobPendingApprovalAPIHandler(w http.ResponseWriter, r *http.Request) {
+	// Authenticate
+	_, _, isAuthenticated := apiKeyOrSessionAuth(r)
+	if !isAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "authentication_required"})
+		return
+	}
+
+	// Check security-officer or admin role
+	if !hasRole(r, "security-officer") && !hasRole(r, "admin") {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "insufficient_role",
+			"message": "Security officer or admin role required to view pending approvals.",
+		})
+		return
+	}
+
+	// Proxy to db-service
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/jobs/pending-approval", adServiceURL))
+	if err != nil {
+		http.Error(w, "Failed to get pending approvals", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+func signingKeyPublicHandler(w http.ResponseWriter, r *http.Request) {
+	// Any authenticated user can get the public key
+	_, _, isAuthenticated := apiKeyOrSessionAuth(r)
+	if !isAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "authentication_required"})
+		return
+	}
+
+	_, publicPEM, keyID, err := getOrCreateSigningKey()
+	if err != nil {
+		http.Error(w, "Failed to get signing key", http.StatusInternalServerError)
+		return
+	}
+
+	// Compute fingerprint
+	block, _ := pem.Decode([]byte(publicPEM))
+	fingerprint := ""
+	if block != nil {
+		fpHash := sha256.Sum256(block.Bytes)
+		fingerprint = "SHA256:" + base64.StdEncoding.EncodeToString(fpHash[:])
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"key_id":         keyID,
+		"public_key_pem": publicPEM,
+		"fingerprint":    fingerprint,
+		"algorithm":      "ECDSA P-256 (SHA-256)",
+		"verify_command":  fmt.Sprintf("openssl dgst -sha256 -verify public.pem -signature manifest.sig manifest.json"),
 	})
 }
 
@@ -4433,6 +4911,9 @@ func main() {
 	http.HandleFunc("/jobs/reports/", jobReportsDownloadHandler)
 	http.HandleFunc("/api/jobs/delete/", jobDeleteAPIHandler)
 	http.HandleFunc("/api/jobs/cancel/", jobCancelAPIHandler)
+	http.HandleFunc("/api/jobs/approve", jobApproveAPIHandler)
+	http.HandleFunc("/api/jobs/pending-approval", jobPendingApprovalAPIHandler)
+	http.HandleFunc("/api/signing-key/public", signingKeyPublicHandler)
 
 	// Admin routes
 	http.HandleFunc("/admin/login", adminLoginHandler)
