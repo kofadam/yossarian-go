@@ -57,5 +57,5 @@ test.txt
 *.tar
 test
 
-db-service
-yossarian-go
+/db-service
+/yossarian-go
