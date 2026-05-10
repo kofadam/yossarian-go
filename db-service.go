@@ -50,6 +50,7 @@ func initDB() error {
 		account TEXT PRIMARY KEY,
 		usn TEXT NOT NULL
 	);
+	CREATE INDEX IF NOT EXISTS idx_ad_accounts_lower ON ad_accounts(LOWER(account));
 	CREATE TABLE IF NOT EXISTS sensitive_terms (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		term TEXT NOT NULL UNIQUE,
@@ -107,7 +108,7 @@ func initDB() error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Run migrations for existing databases (add columns if they don't exist)
 	migrations := []string{
 		"ALTER TABLE batch_jobs ADD COLUMN scan_mode TEXT DEFAULT 'log'",
@@ -128,7 +129,7 @@ func initDB() error {
 			}
 		}
 	}
-	
+
 	// Insert default org settings
 	defaultSettings := `
 	INSERT OR IGNORE INTO org_settings (key, value) VALUES 
@@ -1365,15 +1366,15 @@ func generateAPIKey() (string, string, string) {
 	// Generate 32 random bytes
 	bytes := make([]byte, 32)
 	rand.Read(bytes)
-	
+
 	// Create key with prefix
 	key := "yoss_" + hex.EncodeToString(bytes)
 	prefix := key[:13] // "yoss_" + 8 chars
-	
+
 	// Hash the full key for storage
 	hash := sha256.Sum256([]byte(key))
 	hashStr := hex.EncodeToString(hash[:])
-	
+
 	return key, prefix, hashStr
 }
 
@@ -1455,7 +1456,7 @@ func apiKeyCreateHandler(w http.ResponseWriter, r *http.Request) {
 
 func apiKeyListHandler(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimPrefix(r.URL.Path, "/api-keys/list/")
-	
+
 	// If no username in path, list all (admin only)
 	var rows *sql.Rows
 	var err error
@@ -1643,7 +1644,7 @@ func apiKeyValidateHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	// Load LDAP configuration
-	ldapServer = os.Getenv("LDAP_SERVER") 
+	ldapServer = os.Getenv("LDAP_SERVER")
 	ldapBindDN = os.Getenv("LDAP_BIND_DN")
 	ldapBindPassword = os.Getenv("LDAP_BIND_PASSWORD")
 	ldapSearchBase = os.Getenv("LDAP_SEARCH_BASE")
