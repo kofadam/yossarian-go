@@ -56,3 +56,6 @@ test.txt
 *.tgz
 *.tar
 test
+
+db-service
+yossarian-go
