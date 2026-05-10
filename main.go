@@ -8,17 +8,15 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
 	"encoding/base64"
-	"encoding/pem"
-	"github.com/coreos/go-oidc/v3/oidc"
-	"golang.org/x/oauth2"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"html/template"
 	"io"
@@ -33,6 +31,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
+
 	// MinIO client libraries
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -44,6 +45,7 @@ import (
 )
 
 // Embedded static files for API documentation
+//
 //go:embed openapi.yaml
 var openapiSpec []byte
 
@@ -526,24 +528,26 @@ var (
 var (
 	ipRegex          = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
 	internalURLRegex = regexp.MustCompile(`https?://(?:localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})[^\s"'<>]*`)
-	adRegex         = regexp.MustCompile(`\b[A-Z0-9-]+\\[a-zA-Z0-9._-]{4,15}\b|\b[a-zA-Z0-9._-]{4,15}@[a-zA-Z0-9.-]+\b|\b[A-Z0-9-]{4,15}\$\b|\b(?:A-M|B-P|D-[1-9CKLMQT]|H-[FP]|J-P|L-[1-9P]|S-C|T-[CL])-[A-Za-z0-9-]{6,11}\b|\bD-PC-[A-Za-z0-9-]{5,10}\b|\b(?:a-m|b-p|d-[1-9cklmqt]|h-[fp]|j-p|l-[1-9p]|s-c|t-[cl])-[a-zA-Z0-9-]{6,11}\b|\bd-pc-[a-zA-Z0-9-]{5,10}\b|\b(?:dvd|til|DVD|TIL)[0-9a-zA-Z]{1,20}\b|\\\\([A-Z0-9-]+)\\|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]{4,15})\\|\\Users\\([a-zA-Z0-9._-]{4,15})\\|/([a-zA-Z0-9._-]{4,15})/`)
-	jwtRegex        = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
-	privateKeyRegex = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
-	passwordRegex   = regexp.MustCompile(`(?i)(:([^:@\s]{3,50})@|password["':=\s]+["']?([^"',\s]{3,50})["']?)`)
+	adRegex          = regexp.MustCompile(`\b[A-Z0-9-]+\\[a-zA-Z0-9._-]{4,15}\b|\b[a-zA-Z0-9._-]{4,15}@[a-zA-Z0-9.-]+\b|\b[A-Z0-9-]{4,15}\$\b|\b(?:A-M|B-P|D-[1-9CKLMQT]|H-[FP]|J-P|L-[1-9P]|S-C|T-[CL])-[A-Za-z0-9-]{6,11}\b|\bD-PC-[A-Za-z0-9-]{5,10}\b|\b(?:a-m|b-p|d-[1-9cklmqt]|h-[fp]|j-p|l-[1-9p]|s-c|t-[cl])-[a-zA-Z0-9-]{6,11}\b|\bd-pc-[a-zA-Z0-9-]{5,10}\b|\b(?:dvd|til|DVD|TIL)[0-9a-zA-Z]{1,20}\b|\\\\([A-Z0-9-]+)\\|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]{4,15})\\|\\Users\\([a-zA-Z0-9._-]{4,15})\\|/([a-zA-Z0-9._-]{4,15})/`)
+	jwtRegex         = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
+	privateKeyRegex  = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
+	passwordRegex    = regexp.MustCompile(`(?i)(:([^:@\s]{3,50})@|password["':=\s]+["']?([^"',\s]{3,50})["']?)`)
 	// commentRegex    = regexp.MustCompile(`(?m)^#.*$`)
+	hebrewRegex    = regexp.MustCompile(`[\x{0590}-\x{05FF}\x{FB1D}-\x{FB4F}]+`)
+	ldapRegex      = regexp.MustCompile(`(?i)(?:^|\b)((?:(?:cn|uid|ou|dc|o|l|st|c|mail|sn|givenname|dn)=(?:[^,\n]+),?\s*)+(?:dc=[a-zA-Z0-9_-]+,?\s*)+|(?:[a-zA-Z0-9_'"\s]+,\s*dn:\s*'[^']+')).*`)
 	sensitiveRegex *regexp.Regexp
 )
 
 // Safe replacement values for code scanning (RFC-compliant placeholders)
 var (
-	safeIPCounter      = 1
-	safeIPBase         = "192.0.2." // RFC 5737 TEST-NET-1 for documentation
-	safeInternalURL    = "https://example.com/api/endpoint"
-	safeInternalHost   = "example.com" // Base host for URL replacement
-	safePassword       = "CHANGE_ME_PASSWORD"
-	safeJWT            = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IlJFUExBQ0VfTUUiLCJpYXQiOjE1MTYyMzkwMjJ9.REPLACE_ME_SIGNATURE"
-	safePrivateKey     = "-----BEGIN PRIVATE KEY-----\nUkVQTEFDRV9NRV9QUklWQVRFX0tFWQ==\n-----END PRIVATE KEY-----"
-	safeCoordinate     = "0.0000, 0.0000" // Null Island - safe placeholder for coordinates
+	safeIPCounter    = 1
+	safeIPBase       = "192.0.2." // RFC 5737 TEST-NET-1 for documentation
+	safeInternalURL  = "https://example.com/api/endpoint"
+	safeInternalHost = "example.com" // Base host for URL replacement
+	safePassword     = "CHANGE_ME_PASSWORD"
+	safeJWT          = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IlJFUExBQ0VfTUUiLCJpYXQiOjE1MTYyMzkwMjJ9.REPLACE_ME_SIGNATURE"
+	safePrivateKey   = "-----BEGIN PRIVATE KEY-----\nUkVQTEFDRV9NRV9QUklWQVRFX0tFWQ==\n-----END PRIVATE KEY-----"
+	safeCoordinate   = "0.0000, 0.0000" // Null Island - safe placeholder for coordinates
 )
 
 // Location coordinate patterns for code scanning
@@ -553,15 +557,15 @@ var (
 	// DMS format: 32°5'7"N or 51°30'26"N
 	coordDMSRegex = regexp.MustCompile(`\d{1,3}°\d{1,2}'[\d.]+["″]?[NSEW]?`)
 	// Geo URI: geo:32.0853,34.7818 or geo:37.7749,-122.4194,100
-	coordGeoURIRegex  = regexp.MustCompile(`geo:-?\d{1,3}\.\d+,-?\d{1,3}\.\d+(?:,\d+)?`)
-	coordObjectRegex  = regexp.MustCompile(`(?i)\{\s*["']?(lat|latitude)["']?\s*:\s*(-?\d{1,3}\.\d{2,})\s*,\s*["']?(lng|lon|long|longitude)["']?\s*:\s*(-?\d{1,3}\.\d{2,})\s*\}`)
+	coordGeoURIRegex = regexp.MustCompile(`geo:-?\d{1,3}\.\d+,-?\d{1,3}\.\d+(?:,\d+)?`)
+	coordObjectRegex = regexp.MustCompile(`(?i)\{\s*["']?(lat|latitude)["']?\s*:\s*(-?\d{1,3}\.\d{2,})\s*,\s*["']?(lng|lon|long|longitude)["']?\s*:\s*(-?\d{1,3}\.\d{2,})\s*\}`)
 )
 
 // API key patterns for code scanning (provider-specific, precise patterns)
 var (
 	// AWS Access Key ID: Always starts with AKIA, exactly 20 characters
-	awsKeyRegex       = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
-	awsSecretRegex    = regexp.MustCompile(`(?i)(aws_secret_access_key|aws_secret_key|secretAccessKey)["'\s:=]+["']?([A-Za-z0-9/+=]{40})["']?`)
+	awsKeyRegex        = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+	awsSecretRegex     = regexp.MustCompile(`(?i)(aws_secret_access_key|aws_secret_key|secretAccessKey)["'\s:=]+["']?([A-Za-z0-9/+=]{40})["']?`)
 	genericSecretRegex = regexp.MustCompile(`(?i)(jwt_secret|jwt_key|jwtSecret|secret_key|secretKey|api_secret|apiSecret)["'\s:=]+["']?([^"'\s,]{10,100})["']?`)
 	// Stripe API keys: sk_live_ or sk_test_ followed by alphanumeric
 	stripeKeyRegex = regexp.MustCompile(`sk_(live|test)_[a-zA-Z0-9]{24,}`)
@@ -577,14 +581,14 @@ var (
 
 // Safe replacement values for API keys
 var (
-	safeAWSKey       = "[AWS-KEY-REDACTED]"
+	safeAWSKey        = "[AWS-KEY-REDACTED]"
 	safeAWSSecret     = "[AWS-SECRET-REDACTED]"
 	safeGenericSecret = "[SECRET-REDACTED]"
-	safeStripeKey   = "[STRIPE-KEY-REDACTED]"
-	safeGithubToken = "[GITHUB-TOKEN-REDACTED]"
-	safeSlackToken  = "[SLACK-TOKEN-REDACTED]"
-	safeOpenAIKey   = "[OPENAI-KEY-REDACTED]"
-	safeSendGridKey = "[SENDGRID-KEY-REDACTED]"
+	safeStripeKey     = "[STRIPE-KEY-REDACTED]"
+	safeGithubToken   = "[GITHUB-TOKEN-REDACTED]"
+	safeSlackToken    = "[SLACK-TOKEN-REDACTED]"
+	safeOpenAIKey     = "[OPENAI-KEY-REDACTED]"
+	safeSendGridKey   = "[SENDGRID-KEY-REDACTED]"
 )
 
 // replaceInternalURLPreservingPath replaces internal hostnames while preserving scheme, port, and path
@@ -1095,7 +1099,7 @@ func validateAPIKey(apiKey string) (*APIKeyInfo, error) {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	jsonData, _ := json.Marshal(map[string]string{"key": apiKey})
-	
+
 	resp, err := client.Post(
 		fmt.Sprintf("%s/api-keys/validate", adServiceURL),
 		"application/json",
@@ -1276,10 +1280,46 @@ func sanitizeText(text string, userWords []string, trackReplacements bool, filen
 		"user_words":      0,
 		"ip_addresses":    0,
 		"internal_urls":   0,
+		"hebrew_text":     0,
+		"ldap_content":    0,
 	}
 
 	result := text
-	// 0. Remove comment blocks (they may contain sensitive metadata)
+
+	// 0a. Redact entire lines containing LDAP content (DN patterns: cn=, ou=, dc=)
+	ldapLines := strings.Split(result, "\n")
+	ldapCount := 0
+	for i, line := range ldapLines {
+		if ldapRegex.MatchString(line) {
+			if trackReplacements {
+				recordReplacement("LDAP_Content", filename, i+1, line, "[LDAP-REDACTED]")
+			}
+			ldapLines[i] = "[LDAP-REDACTED]"
+			ldapCount++
+		}
+	}
+	result = strings.Join(ldapLines, "\n")
+	stats["ldap_content"] = ldapCount
+	if ldapCount > 0 {
+		log.Printf("[DEBUG] Pattern detection - LDAP content: %d lines redacted", ldapCount)
+	}
+
+	// 0b. Redact Hebrew characters
+	hebrewMatches := hebrewRegex.FindAllStringIndex(result, -1)
+	stats["hebrew_text"] = len(hebrewMatches)
+	if trackReplacements && len(hebrewMatches) > 0 {
+		for _, match := range hebrewMatches {
+			original := result[match[0]:match[1]]
+			lineNum := strings.Count(result[:match[0]], "\n") + 1
+			recordReplacement("Hebrew_Text", filename, lineNum, original, "[HEBREW-REDACTED]")
+		}
+	}
+	result = hebrewRegex.ReplaceAllString(result, "[HEBREW-REDACTED]")
+	if stats["hebrew_text"] > 0 {
+		log.Printf("[DEBUG] Pattern detection - Hebrew text: %d found", stats["hebrew_text"])
+	}
+
+	// 0c. Remove comment blocks (they may contain sensitive metadata)
 	// result = commentRegex.ReplaceAllString(result, "[COMMENT-REDACTED]")
 
 	// 1. Replace private keys
@@ -1990,7 +2030,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Authentication: Accept API key OR session cookie
 	username, isAPIKey, isAuthenticated := apiKeyOrSessionAuth(r)
-	
+
 	if !isAuthenticated {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -2082,7 +2122,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			filename := strings.ToLower(fileHeader.Filename)
 			isZip := ext == ".zip"
 			isTarGz := ext == ".tgz" || strings.HasSuffix(filename, ".tar.gz")
-			
+
 			if isZip || isTarGz {
 				archiveType := "ZIP"
 				if isTarGz {
@@ -3757,7 +3797,7 @@ func signingKeyPublicHandler(w http.ResponseWriter, r *http.Request) {
 		"public_key_pem": publicPEM,
 		"fingerprint":    fingerprint,
 		"algorithm":      "ECDSA P-256 (SHA-256)",
-		"verify_command":  fmt.Sprintf("openssl dgst -sha256 -verify public.pem -signature manifest.sig manifest.json"),
+		"verify_command": fmt.Sprintf("openssl dgst -sha256 -verify public.pem -signature manifest.sig manifest.json"),
 	})
 }
 
@@ -4025,11 +4065,11 @@ func jobVerifyAPIHandler(w http.ResponseWriter, r *http.Request) {
 	results["overall"] = overallStatus
 	results["approval_status"] = jobInfo.ApprovalStatus
 	results["checks"] = map[string]interface{}{
-		"file_integrity":       fileCheck,
-		"scan_signature":       scanCheck,
-		"file_hash_match":      hashCheck,
-		"approval_signature":   approvalCheck,
-		"chain_integrity":      chainCheck,
+		"file_integrity":     fileCheck,
+		"scan_signature":     scanCheck,
+		"file_hash_match":    hashCheck,
+		"approval_signature": approvalCheck,
+		"chain_integrity":    chainCheck,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -4512,7 +4552,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	detailedReplacements = []Replacement{}
 	replacementMutex.Unlock()
 	log.Printf("[WORKER] Cleared global caches for new job")
-	
+
 	// Fetch job info to get scan modes
 	var scanMode, codeScanMode string
 	var generateDetailedReport bool
@@ -4548,7 +4588,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		}
 	}
 	log.Printf("[WORKER] Job %s: scanMode=%s, codeScanMode=%s, detailedReport=%v", jobID, scanMode, codeScanMode, generateDetailedReport)
-	
+
 	// Update status to processing
 	updateJobStatus(jobID, "processing", 0, 0, "")
 	jobStartTime := time.Now()
@@ -4567,15 +4607,15 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		return fmt.Errorf("failed to read archive content: %v", err)
 	}
 	log.Printf("[WORKER] Downloaded archive for job %s (%d bytes)", jobID, len(archiveContent))
-	
+
 	// Extract files based on archive type (detect by magic bytes)
 	var extractedFiles []ExtractedFile
-	
+
 	// Check if it's a gzip file (magic bytes: 1f 8b)
 	isGzip := len(archiveContent) >= 2 && archiveContent[0] == 0x1f && archiveContent[1] == 0x8b
 	// Check if it's a ZIP file (magic bytes: 50 4b 03 04)
 	isZip := len(archiveContent) >= 4 && archiveContent[0] == 0x50 && archiveContent[1] == 0x4b && archiveContent[2] == 0x03 && archiveContent[3] == 0x04
-	
+
 	if isGzip {
 		// Handle tar.gz / tgz files
 		log.Printf("[WORKER] Detected gzip archive, extracting as tar.gz")
@@ -4584,7 +4624,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 			return fmt.Errorf("failed to create gzip reader: %v", err)
 		}
 		defer gzReader.Close()
-		
+
 		tarReader := tar.NewReader(gzReader)
 		for {
 			header, err := tarReader.Next()
@@ -4645,7 +4685,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	} else {
 		return fmt.Errorf("unsupported archive format (not ZIP or gzip)")
 	}
-	
+
 	log.Printf("[WORKER] Extracted %d files from job %s", len(extractedFiles), jobID)
 
 	// Create output ZIP (streaming approach to reduce memory)
@@ -4672,7 +4712,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 			return fmt.Errorf("job cancelled by user")
 		}
 		log.Printf("[WORKER] Sanitizing file %d/%d: %s (mode=%s)", i+1, len(extractedFiles), file.Name, scanMode)
-		
+
 		// Use appropriate sanitization function based on scan mode
 		var sanitizedContent string
 		var stats map[string]int
@@ -4681,7 +4721,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		} else {
 			sanitizedContent, stats = sanitizeText(file.Content, nil, generateDetailedReport, file.Name, "log")
 		}
-		
+
 		// Aggregate stats
 		totalStats["ip_addresses"] += stats["ip_addresses"]
 		if stats["total_ips"] > 0 {
@@ -4931,7 +4971,7 @@ func generateProcessingSummaryInMemory(jobID string, fileCount int, stats map[st
 			stats["private_keys"] + stats["passwords"] + stats["sensitive_terms"] + stats["user_words"],
 	}
 
-data, _ := json.MarshalIndent(summary, "", "  ")
+	data, _ := json.MarshalIndent(summary, "", "  ")
 	return string(data)
 }
 
