@@ -77,7 +77,8 @@ func initDB() error {
 		error_message TEXT,
 		scan_mode TEXT DEFAULT 'log',
 		code_scan_mode TEXT DEFAULT 'sanitize_safe',
-		generate_detailed_report INTEGER DEFAULT 0
+		generate_detailed_report INTEGER DEFAULT 0,
+		user_words TEXT DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_batch_jobs_username ON batch_jobs(username);
 	CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON batch_jobs(status);
@@ -114,6 +115,7 @@ func initDB() error {
 		"ALTER TABLE batch_jobs ADD COLUMN scan_mode TEXT DEFAULT 'log'",
 		"ALTER TABLE batch_jobs ADD COLUMN code_scan_mode TEXT DEFAULT 'sanitize_safe'",
 		"ALTER TABLE batch_jobs ADD COLUMN generate_detailed_report INTEGER DEFAULT 0",
+		"ALTER TABLE batch_jobs ADD COLUMN user_words TEXT DEFAULT ''",
 		"ALTER TABLE batch_jobs ADD COLUMN approval_status TEXT DEFAULT 'none'",
 		"ALTER TABLE batch_jobs ADD COLUMN approved_by TEXT",
 		"ALTER TABLE batch_jobs ADD COLUMN approved_at DATETIME",
@@ -743,6 +745,7 @@ func jobCreateHandler(w http.ResponseWriter, r *http.Request) {
 		ScanMode               string `json:"scan_mode"`
 		CodeScanMode           string `json:"code_scan_mode"`
 		GenerateDetailedReport bool   `json:"generate_detailed_report"`
+		UserWords              string `json:"user_words"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -764,9 +767,9 @@ func jobCreateHandler(w http.ResponseWriter, r *http.Request) {
 		detailedReportInt = 1
 	}
 	_, err := db.Exec(`INSERT INTO batch_jobs 
-		(job_id, username, status, input_path, output_path, scan_mode, code_scan_mode, generate_detailed_report) 
-		VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)`,
-		req.JobID, req.Username, req.InputPath, req.OutputPath, req.ScanMode, req.CodeScanMode, detailedReportInt)
+		(job_id, username, status, input_path, output_path, scan_mode, code_scan_mode, generate_detailed_report, user_words) 
+		VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+		req.JobID, req.Username, req.InputPath, req.OutputPath, req.ScanMode, req.CodeScanMode, detailedReportInt, req.UserWords)
 
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
@@ -808,16 +811,18 @@ func jobStatusHandler(w http.ResponseWriter, r *http.Request) {
 		ApprovalStatus         string  `json:"approval_status"`
 		ApprovedBy             *string `json:"approved_by"`
 		ApprovedAt             *string `json:"approved_at"`
+		UserWords              string  `json:"user_words"`
 	}
 	err := db.QueryRow(`SELECT job_id, username, status, total_files, processed_files, 
 		created_at, started_at, completed_at, input_path, output_path, error_message,
 		COALESCE(scan_mode, 'log'), COALESCE(code_scan_mode, 'sanitize_safe'), COALESCE(generate_detailed_report, 0),
-		COALESCE(approval_status, 'none'), approved_by, approved_at
+		COALESCE(approval_status, 'none'), approved_by, approved_at,
+		COALESCE(user_words, '')
 		FROM batch_jobs WHERE job_id = ?`, jobID).Scan(
 		&job.JobID, &job.Username, &job.Status, &job.TotalFiles, &job.ProcessedFiles,
 		&job.CreatedAt, &job.StartedAt, &job.CompletedAt, &job.InputPath, &job.OutputPath, &job.ErrorMessage,
 		&job.ScanMode, &job.CodeScanMode, &job.GenerateDetailedReport,
-		&job.ApprovalStatus, &job.ApprovedBy, &job.ApprovedAt)
+		&job.ApprovalStatus, &job.ApprovedBy, &job.ApprovedAt, &job.UserWords)
 
 	if err != nil {
 		http.NotFound(w, r)
