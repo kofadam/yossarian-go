@@ -108,6 +108,13 @@ type Replacement struct {
 	Sanitized string
 }
 
+// UserWord represents a single user-defined sensitive term plus its chosen replacement value.
+// Used by sanitizeText and sanitizeCodeFile to apply per-word replacements rather than a hard-coded marker.
+type UserWord struct {
+	Term        string
+	Replacement string
+}
+
 type ExtractedFile struct {
 	Name    string
 	Content string
@@ -1264,7 +1271,7 @@ func lookupADAccount(account string) string {
 	return result.USN
 }
 
-func sanitizeText(text string, userWords []string, trackReplacements bool, filename string, scanMode string) (string, map[string]int) {
+func sanitizeText(text string, userWords []UserWord, trackReplacements bool, filename string, scanMode string) (string, map[string]int) {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
 
@@ -1467,27 +1474,32 @@ func sanitizeText(text string, userWords []string, trackReplacements bool, filen
 	}
 
 	// 6. Replace user words
-	for _, word := range userWords {
-		if word != "" && len(word) > 2 {
+	for _, uw := range userWords {
+		term := uw.Term
+		replacement := uw.Replacement
+		if replacement == "" {
+			replacement = "[USER-SENSITIVE]"
+		}
+		if term != "" && len(term) > 2 {
 			// Find all occurrences
 			if trackReplacements {
 				startPos := 0
 				for {
-					idx := strings.Index(result[startPos:], word)
+					idx := strings.Index(result[startPos:], term)
 					if idx == -1 {
 						break
 					}
 					actualPos := startPos + idx
 					lineNum := strings.Count(result[:actualPos], "\n") + 1
-					recordReplacement("User_Word", filename, lineNum, word, "[USER-SENSITIVE]")
-					startPos = actualPos + len(word)
+					recordReplacement("User_Word", filename, lineNum, term, replacement)
+					startPos = actualPos + len(term)
 					stats["user_words"]++
 				}
 			} else {
-				count := strings.Count(result, word)
+				count := strings.Count(result, term)
 				stats["user_words"] += count
 			}
-			result = strings.ReplaceAll(result, word, "[USER-SENSITIVE]")
+			result = strings.ReplaceAll(result, term, replacement)
 		}
 	}
 	if stats["user_words"] > 0 {
@@ -1554,7 +1566,7 @@ func sanitizeText(text string, userWords []string, trackReplacements bool, filen
 
 // sanitizeCodeFile handles code-specific sanitization with safe replacement values
 // codeScanMode: "report_only" (detect only), "sanitize_safe" (replace with safe values), "sanitize_report" (both)
-func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, filename string, codeScanMode string) (string, map[string]int) {
+func sanitizeCodeFile(text string, userWords []UserWord, trackReplacements bool, filename string, codeScanMode string) (string, map[string]int) {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
 
@@ -1910,27 +1922,32 @@ func sanitizeCodeFile(text string, userWords []string, trackReplacements bool, f
 	}
 
 	// 7. Replace user words (same as log mode)
-	for _, word := range userWords {
-		if word != "" && len(word) > 2 {
+	for _, uw := range userWords {
+		term := uw.Term
+		replacement := uw.Replacement
+		if replacement == "" {
+			replacement = "[USER-SENSITIVE]"
+		}
+		if term != "" && len(term) > 2 {
 			if trackReplacements {
 				startPos := 0
 				for {
-					idx := strings.Index(result[startPos:], word)
+					idx := strings.Index(result[startPos:], term)
 					if idx == -1 {
 						break
 					}
 					actualPos := startPos + idx
 					lineNum := strings.Count(result[:actualPos], "\n") + 1
-					recordReplacement("User_Word", filename, lineNum, word, "[USER-SENSITIVE]")
-					startPos = actualPos + len(word)
+					recordReplacement("User_Word", filename, lineNum, term, replacement)
+					startPos = actualPos + len(term)
 					stats["user_words"]++
 				}
 			} else {
-				count := strings.Count(result, word)
+				count := strings.Count(result, term)
 				stats["user_words"] += count
 			}
 			if shouldReplace {
-				result = strings.ReplaceAll(result, word, "[USER-SENSITIVE]")
+				result = strings.ReplaceAll(result, term, replacement)
 			}
 		}
 	}
@@ -2103,14 +2120,39 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[INFO] Detailed replacement report requested by user=%s", username)
 	}
 
-	// Get user words from cookie
-	var userWords []string
+	// Get user words from cookie.
+	// New format (v0.x): JSON array of {term, replacement} objects, percent-encoded by the browser.
+	// Legacy format: comma-separated list of terms (replacement defaults to [USER-SENSITIVE]).
+	// We try JSON first, fall back to legacy for backward compatibility with stale cookies.
+	var userWords []UserWord
 	if cookie, err := r.Cookie("sensitive_words"); err == nil && cookie.Value != "" {
-		words := strings.Split(cookie.Value, ",")
-		for _, word := range words {
-			word = strings.TrimSpace(word)
-			if word != "" && len(word) > 1 {
-				userWords = append(userWords, word)
+		// Percent-decode in case the client sent a URL-encoded value (current JS behaviour).
+		// QueryUnescape is forgiving — if the value isn't encoded, it returns it unchanged
+		// unless it contains a stray %; in that case we fall back to the raw value.
+		decodedValue := cookie.Value
+		if dv, decodeErr := url.QueryUnescape(cookie.Value); decodeErr == nil {
+			decodedValue = dv
+		}
+		var parsed []UserWord
+		if jsonErr := json.Unmarshal([]byte(decodedValue), &parsed); jsonErr == nil {
+			for _, w := range parsed {
+				term := strings.TrimSpace(w.Term)
+				replacement := strings.TrimSpace(w.Replacement)
+				if replacement == "" {
+					replacement = "[USER-SENSITIVE]"
+				}
+				if term != "" && len(term) > 1 {
+					userWords = append(userWords, UserWord{Term: term, Replacement: replacement})
+				}
+			}
+		} else {
+			// Legacy fallback: comma-separated terms
+			words := strings.Split(cookie.Value, ",")
+			for _, word := range words {
+				word = strings.TrimSpace(word)
+				if word != "" && len(word) > 1 {
+					userWords = append(userWords, UserWord{Term: word, Replacement: "[USER-SENSITIVE]"})
+				}
 			}
 		}
 	}
@@ -2191,6 +2233,16 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 				// Create job record in database
 				shouldGenerateReport := codeScanMode == "report_only" || codeScanMode == "sanitize_report"
+				// Marshal user words as JSON so the worker can deserialize them
+				// when it picks up the job. Empty if no words → worker sees nil slice.
+				userWordsJSON := ""
+				if len(userWords) > 0 {
+					if b, err := json.Marshal(userWords); err == nil {
+						userWordsJSON = string(b)
+					} else {
+						log.Printf("[WARN] Could not marshal userWords for job %s: %v", jobID, err)
+					}
+				}
 				jobData := map[string]interface{}{
 					"job_id":                   jobID,
 					"username":                 username,
@@ -2199,6 +2251,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 					"scan_mode":                scanMode,
 					"code_scan_mode":           codeScanMode,
 					"generate_detailed_report": shouldGenerateReport,
+					"user_words":               userWordsJSON,
 				}
 
 				jsonData, _ := json.Marshal(jobData)
@@ -4556,6 +4609,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	// Fetch job info to get scan modes
 	var scanMode, codeScanMode string
 	var generateDetailedReport bool
+	var jobUserWords []UserWord
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("%s/jobs/status/%s", adServiceURL, jobID))
 	if err != nil {
@@ -4569,6 +4623,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 			ScanMode               string `json:"scan_mode"`
 			CodeScanMode           string `json:"code_scan_mode"`
 			GenerateDetailedReport int    `json:"generate_detailed_report"`
+			UserWords              string `json:"user_words"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
 			log.Printf("[WORKER] Warning: could not parse job info: %v, using defaults", err)
@@ -4585,9 +4640,14 @@ func processBatchJobFromMinIO(jobID, username string) error {
 				codeScanMode = "sanitize_safe"
 			}
 			generateDetailedReport = jobInfo.GenerateDetailedReport == 1
+			if jobInfo.UserWords != "" {
+				if err := json.Unmarshal([]byte(jobInfo.UserWords), &jobUserWords); err != nil {
+					log.Printf("[WORKER] Warning: could not parse user_words for job %s: %v", jobID, err)
+				}
+			}
 		}
 	}
-	log.Printf("[WORKER] Job %s: scanMode=%s, codeScanMode=%s, detailedReport=%v", jobID, scanMode, codeScanMode, generateDetailedReport)
+	log.Printf("[WORKER] Job %s: scanMode=%s, codeScanMode=%s, detailedReport=%v, userWords=%d", jobID, scanMode, codeScanMode, generateDetailedReport, len(jobUserWords))
 
 	// Update status to processing
 	updateJobStatus(jobID, "processing", 0, 0, "")
@@ -4717,9 +4777,9 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		var sanitizedContent string
 		var stats map[string]int
 		if scanMode == "code" {
-			sanitizedContent, stats = sanitizeCodeFile(file.Content, nil, generateDetailedReport, file.Name, codeScanMode)
+			sanitizedContent, stats = sanitizeCodeFile(file.Content, jobUserWords, generateDetailedReport, file.Name, codeScanMode)
 		} else {
-			sanitizedContent, stats = sanitizeText(file.Content, nil, generateDetailedReport, file.Name, "log")
+			sanitizedContent, stats = sanitizeText(file.Content, jobUserWords, generateDetailedReport, file.Name, "log")
 		}
 
 		// Aggregate stats

@@ -3169,13 +3169,20 @@
 
         function getPersonalWordsForSanitization() {
             const words = getPersonalWords();
-            return words.map(w => w.term).join(',');
+            // Send full term+replacement pairs as JSON so the server can use the user's chosen replacement value.
+            // Old format was a comma-separated list of terms only, which lost the replacement.
+            return JSON.stringify(words.map(w => ({
+                term: w.term,
+                replacement: w.replacement || '[USER-SENSITIVE]'
+            })));
         }
 
         function setCookie(name, value, days) {
             const expires = new Date();
             expires.setTime(expires.getTime() + (days * 24 * 60 * 60 * 1000));
-            document.cookie = name + '=' + value + ';expires=' + expires.toUTCString() + ';path=/';
+            // Percent-encode the value so characters like " , ; = (common in JSON payloads)
+            // pass through Go's RFC 6265 cookie parser, which otherwise drops the cookie entirely.
+            document.cookie = name + '=' + encodeURIComponent(value) + ';expires=' + expires.toUTCString() + ';path=/';
         }
 
         function displayResults() {
