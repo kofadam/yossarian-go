@@ -64,6 +64,9 @@ var swaggerUIPresetJS []byte
 //go:embed static/platform-ui.css
 var platformUICSS []byte
 
+//go:embed static/fonts/InterVariable.woff2
+var interVariableWoff2 []byte
+
 // User info structure for future OIDC
 type UserInfo struct {
 	Email   string
@@ -5233,6 +5236,10 @@ func platformUIAssetsHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		w.Write(platformUICSS)
+	case "fonts/InterVariable.woff2":
+		w.Header().Set("Content-Type", "font/woff2")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Write(interVariableWoff2)
 	default:
 		http.NotFound(w, r)
 	}

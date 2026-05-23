@@ -13,7 +13,8 @@ RUN go mod download
 COPY *.go ./
 COPY templates/ ./templates/
 COPY docs/swagger-ui.html docs/swagger-ui.css docs/swagger-ui-bundle.js docs/swagger-ui-standalone-preset.js ./docs/
-COPY static/ ./static/
+COPY static/platform-ui.css ./static/
+COPY static/fonts/InterVariable.woff2 ./static/fonts/
 COPY openapi.yaml ./
 
 # Build the application with version information
