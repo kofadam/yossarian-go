@@ -61,6 +61,9 @@ var swaggerUIBundleJS []byte
 //go:embed docs/swagger-ui-standalone-preset.js
 var swaggerUIPresetJS []byte
 
+//go:embed static/platform-ui.css
+var platformUICSS []byte
+
 // User info structure for future OIDC
 type UserInfo struct {
 	Email   string
@@ -5221,6 +5224,20 @@ func swaggerUIAssetsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Platform UI static assets handler
+func platformUIAssetsHandler(w http.ResponseWriter, r *http.Request) {
+	asset := strings.TrimPrefix(r.URL.Path, "/static/")
+
+	switch asset {
+	case "platform-ui.css":
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Write(platformUICSS)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -5273,6 +5290,9 @@ func main() {
 	http.HandleFunc("/docs", swaggerUIHandler)
 	http.HandleFunc("/docs/", swaggerUIAssetsHandler)
 	http.HandleFunc("/api/openapi.yaml", openapiHandler)
+
+	// Static assets (CSS, JS) - must be before "/" handler
+	http.HandleFunc("/static/", platformUIAssetsHandler)
 
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/health", mainHealthHandler)

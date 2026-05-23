@@ -5,43 +5,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Panel - Yossarian Go</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+    <link rel="stylesheet" href="/static/platform-ui.css">
     <style>
-        /* Material Design 3 - Matching SPA */
+        /* Yossarian Admin — re-tokenized against platform-ui.css
+           Class names preserved from MD3 era for minimal markup churn. */
         :root {
-            --md-primary: #1976d2;
-            --md-primary-container: #d3e4f7;
-            --md-on-primary: #ffffff;
-            --md-on-primary-container: #001d36;
-            
-            --md-secondary: #535f70;
-            --md-secondary-container: #d7e3f7;
-            
-            --md-surface: #fdfbff;
-            --md-surface-1: #f4f8fd;
-            --md-surface-2: #eff3f9;
-            --md-surface-3: #eaeef4;
-            --md-surface-4: #e8ecf2;
-            --md-surface-5: #e5e9ef;
-            
-            --md-on-surface: #1a1c1e;
-            --md-on-surface-variant: #42474e;
-            
-            --md-outline: #72777f;
-            --md-outline-variant: #c2c7cf;
-            
-            --md-success: #2e7d32;
-            --md-warning: #f57c00;
-            --md-error: #ba1a1a;
-            
-            --md-elevation-1: 0 1px 2px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.1);
-            --md-elevation-2: 0 1px 3px rgba(0,0,0,0.05), 0 2px 6px rgba(0,0,0,0.1);
-            --md-elevation-3: 0 4px 8px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06);
+            /* MD3 → platform-ui token bridge (for legacy var() references below) */
+            --md-primary:                var(--accent);
+            --md-primary-container:      var(--accent-light);
+            --md-on-primary:             #ffffff;
+            --md-on-primary-container:   var(--accent-hover);
+
+            --md-secondary-container:    var(--accent-light);
+
+            --md-surface:                var(--surface);
+            --md-surface-1:              var(--surface2);
+            --md-surface-2:              var(--surface3);
+            --md-surface-3:              var(--border);
+
+            --md-on-surface:             var(--text);
+            --md-on-surface-variant:     var(--text3);
+
+            --md-outline:                var(--text4);
+            --md-outline-variant:        var(--border);
+
+            --md-success:                var(--green);
+            --md-warning:                var(--yellow);
+            --md-error:                  var(--red);
+
+            --md-elevation-1:            var(--shadow-sm);
+            --md-elevation-2:            var(--shadow);
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: var(--font-sans);
             background: var(--md-surface);
             color: var(--md-on-surface);
             line-height: 1.5;
@@ -308,7 +305,7 @@
         }
 
         .md-button-filled:hover {
-            background: #1565c0;
+            background: var(--accent-hover);
             box-shadow: var(--md-elevation-2);
         }
 
@@ -327,21 +324,21 @@
             color: white;
         }
 
-        .md-button-success:hover { background: #1b5e20; }
+        .md-button-success:hover { background: #15803d; }
 
         .md-button-warning {
             background: var(--md-warning);
             color: white;
         }
 
-        .md-button-warning:hover { background: #e65100; }
+        .md-button-warning:hover { background: #b45309; }
 
         .md-button-error {
             background: var(--md-error);
             color: white;
         }
 
-        .md-button-error:hover { background: #7f0000; }
+        .md-button-error:hover { background: #b91c1c; }
 
         .md-button-sm {
             padding: 8px 16px;
@@ -359,10 +356,10 @@
             font-weight: 500;
         }
 
-        .health-indicator.healthy { background: #e8f5e9; color: var(--md-success); }
-        .health-indicator.warning { background: #fff3e0; color: var(--md-warning); }
-        .health-indicator.error { background: #ffebee; color: var(--md-error); }
-        .health-indicator.info { background: #e3f2fd; color: var(--md-primary); }
+        .health-indicator.healthy { background: var(--green-light); color: var(--md-success); }
+        .health-indicator.warning { background: var(--yellow-light); color: var(--md-warning); }
+        .health-indicator.error   { background: var(--red-light);    color: var(--md-error); }
+        .health-indicator.info    { background: var(--accent-light); color: var(--md-primary); }
 
         /* Tables */
         .table-container {
@@ -405,7 +402,7 @@
             padding: 4px 8px;
             border-radius: 6px;
             font-size: 13px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-family: var(--font-mono);
         }
 
         /* Form Controls */
@@ -435,7 +432,7 @@
         .form-input:focus {
             outline: none;
             border-color: var(--md-primary);
-            box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
         }
 
         .form-input::placeholder { color: var(--md-outline); }
@@ -443,7 +440,7 @@
         textarea.form-input {
             resize: vertical;
             min-height: 120px;
-            font-family: 'SF Mono', Monaco, monospace;
+            font-family: var(--font-mono);
         }
 
         .form-checkbox {
@@ -480,19 +477,19 @@
         .status-message.visible { display: flex; align-items: center; gap: 12px; }
 
         .status-message.success {
-            background: #e8f5e9;
+            background: var(--green-light);
             color: var(--md-success);
             border-left: 4px solid var(--md-success);
         }
 
         .status-message.error {
-            background: #ffebee;
+            background: var(--red-light);
             color: var(--md-error);
             border-left: 4px solid var(--md-error);
         }
 
         .status-message.info {
-            background: #e3f2fd;
+            background: var(--accent-light);
             color: var(--md-primary);
             border-left: 4px solid var(--md-primary);
         }
@@ -545,7 +542,7 @@
         .system-item-value {
             font-size: 13px;
             font-weight: 500;
-            font-family: 'SF Mono', Monaco, monospace;
+            font-family: var(--font-mono);
         }
 
         /* Button Groups */
