@@ -39,146 +39,170 @@
 
         body {
             font-family: var(--font-sans);
-            background: var(--md-surface);
-            color: var(--md-on-surface);
+            background: var(--surface);
+            color: var(--text);
             line-height: 1.5;
             overflow-x: hidden;
         }
 
-        /* Layout Container */
-        .app-container {
-            display: grid;
-            grid-template-columns: 280px 1fr;
-            min-height: 100vh;
-        }
-
-        /* Navigation Rail */
-        .nav-rail {
-            background: var(--md-surface-1);
-            border-right: 1px solid var(--md-outline-variant);
-            display: flex;
-            flex-direction: column;
+        /* ============================================================
+           Top header (platform-ui style)
+           ============================================================ */
+        .pf-header {
             position: sticky;
             top: 0;
-            height: 100vh;
             z-index: 100;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: saturate(180%) blur(6px);
         }
 
-        .nav-header {
-            padding: 24px 20px;
-            border-bottom: 1px solid var(--md-outline-variant);
-        }
-
-        .nav-brand {
+        .pf-header-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 var(--space-5);
+            height: 56px;
             display: flex;
             align-items: center;
-            gap: 12px;
-            font-size: 20px;
-            font-weight: 500;
-            color: var(--md-primary);
+            gap: var(--space-5);
         }
 
-        .nav-brand-icon { font-size: 32px; }
-
-        .nav-brand-badge {
-            background: var(--md-error);
-            color: white;
-            font-size: 10px;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-weight: 600;
-            margin-left: 8px;
-        }
-
-        .nav-items {
-            flex: 1;
-            padding: 16px 8px;
-            overflow-y: auto;
-        }
-
-        .nav-section-title {
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--md-on-surface-variant);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            padding: 16px 16px 8px;
-            margin-top: 8px;
-        }
-
-        .nav-item {
-            display: flex;
+        .pf-brand {
+            display: inline-flex;
             align-items: center;
-            gap: 16px;
-            padding: 12px 16px;
-            margin-bottom: 4px;
-            border-radius: 28px;
-            cursor: pointer;
-            transition: all 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
-            color: var(--md-on-surface-variant);
-            font-size: 14px;
-            font-weight: 500;
+            gap: var(--space-2);
             text-decoration: none;
+            color: var(--text);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .pf-brand-logo {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            background: var(--accent);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+
+        .pf-brand-name {
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .pf-brand-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 6px;
+            border-radius: 6px;
+            background: var(--red-light);
+            color: var(--red);
+            font-size: 0.65rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .pf-nav {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            flex: 1;
+            min-width: 0;
+            overflow-x: auto;
+        }
+
+        .pf-nav .nav-item {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text3);
+            text-decoration: none;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background-color 120ms ease, color 120ms ease;
             user-select: none;
         }
 
-        .nav-item:hover { background: var(--md-surface-3); }
-
-        .nav-item.active {
-            background: var(--md-secondary-container);
-            color: var(--md-on-primary-container);
+        .pf-nav .nav-item:hover {
+            background: var(--surface2);
+            color: var(--text);
         }
 
-        .nav-item-icon {
-            font-size: 24px;
-            width: 24px;
-            text-align: center;
+        .pf-nav .nav-item.active {
+            background: var(--accent-light);
+            color: var(--accent-hover);
         }
 
-        .nav-footer {
-            padding: 16px;
-            border-top: 1px solid var(--md-outline-variant);
-        }
-
-        .user-info {
-            display: flex;
+        .pf-user {
+            display: inline-flex;
             align-items: center;
-            gap: 12px;
-            padding: 12px;
-            border-radius: 12px;
-            background: var(--md-surface-2);
+            gap: var(--space-3);
+            white-space: nowrap;
         }
 
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: var(--md-primary);
-            color: white;
-            display: flex;
+        .pf-user-meta {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-2);
+            font-size: 0.8rem;
+            color: var(--text3);
+        }
+
+        .pf-user-avatar {
+            display: inline-flex;
             align-items: center;
             justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: var(--accent);
+            color: #fff;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+
+        .pf-user-name {
             font-weight: 600;
+            color: var(--text);
         }
 
-        .user-details { flex: 1; min-width: 0; }
-
-        .user-name {
-            font-size: 14px;
-            font-weight: 500;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+        .pf-user-dot {
+            color: var(--text4);
         }
 
-        .user-role {
-            font-size: 12px;
-            color: var(--md-on-surface-variant);
+        .pf-user-role {
+            font-size: 0.75rem;
         }
 
-        /* Main Content Area */
+        .pf-user-link {
+            font-size: 0.8rem;
+            color: var(--text3);
+            text-decoration: none;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: background-color 120ms ease, color 120ms ease;
+        }
+
+        .pf-user-link:hover {
+            background: var(--surface2);
+            color: var(--text);
+        }
+
+        /* ============================================================
+           Main content area
+           ============================================================ */
         .main-content {
-            background: var(--md-surface);
+            background: var(--surface);
             position: relative;
         }
 
@@ -596,112 +620,51 @@
 
         /* Responsive */
         @media (max-width: 900px) {
-            .app-container {
-                grid-template-columns: 1fr;
+            .pf-header-inner {
+                padding: 0 var(--space-3);
+                gap: var(--space-3);
             }
 
-            .nav-rail {
-                position: fixed;
-                bottom: 0;
-                left: 0;
-                right: 0;
-                height: auto;
-                flex-direction: row;
-                border-right: none;
-                border-top: 1px solid var(--md-outline-variant);
-                z-index: 1000;
-            }
+            .pf-brand-name { display: none; }
+            .pf-user-meta { display: none; }
 
-            .nav-header, .nav-footer { display: none; }
-
-            .nav-items {
-                display: flex;
-                justify-content: space-around;
-                padding: 8px;
-                overflow-x: auto;
-            }
-
-            .nav-item {
-                flex-direction: column;
-                padding: 8px 12px;
-                font-size: 11px;
-                gap: 4px;
-                border-radius: 12px;
-            }
-
-            .nav-item-icon { font-size: 20px; }
-
-            .main-content { padding-bottom: 80px; }
-
-            .panel { padding: 20px; }
-
+            .panel { padding: var(--space-4); }
             .stats-grid { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
 <body>
-    <div class="app-container">
-        <!-- Navigation Rail -->
-        <nav class="nav-rail">
-            <div class="nav-header">
-                <div class="nav-brand">
-                    <span class="nav-brand-icon">🛡️</span>
-                    <span>Yossarian</span>
-                    <span class="nav-brand-badge">ADMIN</span>
-                </div>
-            </div>
-            
-            <div class="nav-items">
-                <a class="nav-item active" data-panel="dashboard">
-                    <span class="nav-item-icon">📊</span>
-                    <span>Dashboard</span>
-                </a>
-                <a class="nav-item" data-panel="ad-accounts">
-                    <span class="nav-item-icon">👥</span>
-                    <span>AD Accounts</span>
-                </a>
-                <a class="nav-item" data-panel="sensitive-terms">
-                    <span class="nav-item-icon">🔒</span>
-                    <span>Sensitive Terms</span>
-                </a>
-                <a class="nav-item" data-panel="organization">
-                    <span class="nav-item-icon">🏢</span>
-                    <span>Organization</span>
-                </a>
-                
-                <div class="nav-section-title">System</div>
-                
-                <a class="nav-item" data-panel="system">
-                    <span class="nav-item-icon">⚙️</span>
-                    <span>System Info</span>
-                </a>
-                <a class="nav-item" data-panel="api-keys">
-                    <span class="nav-item-icon">🔑</span>
-                    <span>API Keys</span>
-                </a>
-            </div>
-            
-            <div class="nav-footer">
-                <div class="user-info">
-                    <div class="user-avatar" id="userAvatar">A</div>
-                    <div class="user-details">
-                        <div class="user-name" id="userName">Administrator</div>
-                        <div class="user-role" id="userRole">Admin</div>
-                    </div>
-                </div>
-                <div style="margin-top: 12px; display: flex; gap: 8px;">
-                    <a href="/" class="md-button md-button-outlined md-button-sm" style="flex: 1; justify-content: center;">
-                        🏠 Main App
-                    </a>
-                    <a href="/admin/logout" class="md-button md-button-outlined md-button-sm" style="flex: 1; justify-content: center;">
-                        🚪 Logout
-                    </a>
-                </div>
-            </div>
-        </nav>
+    <header class="pf-header">
+        <div class="pf-header-inner">
+            <a class="pf-brand" href="/admin">
+                <span class="pf-brand-logo">YO</span>
+                <span class="pf-brand-name">Yossarian</span>
+                <span class="pf-brand-chip">ADMIN</span>
+            </a>
 
-        <!-- Main Content -->
-        <main class="main-content">
+            <nav class="pf-nav">
+                <a class="nav-item active" data-panel="dashboard">Dashboard</a>
+                <a class="nav-item" data-panel="ad-accounts">AD Accounts</a>
+                <a class="nav-item" data-panel="sensitive-terms">Sensitive Terms</a>
+                <a class="nav-item" data-panel="organization">Organization</a>
+                <a class="nav-item" data-panel="system">System Info</a>
+                <a class="nav-item" data-panel="api-keys">API Keys</a>
+            </nav>
+
+            <div class="pf-user">
+                <span class="pf-user-meta">
+                    <span class="pf-user-avatar" id="userAvatar">A</span>
+                    <span class="pf-user-name" id="userName">Administrator</span>
+                    <span class="pf-user-dot">·</span>
+                    <span class="pf-user-role" id="userRole">Admin</span>
+                </span>
+                <a class="pf-user-link" href="/">Main App</a>
+                <a class="pf-user-link" href="/admin/logout">Logout</a>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
             <!-- Dashboard Panel -->
             <div id="dashboard" class="panel active">
                 <div class="panel-header">
@@ -1158,7 +1121,6 @@ X-API-Key: yoss_your_api_key_here</code>
                 </div>
             </div>
         </main>
-    </div>
 
     <script>
         // ============================================
