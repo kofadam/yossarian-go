@@ -551,9 +551,36 @@ var (
 var (
 	ipRegex          = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
 	internalURLRegex = regexp.MustCompile(`https?://(?:localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})[^\s"'<>]*`)
-	adRegex          = regexp.MustCompile(`\b[A-Z0-9-]+\\[a-zA-Z0-9._-]{4,15}\b|\b[a-zA-Z0-9._-]{4,15}@[a-zA-Z0-9.-]+\b|\b[A-Z0-9-]{4,15}\$\b|\b(?:A-M|B-P|D-[1-9CKLMQT]|H-[FP]|J-P|L-[1-9P]|S-C|T-[CL])-[A-Za-z0-9-]{6,11}\b|\bD-PC-[A-Za-z0-9-]{5,10}\b|\b(?:a-m|b-p|d-[1-9cklmqt]|h-[fp]|j-p|l-[1-9p]|s-c|t-[cl])-[a-zA-Z0-9-]{6,11}\b|\bd-pc-[a-zA-Z0-9-]{5,10}\b|\b(?:dvd|til|DVD|TIL)[0-9a-zA-Z]{1,20}\b|\\\\([A-Z0-9-]+)\\|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]{4,15})\\|\\Users\\([a-zA-Z0-9._-]{4,15})\\|/([a-zA-Z0-9._-]{4,15})/`)
-	jwtRegex         = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
-	privateKeyRegex  = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
+	// AD account candidates. Assembled from parts for legibility.
+	//
+	// Two fixes over the previous single-line version:
+	//   - domain forms are now case-insensitive and tolerate JSON-escaped
+	//     backslashes, so mydomain\\user in an audit log is matched
+	//   - the bare /segment/ alternative is anchored to share-path context.
+	//     Unanchored it matched every path component, producing ~88k
+	//     candidates per file in a Kubernetes bundle for zero confirmations.
+	adRegex = regexp.MustCompile(
+		// DOMAIN\user (case-insensitive, one or two backslashes)
+		`(?i)\b[a-z0-9-]{2,20}\\{1,2}[a-z0-9._-]{4,15}\b` +
+			// user@domain
+			`|(?i)\b[a-z0-9._-]{4,15}@[a-z0-9.-]+\b` +
+			// Machine accounts: HOST$
+			`|\b[A-Z0-9-]{4,15}\$\b` +
+			// Site naming conventions
+			`|\b(?:A-M|B-P|D-[1-9CKLMQT]|H-[FP]|J-P|L-[1-9P]|S-C|T-[CL])-[A-Za-z0-9-]{6,11}\b` +
+			`|\bD-PC-[A-Za-z0-9-]{5,10}\b` +
+			`|\b(?:a-m|b-p|d-[1-9cklmqt]|h-[fp]|j-p|l-[1-9p]|s-c|t-[cl])-[a-zA-Z0-9-]{6,11}\b` +
+			`|\bd-pc-[a-zA-Z0-9-]{5,10}\b` +
+			`|\b(?:dvd|til|DVD|TIL)[0-9a-zA-Z]{1,20}\b` +
+			// UNC paths
+			`|\\\\([A-Z0-9-]+)\\` +
+			`|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]{4,15})\\` +
+			`|(?i)\\Users\\([a-z0-9._-]{4,15})\\` +
+			// SMB share paths: /mnt/shares/<share>/<user>/ and //server/share/<user>/
+			`|(?i)/mnt/[a-z0-9._-]+/[a-z0-9._-]+/([a-z0-9._-]{4,15})/` +
+			`|(?i)//[a-z0-9._-]+/[a-z0-9._-]+/([a-z0-9._-]{4,15})/`)
+	jwtRegex        = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
+	privateKeyRegex = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
 	// URL credentials only — anchored to a scheme so it cannot match image
 	// digests (registry:5000/path@sha256:...), Go module paths, or
 	// service-account strings. Capture group 1 is the credential to redact.
@@ -735,6 +762,25 @@ func loadServerPrefixes() {
 		serverRegex = nil
 		log.Printf("No server prefixes configured")
 	}
+}
+
+// normalizeADCandidate turns a matched candidate into a lookup key.
+//
+// Candidates arrive in several shapes: bare "user", UPN "user@domain",
+// downlevel "DOMAIN\user", and JSON-escaped "DOMAIN\\user". The account
+// table stores bare, UPN, and single-backslash forms, so a JSON-escaped
+// candidate never matched anything — the form Kubernetes audit logs use
+// for Pinniped/SSO identities.
+//
+// Reducing to the bare sAMAccountName is the most reliable key, since it
+// is present for every account regardless of how the candidate was written.
+func normalizeADCandidate(account string) string {
+	s := strings.ToLower(strings.TrimSpace(account))
+	s = strings.ReplaceAll(s, `\\`, `\`)
+	if i := strings.LastIndex(s, `\`); i >= 0 && i+1 < len(s) {
+		s = s[i+1:]
+	}
+	return s
 }
 
 // getHostPlaceholder returns a stable placeholder for a hostname or FQDN.
@@ -1503,7 +1549,7 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 			matchPos := adCandidates[matchIndex]
 			matchIndex++
 			// Always normalize to lowercase for consistent cache lookups
-			normalizedAccount := strings.ToLower(account)
+			normalizedAccount := normalizeADCandidate(account)
 
 			// Check cache first
 			cacheMutex.RLock()
