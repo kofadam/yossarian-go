@@ -399,6 +399,19 @@ var (
 	ipCounter  = 1
 	mapMutex   sync.Mutex
 
+	// Stable placeholders for hostnames and FQDNs, mirroring the ipMappings
+	// pattern so the same host resolves to the same token across every file
+	// in a job. Guarded by mapMutex.
+	hostMappings = make(map[string]string)
+	hostCounter  = 1
+
+	// Organization-owned DNS domains (ORG_DOMAINS, comma-separated).
+	// Any FQDN ending in one of these is redacted in full, hostname label
+	// included. Note this is deliberately NOT ".local" matching — k8s
+	// service DNS (svc.cluster.local) must survive untouched.
+	orgDomains     []string
+	orgDomainRegex *regexp.Regexp
+
 	// Admin configuration
 	adminPassword     string
 	sensitiveTermsOrg []string
@@ -706,6 +719,52 @@ func loadServerPrefixes() {
 	}
 }
 
+// getHostPlaceholder returns a stable placeholder for a hostname or FQDN.
+// Caller MUST hold mapMutex (sanitizeText and sanitizeCodeFile both do).
+func getHostPlaceholder(host string) string {
+	key := strings.ToLower(host)
+	if existing, exists := hostMappings[key]; exists {
+		return existing
+	}
+	placeholder := fmt.Sprintf("[HOST-%04d]", hostCounter)
+	hostMappings[key] = placeholder
+	hostCounter++
+	return placeholder
+}
+
+// loadOrgDomains builds the FQDN regex from ORG_DOMAINS. Matching requires at
+// least one label before the domain, so a bare domain reference still falls
+// through to the sensitive-terms rule and becomes [ORG].
+func loadOrgDomains() {
+	orgDomainsEnv := os.Getenv("ORG_DOMAINS")
+	orgDomains = []string{}
+	orgDomainRegex = nil
+	if orgDomainsEnv == "" {
+		log.Printf("No organization domains configured")
+		return
+	}
+
+	var escaped []string
+	for _, d := range strings.Split(orgDomainsEnv, ",") {
+		d = strings.ToLower(strings.TrimSpace(d))
+		d = strings.TrimPrefix(d, ".")
+		if d == "" {
+			continue
+		}
+		orgDomains = append(orgDomains, d)
+		escaped = append(escaped, regexp.QuoteMeta(d))
+	}
+	if len(escaped) == 0 {
+		return
+	}
+
+	pattern := fmt.Sprintf(
+		`(?i)\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:%s)\b`,
+		strings.Join(escaped, "|"))
+	orgDomainRegex = regexp.MustCompile(pattern)
+	log.Printf("Loaded %d organization domain(s) for FQDN redaction", len(orgDomains))
+}
+
 func loadSensitiveTermsFromConfigMap() {
 	sensitiveTermsEnv := os.Getenv("SENSITIVE_TERMS")
 	if sensitiveTermsEnv != "" {
@@ -797,6 +856,9 @@ func init() {
 
 	// Load sensitive terms from database (legacy ConfigMap as fallback)
 	loadSensitiveTerms()
+
+	// Load organization DNS domains for whole-FQDN redaction
+	loadOrgDomains()
 
 	// Load server prefixes from ConfigMap
 	loadServerPrefixes()
@@ -1289,6 +1351,8 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 		"internal_urls":   0,
 		"hebrew_text":     0,
 		"ldap_content":    0,
+		"server_names":    0,
+		"org_fqdns":       0,
 	}
 
 	result := text
@@ -1430,14 +1494,51 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 			adCandidateCount, stats["ad_accounts"], stats["ad_cache_hits"], stats["ad_cache_misses"])
 	}
 
-	// 4b. Replace server accounts with dynamic prefix matching
+	// 4b. Replace server names matching the configured prefix convention.
+	// Previously this was gated on an AD lookup succeeding, which meant any
+	// host without a computer account (Linux, appliances) matched the pattern
+	// and was then returned verbatim. AD is now preferred but no longer
+	// required — a miss falls back to a stable placeholder.
 	if serverRegex != nil {
-		result = serverRegex.ReplaceAllStringFunc(result, func(account string) string {
-			normalizedAccount := strings.ToLower(account)
-			if usn := lookupADAccountCached(normalizedAccount); usn != "" {
-				return usn
+		serverMatches := serverRegex.FindAllStringIndex(result, -1)
+		matchIndexServer := 0
+		result = serverRegex.ReplaceAllStringFunc(result, func(host string) string {
+			matchPos := serverMatches[matchIndexServer]
+			matchIndexServer++
+
+			replacement := lookupADAccountCached(strings.ToLower(host))
+			if replacement == "" {
+				replacement = getHostPlaceholder(host)
 			}
-			return account
+			stats["server_names"]++
+
+			if trackReplacements {
+				lineNum := strings.Count(result[:matchPos[0]], "\n") + 1
+				recordReplacement("Server_Name", filename, lineNum, host, replacement)
+			}
+			return replacement
+		})
+	}
+
+	// 4c. Replace FQDNs in organization-owned domains.
+	// MUST run before the sensitive-terms pass: that pass matches the bare
+	// domain and would rewrite host.corp.example.local into host.[ORG],
+	// publishing the hostname label while redacting only the domain.
+	if orgDomainRegex != nil {
+		orgMatches := orgDomainRegex.FindAllStringIndex(result, -1)
+		matchIndexOrg := 0
+		result = orgDomainRegex.ReplaceAllStringFunc(result, func(fqdn string) string {
+			matchPos := orgMatches[matchIndexOrg]
+			matchIndexOrg++
+
+			placeholder := getHostPlaceholder(fqdn)
+			stats["org_fqdns"]++
+
+			if trackReplacements {
+				lineNum := strings.Count(result[:matchPos[0]], "\n") + 1
+				recordReplacement("Org_FQDN", filename, lineNum, fqdn, placeholder)
+			}
+			return placeholder
 		})
 	}
 
@@ -4594,6 +4695,8 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	mapMutex.Lock()
 	ipMappings = make(map[string]string)
 	ipCounter = 1
+	hostMappings = make(map[string]string)
+	hostCounter = 1
 	mapMutex.Unlock()
 
 	cacheMutex.Lock()
