@@ -2282,11 +2282,14 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			filename := strings.ToLower(fileHeader.Filename)
 			isZip := ext == ".zip"
 			isTarGz := ext == ".tgz" || strings.HasSuffix(filename, ".tar.gz")
+			isTar := ext == ".tar"
 
-			if isZip || isTarGz {
+			if isZip || isTarGz || isTar {
 				archiveType := "ZIP"
 				if isTarGz {
 					archiveType = "tar.gz"
+				} else if isTar {
+					archiveType = "tar"
 				}
 				log.Printf("[FRONTEND] %s file detected: %s - uploading to MinIO", archiveType, fileHeader.Filename)
 				file, err := fileHeader.Open()
@@ -2295,59 +2298,24 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "Failed to read archive file", http.StatusInternalServerError)
 					return
 				}
-				// Read archive content
-				archiveContent, err := io.ReadAll(file)
-				file.Close()
-				if err != nil {
-					log.Printf("[ERROR] Failed to read archive: %v", err)
-					http.Error(w, "Failed to read archive file", http.StatusInternalServerError)
-					return
-				}
 				// Generate job ID
 				jobID := generateJobID(username)
 				ctx := context.Background()
-				// Upload to MinIO (always as input.zip for consistency, we detect type by content)
+				// Stream straight to MinIO. Multipart files above the parser's
+				// memory threshold are already spooled to disk, so this never
+				// holds the archive in the pod's heap.
 				objectName := fmt.Sprintf("%s/%s/input.zip", username, jobID)
-				if err := uploadToMinIO(ctx, objectName, bytes.NewReader(archiveContent), int64(len(archiveContent))); err != nil {
+				if err := uploadToMinIO(ctx, objectName, file, fileHeader.Size); err != nil {
+					file.Close()
 					log.Printf("[ERROR] Failed to upload to MinIO: %v", err)
 					http.Error(w, "Failed to upload file", http.StatusInternalServerError)
 					return
 				}
-				// Count files in archive
-				var totalFiles int
-				if isZip {
-					zipReader, err := zip.NewReader(bytes.NewReader(archiveContent), int64(len(archiveContent)))
-					if err != nil {
-						log.Printf("[ERROR] Failed to read ZIP: %v", err)
-						http.Error(w, "Invalid ZIP file", http.StatusBadRequest)
-						return
-					}
-					totalFiles = len(zipReader.File)
-				} else {
-					// Count files in tar.gz
-					gzReader, err := gzip.NewReader(bytes.NewReader(archiveContent))
-					if err != nil {
-						log.Printf("[ERROR] Failed to read gzip: %v", err)
-						http.Error(w, "Invalid tar.gz file", http.StatusBadRequest)
-						return
-					}
-					tarReader := tar.NewReader(gzReader)
-					for {
-						header, err := tarReader.Next()
-						if err == io.EOF {
-							break
-						}
-						if err != nil {
-							log.Printf("[ERROR] Failed to read tar: %v", err)
-							http.Error(w, "Invalid tar.gz file", http.StatusBadRequest)
-							return
-						}
-						if header.Typeflag == tar.TypeReg {
-							totalFiles++
-						}
-					}
-					gzReader.Close()
-				}
+				file.Close()
+				// File count is discovered by the worker during its harvest
+				// pass — the old pre-count only saw top-level entries, which
+				// for a nested bundle reports 3 instead of several thousand.
+				totalFiles := 0
 
 				// Create job record in database
 				shouldGenerateReport := codeScanMode == "report_only" || codeScanMode == "sanitize_report"
@@ -2618,6 +2586,21 @@ func downloadDetailedReportHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[AUDIT] Detailed report downloaded: user=%s, replacements=%d, size_kb=%.2f",
 		username, len(detailedReplacements), float64(reportSize)/1024)
+}
+
+// resolveOutputObject returns the MinIO key of a job's sanitized artifact.
+// Jobs created before format-mirroring always used output.zip; tar-container
+// jobs use output.tar. Tries tar first, falls back to zip.
+func resolveOutputObject(ctx context.Context, username, jobID string) (string, error) {
+	for _, name := range []string{"output.tar", "output.zip"} {
+		candidate := fmt.Sprintf("%s/%s/%s", username, jobID, name)
+		obj, err := downloadFromMinIO(ctx, candidate)
+		if err == nil {
+			obj.Close()
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no output artifact found for job %s", jobID)
 }
 
 // ===== Hostname harvest =====
@@ -4071,8 +4054,13 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Download the sanitized output.zip from MinIO
-	minioPath := fmt.Sprintf("%s/%s/output.zip", jobInfo.Username, jobID)
+	// Download the sanitized artifact from MinIO (.tar or .zip)
+	minioPath, resolveErr := resolveOutputObject(context.Background(), jobInfo.Username, jobID)
+	if resolveErr != nil {
+		log.Printf("[ERROR] %v", resolveErr)
+		http.Error(w, "Output file not found", http.StatusNotFound)
+		return
+	}
 	log.Printf("[DOWNLOAD] Fetching from MinIO: %s", minioPath)
 
 	obj, err := downloadFromMinIO(context.Background(), minioPath)
@@ -4092,8 +4080,17 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Always serve just the sanitized ZIP — attestations are separate internal documents
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized-%s.zip\"", jobID))
+	// Derive both headers from the resolved artifact: serving a tar as .zip
+	// gives the user a file their tooling refuses to open, which reads as a
+	// failed sanitization rather than a naming bug.
+	downloadExt := "zip"
+	downloadType := "application/zip"
+	if strings.HasSuffix(minioPath, ".tar") {
+		downloadExt = "tar"
+		downloadType = "application/x-tar"
+	}
+	w.Header().Set("Content-Type", downloadType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"sanitized-%s.%s\"", jobID, downloadExt))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size))
 
 	if _, err := io.Copy(w, obj); err != nil {
@@ -4343,10 +4340,12 @@ func jobDeleteAPIHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 	inputObj := fmt.Sprintf("%s/%s/input.zip", jobInfo.Username, jobID)
 	outputObj := fmt.Sprintf("%s/%s/output.zip", jobInfo.Username, jobID)
+	outputTarObj := fmt.Sprintf("%s/%s/output.tar", jobInfo.Username, jobID)
 	reportsPrefix := fmt.Sprintf("%s/%s/reports/", jobInfo.Username, jobID)
 
 	deleteFromMinIO(ctx, inputObj)
 	deleteFromMinIO(ctx, outputObj)
+	deleteFromMinIO(ctx, outputTarObj)
 	deleteFromMinIO(ctx, reportsPrefix+"ip-mappings.csv")
 	deleteFromMinIO(ctx, reportsPrefix+"summary.json")
 	deleteFromMinIO(ctx, reportsPrefix+"detailed-report.csv")
@@ -4645,11 +4644,14 @@ func jobVerifyAPIHandler(w http.ResponseWriter, r *http.Request) {
 		"username": jobInfo.Username,
 	}
 
-	// === CHECK 1: File integrity (SHA-256 of output.zip) ===
+	// === CHECK 1: File integrity (SHA-256 of the sanitized artifact) ===
 	fileCheck := CheckResult{Status: "skipped", Message: "Could not verify"}
 	var outputZipHash string
 
-	outputPath := fmt.Sprintf("%s/%s/output.zip", jobInfo.Username, jobID)
+	outputPath, resolveErr := resolveOutputObject(ctx, jobInfo.Username, jobID)
+	if resolveErr != nil {
+		outputPath = fmt.Sprintf("%s/%s/output.zip", jobInfo.Username, jobID)
+	}
 	outputObj, err := downloadFromMinIO(ctx, outputPath)
 	if err == nil {
 		outputData, readErr := io.ReadAll(outputObj)
@@ -5051,10 +5053,12 @@ func performBatchCleanup() {
 		// Delete files from MinIO
 		inputObj := fmt.Sprintf("%s/%s/input.zip", job.Username, job.JobID)
 		outputObj := fmt.Sprintf("%s/%s/output.zip", job.Username, job.JobID)
+		outputTarObj := fmt.Sprintf("%s/%s/output.tar", job.Username, job.JobID)
 		reportsPrefix := fmt.Sprintf("%s/%s/reports/", job.Username, job.JobID)
 
 		deleteFromMinIO(ctx, inputObj)
 		deleteFromMinIO(ctx, outputObj)
+		deleteFromMinIO(ctx, outputTarObj)
 		deleteFromMinIO(ctx, reportsPrefix+"ip-mappings.csv")
 		deleteFromMinIO(ctx, reportsPrefix+"summary.json")
 
@@ -5384,104 +5388,90 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	updateJobStatus(jobID, "processing", 0, 0, "")
 	jobStartTime := time.Now()
 
-	// Download input.zip from MinIO
-	objectName := fmt.Sprintf("%s/%s/input.zip", username, jobID)
-	object, err := downloadFromMinIO(ctx, objectName)
+	// ---- Streaming archive pipeline ----
+	scratch := os.Getenv("SCRATCH_DIR")
+	if scratch == "" {
+		scratch = "/scratch"
+	}
+	if mkErr := os.MkdirAll(scratch, 0o755); mkErr != nil {
+		log.Printf("[WORKER] scratch %s unavailable (%v), falling back to %s", scratch, mkErr, os.TempDir())
+		scratch = os.TempDir()
+	}
+
+	cfg := &archiveConfig{
+		MaxDepth:     getEnvAsInt("ARCHIVE_MAX_DEPTH", 4),
+		DropPatterns: dropPatterns,
+		ScratchDir:   scratch,
+	}
+
+	inputObject := fmt.Sprintf("%s/%s/input.zip", username, jobID)
+
+	// Sniff the container format from the first 64KB. Extension is not
+	// trusted: the object is always stored as input.zip regardless of type.
+	headObj, err := downloadFromMinIO(ctx, inputObject)
 	if err != nil {
 		return fmt.Errorf("failed to download input from MinIO: %v", err)
 	}
-	defer object.Close()
+	headBuf := make([]byte, 65536)
+	headN, _ := io.ReadFull(headObj, headBuf)
+	headObj.Close()
 
-	// Read the ZIP content
-	archiveContent, err := io.ReadAll(object)
+	rootKind := detectArchiveKind(headBuf[:headN])
+	if rootKind == kindGzipFile {
+		if gzr, gerr := gzip.NewReader(bytes.NewReader(headBuf[:headN])); gerr == nil {
+			if k, _, rerr := resolveGzip(gzr); rerr == nil {
+				rootKind = k
+			}
+			gzr.Close()
+		}
+	}
+	if rootKind == kindUnknown {
+		return fmt.Errorf("unsupported archive format for job %s", jobID)
+	}
+	log.Printf("[WORKER] Job %s: container kind=%d, scratch=%s, maxDepth=%d",
+		jobID, rootKind, scratch, cfg.MaxDepth)
+
+	// ---- Phase 1: harvest ----
+	updateJobStatus(jobID, "processing", 0, 0, "")
+	log.Printf("[WORKER] Job %s: phase 1/2 — harvesting hostnames", jobID)
+
+	harvest := newHostHarvest()
+	hStats := &archiveTraversalStats{ExtCounts: map[string]int{}}
+
+	obj1, err := downloadFromMinIO(ctx, inputObject)
 	if err != nil {
-		return fmt.Errorf("failed to read archive content: %v", err)
+		return fmt.Errorf("failed to download input for harvest: %v", err)
 	}
-	log.Printf("[WORKER] Downloaded archive for job %s (%d bytes)", jobID, len(archiveContent))
-
-	// Extract files based on archive type (detect by magic bytes)
-	var extractedFiles []ExtractedFile
-
-	// Check if it's a gzip file (magic bytes: 1f 8b)
-	isGzip := len(archiveContent) >= 2 && archiveContent[0] == 0x1f && archiveContent[1] == 0x8b
-	// Check if it's a ZIP file (magic bytes: 50 4b 03 04)
-	isZip := len(archiveContent) >= 4 && archiveContent[0] == 0x50 && archiveContent[1] == 0x4b && archiveContent[2] == 0x03 && archiveContent[3] == 0x04
-
-	if isGzip {
-		// Handle tar.gz / tgz files
-		log.Printf("[WORKER] Detected gzip archive, extracting as tar.gz")
-		gzReader, err := gzip.NewReader(bytes.NewReader(archiveContent))
-		if err != nil {
-			return fmt.Errorf("failed to create gzip reader: %v", err)
+	err = processArchiveStream(obj1, rootKind, "", 0, cfg, &archiveProcessor{
+		Harvest:   harvest.Scan,
+		Cancelled: func() bool { return isJobCancelled(jobID) },
+	}, hStats, nil)
+	obj1.Close()
+	if err != nil {
+		if isJobCancelled(jobID) {
+			updateJobStatus(jobID, "cancelled", 0, 0, "Cancelled by user")
+			return fmt.Errorf("job cancelled by user")
 		}
-		defer gzReader.Close()
+		return fmt.Errorf("harvest pass failed: %v", err)
+	}
+	harvest.Build()
 
-		tarReader := tar.NewReader(gzReader)
-		for {
-			header, err := tarReader.Next()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				log.Printf("[WORKER] Error reading tar entry: %v", err)
-				break
-			}
-			if header.Typeflag == tar.TypeDir {
-				continue
-			}
-			if header.Typeflag != tar.TypeReg {
-				continue
-			}
-			content, err := io.ReadAll(tarReader)
-			if err != nil {
-				log.Printf("[WORKER] Failed to read file %s: %v", header.Name, err)
-				continue
-			}
-			extractedFiles = append(extractedFiles, ExtractedFile{
-				Name:    header.Name,
-				Content: string(content),
-				Mode:    os.FileMode(header.Mode),
-				ModTime: header.ModTime,
-			})
-		}
-	} else if isZip {
-		// Handle ZIP files
-		log.Printf("[WORKER] Detected ZIP archive, extracting")
-		zipReader, err := zip.NewReader(bytes.NewReader(archiveContent), int64(len(archiveContent)))
-		if err != nil {
-			return fmt.Errorf("failed to read ZIP: %v", err)
-		}
-		for _, file := range zipReader.File {
-			if file.FileInfo().IsDir() {
-				continue
-			}
-			rc, err := file.Open()
-			if err != nil {
-				log.Printf("[WORKER] Failed to open file %s: %v", file.Name, err)
-				continue
-			}
-			content, err := io.ReadAll(rc)
-			rc.Close()
-			if err != nil {
-				log.Printf("[WORKER] Failed to read file %s: %v", file.Name, err)
-				continue
-			}
-			extractedFiles = append(extractedFiles, ExtractedFile{
-				Name:    file.Name,
-				Content: string(content),
-				Mode:    file.Mode(),
-				ModTime: file.Modified,
-			})
-		}
-	} else {
-		return fmt.Errorf("unsupported archive format (not ZIP or gzip)")
+	totalFiles := hStats.FilesSeen
+	log.Printf("[WORKER] Job %s: harvest done — %d files, %d hostnames, %d dropped, %d binary, %d archives, depth-capped %d",
+		jobID, totalFiles, harvest.Count(), hStats.FilesDropped,
+		hStats.FilesBinary, hStats.ArchivesOpened, hStats.MaxDepthHits)
+	if hStats.MaxDepthHits > 0 {
+		log.Printf("[WORKER] WARNING job %s: %d archive(s) exceeded max depth %d and were left unprocessed",
+			jobID, hStats.MaxDepthHits, cfg.MaxDepth)
 	}
 
-	log.Printf("[WORKER] Extracted %d files from job %s", len(extractedFiles), jobID)
+	updateJobStatus(jobID, "processing", totalFiles, 0, "")
 
-	// Create output ZIP (streaming approach to reduce memory)
-	var outputZipBuffer bytes.Buffer
-	zipWriter := zip.NewWriter(&outputZipBuffer)
+	// ---- Phase 2: sanitize and repack ----
+	log.Printf("[WORKER] Job %s: phase 2/2 — sanitizing %d files", jobID, totalFiles)
+
+	setActiveHarvest(harvest)
+	defer setActiveHarvest(nil)
 
 	totalStats := map[string]int{
 		"ip_addresses":    0,
@@ -5494,83 +5484,98 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		"internal_urls":   0,
 		"location_coords": 0,
 		"api_keys":        0,
+		"hebrew_text":     0,
+		"ldap_content":    0,
+		"server_names":    0,
+		"org_fqdns":       0,
 	}
-	for i, file := range extractedFiles {
-		// Check if job was cancelled
+	var statsMu sync.Mutex
+	processed := 0
+
+	outFile, err := os.CreateTemp(scratch, "yg-final-*")
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %v", err)
+	}
+	defer os.Remove(outFile.Name())
+	defer outFile.Close()
+
+	sStats := &archiveTraversalStats{ExtCounts: map[string]int{}}
+
+	obj2, err := downloadFromMinIO(ctx, inputObject)
+	if err != nil {
+		return fmt.Errorf("failed to download input for sanitize: %v", err)
+	}
+	err = processArchiveStream(obj2, rootKind, "", 0, cfg, &archiveProcessor{
+		Cancelled: func() bool { return isJobCancelled(jobID) },
+		Sanitize: func(logicalPath string, content []byte) ([]byte, map[string]int) {
+			var sanitized string
+			var stats map[string]int
+			if scanMode == "code" {
+				sanitized, stats = sanitizeCodeFile(string(content), jobUserWords,
+					generateDetailedReport, logicalPath, codeScanMode)
+			} else {
+				sanitized, stats = sanitizeText(string(content), jobUserWords,
+					generateDetailedReport, logicalPath, "log")
+			}
+
+			statsMu.Lock()
+			for k, v := range stats {
+				totalStats[k] += v
+			}
+			if v, ok := stats["total_ips"]; ok && v > 0 {
+				totalStats["ip_addresses"] += v
+			}
+			processed++
+			cur := processed
+			statsMu.Unlock()
+
+			if cur%25 == 0 || cur == totalFiles {
+				updateJobStatus(jobID, "processing", totalFiles, cur, "")
+			}
+			if cur%250 == 0 {
+				log.Printf("[WORKER] Job %s progress: %d/%d files (%.1f%%)",
+					jobID, cur, totalFiles, float64(cur)/float64(totalFiles)*100)
+			}
+			return []byte(sanitized), stats
+		},
+	}, sStats, outFile)
+	obj2.Close()
+	if err != nil {
 		if isJobCancelled(jobID) {
-			log.Printf("[WORKER] Job %s cancelled by user, aborting at file %d/%d", jobID, i+1, len(extractedFiles))
-			updateJobStatus(jobID, "cancelled", len(extractedFiles), i, "Cancelled by user")
+			updateJobStatus(jobID, "cancelled", totalFiles, processed, "Cancelled by user")
 			return fmt.Errorf("job cancelled by user")
 		}
-		log.Printf("[WORKER] Sanitizing file %d/%d: %s (mode=%s)", i+1, len(extractedFiles), file.Name, scanMode)
-
-		// Use appropriate sanitization function based on scan mode
-		var sanitizedContent string
-		var stats map[string]int
-		if scanMode == "code" {
-			sanitizedContent, stats = sanitizeCodeFile(file.Content, jobUserWords, generateDetailedReport, file.Name, codeScanMode)
-		} else {
-			sanitizedContent, stats = sanitizeText(file.Content, jobUserWords, generateDetailedReport, file.Name, "log")
-		}
-
-		// Aggregate stats
-		totalStats["ip_addresses"] += stats["ip_addresses"]
-		if stats["total_ips"] > 0 {
-			totalStats["ip_addresses"] += stats["total_ips"]
-		}
-		totalStats["ad_accounts"] += stats["ad_accounts"]
-		totalStats["jwt_tokens"] += stats["jwt_tokens"]
-		totalStats["private_keys"] += stats["private_keys"]
-		totalStats["passwords"] += stats["passwords"]
-		totalStats["sensitive_terms"] += stats["sensitive_terms"]
-		totalStats["user_words"] += stats["user_words"]
-		totalStats["internal_urls"] += stats["internal_urls"]
-		totalStats["location_coords"] += stats["location_coords"]
-		totalStats["api_keys"] += stats["api_keys"]
-
-		// Write directly to ZIP (streaming - don't hold all files in memory)
-		header := &zip.FileHeader{
-			Name:   file.Name,
-			Method: zip.Deflate,
-		}
-		header.SetMode(file.Mode)
-		header.SetModTime(file.ModTime)
-
-		writer, err := zipWriter.CreateHeader(header)
-		if err != nil {
-			log.Printf("[WORKER] Failed to create ZIP entry for %s: %v", file.Name, err)
-			continue
-		}
-
-		if _, err := writer.Write([]byte(sanitizedContent)); err != nil {
-			log.Printf("[WORKER] Failed to write file to ZIP: %v", err)
-			continue
-		}
-
-		// Release memory immediately after writing each file
-		sanitizedContent = ""
-
-		// Trigger GC every 10 large files to keep memory under control
-		if i%10 == 0 && i > 0 {
-			// Small sleep to allow GC to catch up on large batches
-			time.Sleep(100 * time.Millisecond)
-		}
-
-		// Update progress
-		updateJobStatus(jobID, "processing", len(extractedFiles), i+1, "")
-
-		if i%50 == 0 || i == len(extractedFiles)-1 {
-			log.Printf("[WORKER] Job %s progress: %d/%d files (%.1f%%)",
-				jobID, i+1, len(extractedFiles), float64(i+1)/float64(len(extractedFiles))*100)
-		}
+		return fmt.Errorf("sanitize pass failed: %v", err)
 	}
 
-	if err := zipWriter.Close(); err != nil {
-		return fmt.Errorf("failed to finalize output ZIP: %v", err)
+	outputSize, err := outFile.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("failed to size output: %v", err)
 	}
 
-	outputZipData := outputZipBuffer.Bytes()
-	log.Printf("[WORKER] Created output.zip for job %s (%d bytes)", jobID, len(outputZipData))
+	// Hash by streaming — the artifact is far too large to hold in memory.
+	if _, err := outFile.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to rewind output: %v", err)
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, outFile); err != nil {
+		return fmt.Errorf("failed to hash output: %v", err)
+	}
+	outputHash := fmt.Sprintf("%x", hasher.Sum(nil))
+	if _, err := outFile.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to rewind output: %v", err)
+	}
+
+	outputBasename := "output.tar"
+	if rootKind == kindZip {
+		outputBasename = "output.zip"
+	}
+	filesProcessed := sStats.FilesSanitized
+	droppedPaths := sStats.DroppedPaths
+
+	log.Printf("[WORKER] Job %s: created %s (%.2f MB, %d sanitized, %d dropped, %d binary passthrough)",
+		jobID, outputBasename, float64(outputSize)/1024/1024,
+		filesProcessed, sStats.FilesDropped, sStats.FilesBinary)
 
 	// Generate reports (IP mappings, summary)
 	log.Printf("[WORKER] Job %s: generating reports", jobID)
@@ -5582,7 +5587,25 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	ipMappingsReport := generateIPMappingsReportInMemory()
 
 	// 2. Processing Summary
-	summaryReport := generateProcessingSummaryInMemory(jobID, len(extractedFiles), totalStats, processingTime)
+	summaryReport := generateProcessingSummaryInMemory(jobID, filesProcessed, totalStats, processingTime)
+
+	// Manifest of files removed because they cannot be safely sanitized.
+	// Recorded explicitly — an artifact that silently omits files is worse
+	// than one that declares what it dropped.
+	if len(droppedPaths) > 0 {
+		var db strings.Builder
+		db.WriteString("dropped_path\n")
+		for _, p := range droppedPaths {
+			db.WriteString(escapeCSV(p) + "\n")
+		}
+		dropped := db.String()
+		droppedObjectName := fmt.Sprintf("%s/%s/reports/dropped-files.csv", username, jobID)
+		if err := uploadToMinIO(ctx, droppedObjectName, bytes.NewReader([]byte(dropped)), int64(len(dropped))); err != nil {
+			log.Printf("[WORKER] Warning: Failed to upload dropped-files report: %v", err)
+		} else {
+			log.Printf("[WORKER] Uploaded dropped-files report (%d entries)", len(droppedPaths))
+		}
+	}
 
 	// Upload reports to MinIO (use existing ctx from function start)
 
@@ -5623,17 +5646,18 @@ func processBatchJobFromMinIO(jobID, username string) error {
 		}
 	}
 
-	// Upload output.zip to MinIO
-	outputObjectName := fmt.Sprintf("%s/%s/output.zip", username, jobID)
-	if err := uploadToMinIO(ctx, outputObjectName, bytes.NewReader(outputZipData), int64(len(outputZipData))); err != nil {
+	// Upload the sanitized artifact, streaming from scratch. Object name
+	// mirrors the input container: .tar in, .tar out; .zip in, .zip out.
+	outputObjectName := fmt.Sprintf("%s/%s/%s", username, jobID, outputBasename)
+	if err := uploadToMinIO(ctx, outputObjectName, outFile, outputSize); err != nil {
 		return fmt.Errorf("failed to upload output to MinIO: %v", err)
 	}
 
-	log.Printf("[WORKER] Uploaded output.zip for job %s", jobID)
+	log.Printf("[WORKER] Uploaded %s for job %s (%.2f MB)", outputBasename, jobID, float64(outputSize)/1024/1024)
 
 	// Record Prometheus metrics
 	batchProcessingDuration.Observe(processingTime.Seconds())
-	batchFilesProcessed.Add(float64(len(extractedFiles)))
+	batchFilesProcessed.Add(float64(filesProcessed))
 	batchJobsTotal.WithLabelValues("completed").Inc()
 
 	// Record pattern detection metrics
@@ -5646,8 +5670,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	batchPatternsDetected.WithLabelValues("user_word").Add(float64(totalStats["user_words"]))
 
 	// Generate and sign scan attestation
-	outputZipHash := fmt.Sprintf("%x", sha256.Sum256(outputZipData))
-	scanAttestationJSON, scanSig, err := generateScanAttestation(jobID, username, len(extractedFiles), totalStats, outputZipHash)
+	scanAttestationJSON, scanSig, err := generateScanAttestation(jobID, username, filesProcessed, totalStats, outputHash)
 	if err != nil {
 		log.Printf("[WORKER] Warning: Failed to generate scan attestation: %v", err)
 	} else {
@@ -5664,7 +5687,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 
 	// Update job status to completed
 	log.Printf("[WORKER] Job %s completed in %.2f seconds", jobID, processingTime.Seconds())
-	updateJobStatus(jobID, "completed", len(extractedFiles), len(extractedFiles), "")
+	updateJobStatus(jobID, "completed", totalFiles, totalFiles, "")
 
 	return nil
 }
@@ -5710,9 +5733,11 @@ func cleanupOldJobsWorker() {
 		// Delete from MinIO
 		inputObj := fmt.Sprintf("%s/%s/input.zip", job.Username, job.JobID)
 		outputObj := fmt.Sprintf("%s/%s/output.zip", job.Username, job.JobID)
+		outputTarObj := fmt.Sprintf("%s/%s/output.tar", job.Username, job.JobID)
 
 		deleteFromMinIO(ctx, inputObj)
 		deleteFromMinIO(ctx, outputObj)
+		deleteFromMinIO(ctx, outputTarObj)
 
 		// Delete from database
 		req, _ := http.NewRequest("DELETE",
