@@ -2925,7 +2925,14 @@ func processArchiveStream(in io.Reader, kind archiveKind, base string, depth int
 		if out == nil {
 			return processTarStream(gzr, base, depth, cfg, proc, st, nil)
 		}
-		gzw := gzip.NewWriter(out)
+		// BestSpeed over DefaultCompression: phase 2 recompresses several GB
+		// of log text, and compression dominates the pass. Costs roughly
+		// 10-15% output size for a 3-5x speedup, which is the right trade
+		// for a support bundle.
+		gzw, gzErr := gzip.NewWriterLevel(out, gzip.BestSpeed)
+		if gzErr != nil {
+			return gzErr
+		}
 		if err := processTarStream(gzr, base, depth, cfg, proc, st, gzw); err != nil {
 			gzw.Close()
 			return err
@@ -2944,7 +2951,10 @@ func processArchiveStream(in io.Reader, kind archiveKind, base string, depth int
 		}
 		outContent := applyProcessor(base, content, proc, st)
 		if out != nil {
-			gzw := gzip.NewWriter(out)
+			gzw, gzErr := gzip.NewWriterLevel(out, gzip.BestSpeed)
+			if gzErr != nil {
+				return gzErr
+			}
 			if _, err := gzw.Write(outContent); err != nil {
 				gzw.Close()
 				return err
@@ -5598,6 +5608,13 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	err = processArchiveStream(inputSpool, rootKind, "", 0, cfg, &archiveProcessor{
 		Cancelled: func() bool { return isJobCancelled(jobID) },
 		Sanitize: func(logicalPath string, content []byte) ([]byte, map[string]int) {
+			// Cancellation is checked here as well as between archive
+			// members: a single large file can occupy the worker for
+			// minutes, during which a between-members check never runs.
+			if isJobCancelled(jobID) {
+				return content, map[string]int{}
+			}
+
 			var sanitized string
 			var stats map[string]int
 			if scanMode == "code" {
