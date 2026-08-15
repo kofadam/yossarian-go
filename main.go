@@ -373,6 +373,11 @@ func recordReplacement(category, filename string, lineNum int, original, sanitiz
 	})
 }
 
+// adCacheMaxEntries bounds the AD lookup cache. Roughly 100k entries of
+// short strings is on the order of tens of MB — enough to keep hit rates
+// high across rotated logs without unbounded growth.
+const adCacheMaxEntries = 100000
+
 func lookupADAccountCached(account string) string {
 	// Check cache first
 	cacheMutex.RLock()
@@ -384,15 +389,24 @@ func lookupADAccountCached(account string) string {
 	cacheMutex.RUnlock()
 
 	adCacheMisses.Inc() // ✅ ADD: Record cache miss
-
 	// Not in cache, do lookup
 	usn := lookupADAccount(account)
 
-	// Cache the result (including empty results)
+	// Cache the result, including misses — junk candidates recur heavily
+	// across rotated logs of the same pod, so caching them is worthwhile.
+	//
+	// But the cache was previously unbounded, and a batch job over a large
+	// bundle generates tens of thousands of unique one-off candidate strings
+	// per file. That grew to 4GB and OOM-killed the worker 41% into a job.
+	// Above the cap the cache is dropped and rebuilt: hit rates recover
+	// within a few files, and memory stays flat.
 	cacheMutex.Lock()
+	if len(adLookupCache) >= adCacheMaxEntries {
+		log.Printf("[AD] Cache reached %d entries, resetting", len(adLookupCache))
+		adLookupCache = make(map[string]string, adCacheMaxEntries/4)
+	}
 	adLookupCache[account] = usn
 	cacheMutex.Unlock()
-
 	return usn
 }
 
