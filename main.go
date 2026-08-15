@@ -554,7 +554,22 @@ var (
 	adRegex          = regexp.MustCompile(`\b[A-Z0-9-]+\\[a-zA-Z0-9._-]{4,15}\b|\b[a-zA-Z0-9._-]{4,15}@[a-zA-Z0-9.-]+\b|\b[A-Z0-9-]{4,15}\$\b|\b(?:A-M|B-P|D-[1-9CKLMQT]|H-[FP]|J-P|L-[1-9P]|S-C|T-[CL])-[A-Za-z0-9-]{6,11}\b|\bD-PC-[A-Za-z0-9-]{5,10}\b|\b(?:a-m|b-p|d-[1-9cklmqt]|h-[fp]|j-p|l-[1-9p]|s-c|t-[cl])-[a-zA-Z0-9-]{6,11}\b|\bd-pc-[a-zA-Z0-9-]{5,10}\b|\b(?:dvd|til|DVD|TIL)[0-9a-zA-Z]{1,20}\b|\\\\([A-Z0-9-]+)\\|\\\\[^\\]+\\[^\\]+\\([a-zA-Z0-9._-]{4,15})\\|\\Users\\([a-zA-Z0-9._-]{4,15})\\|/([a-zA-Z0-9._-]{4,15})/`)
 	jwtRegex         = regexp.MustCompile(`eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=_-]+`)
 	privateKeyRegex  = regexp.MustCompile(`-----BEGIN[^-]*KEY-----[\s\S]*?-----END[^-]*KEY-----`)
-	passwordRegex    = regexp.MustCompile(`(?i)(:([^:@\s]{3,50})@|password["':=\s]+["']?([^"',\s]{3,50})["']?)`)
+	// URL credentials only — anchored to a scheme so it cannot match image
+	// digests (registry:5000/path@sha256:...), Go module paths, or
+	// service-account strings. Capture group 1 is the credential to redact.
+	passwordURLRegex = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/@\s]{1,64}):([^:@/\s]{1,64})@`)
+
+	// Key/value passwords. Requires a real assignment and a plausible value:
+	// excludes null, true/false, empty strings, and structural characters so
+	// "password": null and 'Password: false' no longer match.
+	passwordKVRegex = regexp.MustCompile(`(?i)\b(pass(?:word|wd)?)\s*["']?\s*[:=]\s*["']?([^"',;\s{}\[\]]{4,80})["']?`)
+
+	// Values that are never secrets — schema mentions, not credentials.
+	passwordValueDenylist = map[string]bool{
+		"null": true, "nil": true, "none": true, "true": true, "false": true,
+		"empty": true, "changed": true, "not": true, "required": true,
+		"redacted": true, "hidden": true, "unset": true, "string": true,
+	}
 	// commentRegex    = regexp.MustCompile(`(?m)^#.*$`)
 	hebrewRegex    = regexp.MustCompile(`[\x{0590}-\x{05FF}\x{FB1D}-\x{FB4F}]+`)
 	ldapRegex      = regexp.MustCompile(`(?i)(?:^|\b)((?:(?:cn|uid|ou|dc|o|l|st|c|mail|sn|givenname|dn)=(?:[^,\n]+),?\s*)+(?:dc=[a-zA-Z0-9_-]+,?\s*)+|(?:[a-zA-Z0-9_'"\s]+,\s*dn:\s*'[^']+')).*`)
@@ -1434,21 +1449,45 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 		log.Printf("[DEBUG] Pattern detection - JWT tokens: %d found", stats["jwt_tokens"])
 	}
 
-	// 3. Replace passwords in connection strings and config files
-	passwordMatches := passwordRegex.FindAllStringIndex(result, -1)
-	stats["passwords"] = len(passwordMatches)
+	// 3. Replace passwords in connection strings and config files.
+	//
+	// Previously a single regex matched any ":xxx@" span and replaced the
+	// whole thing, so container image digests, Go module paths, and
+	// service-account strings were mangled — 168k matches in one file, none
+	// of them credentials. Now split into two anchored patterns, each
+	// replacing only the credential and leaving surrounding structure intact.
+	passwordCount := 0
 
-	if trackReplacements && len(passwordMatches) > 0 {
-		for _, match := range passwordMatches {
-			original := result[match[0]:match[1]]
-			lineNum := strings.Count(result[:match[0]], "\n") + 1
-			recordReplacement("Password", filename, lineNum, original, "[PASSWORD-REDACTED]")
+	result = passwordURLRegex.ReplaceAllStringFunc(result, func(match string) string {
+		sub := passwordURLRegex.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
 		}
-	}
+		passwordCount++
+		if trackReplacements {
+			recordReplacement("Password", filename, 0, sub[2], "[PASSWORD-REDACTED]")
+		}
+		return sub[1] + ":[PASSWORD-REDACTED]@"
+	})
 
-	result = passwordRegex.ReplaceAllString(result, "[PASSWORD-REDACTED]")
-	if stats["passwords"] > 0 {
-		log.Printf("[DEBUG] Pattern detection - Passwords: %d found", stats["passwords"])
+	result = passwordKVRegex.ReplaceAllStringFunc(result, func(match string) string {
+		sub := passwordKVRegex.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		if passwordValueDenylist[strings.ToLower(sub[2])] {
+			return match
+		}
+		passwordCount++
+		if trackReplacements {
+			recordReplacement("Password", filename, 0, sub[2], "[PASSWORD-REDACTED]")
+		}
+		return strings.Replace(match, sub[2], "[PASSWORD-REDACTED]", 1)
+	})
+
+	stats["passwords"] = passwordCount
+	if passwordCount > 0 {
+		log.Printf("[DEBUG] Pattern detection - Passwords: %d found", passwordCount)
 	}
 
 	// 4. Replace AD accounts with caching (case-insensitive)
@@ -1732,54 +1771,49 @@ func sanitizeCodeFile(text string, userWords []UserWord, trackReplacements bool,
 		result = jwtRegex.ReplaceAllString(result, safeJWT)
 	}
 
-	// 3. Detect and optionally replace passwords
-	passwordMatches := passwordRegex.FindAllStringIndex(result, -1)
-	stats["passwords"] = len(passwordMatches)
-	if trackReplacements && len(passwordMatches) > 0 {
-		for _, match := range passwordMatches {
-			original := result[match[0]:match[1]]
-			lineNum := strings.Count(result[:match[0]], "\n") + 1
-			recordReplacement("Password", filename, lineNum, original, safePassword)
+	// 3. Detect and optionally replace passwords.
+	//
+	// Two anchored patterns replacing only the credential, so schemes,
+	// hosts, and keys survive. Replaces the old single regex whose ":xxx@"
+	// alternative matched image digests and module paths.
+	passwordCount := 0
+
+	replaceURLPwd := func(match string) string {
+		sub := passwordURLRegex.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
 		}
+		passwordCount++
+		if trackReplacements {
+			recordReplacement("Password", filename, 0, sub[2], safePassword)
+		}
+		if !shouldReplace {
+			return match
+		}
+		return sub[1] + ":" + safePassword + "@"
 	}
-	if shouldReplace {
-		result = passwordRegex.ReplaceAllStringFunc(result, func(match string) string {
-			// Preserve the structure: password= or :xxx@
-			// Only treat as connection string if it STARTS with : and ENDS with @
-			if strings.HasPrefix(match, ":") && strings.HasSuffix(match, "@") {
-				// Connection string format :password@
-				return ":" + safePassword + "@"
-			}
-			// Config format: "password": "value" or password = "value" or password: value
-			lowerMatch := strings.ToLower(match)
-			pwdIdx := strings.Index(lowerMatch, "password")
-			if pwdIdx >= 0 {
-				afterPwd := match[pwdIdx+8:] // after "password"
-				// Find the last quote in the match (closing quote of value)
-				lastQuoteIdx := strings.LastIndexAny(afterPwd, "\"'")
-				// Find the second-to-last quote (opening quote of value)
-				if lastQuoteIdx > 0 {
-					openQuoteIdx := strings.LastIndexAny(afterPwd[:lastQuoteIdx], "\"'")
-					if openQuoteIdx >= 0 {
-						// Everything before and including the opening quote is the prefix
-						quoteChar := afterPwd[openQuoteIdx]
-						prefix := match[:pwdIdx+8] + afterPwd[:openQuoteIdx+1]
-						return prefix + safePassword + string(quoteChar)
-					}
-				}
-				// Fallback: find first separator sequence and replace after it
-				for i := 0; i < len(afterPwd); i++ {
-					c := afterPwd[i]
-					if c != ':' && c != '=' && c != ' ' && c != '\t' && c != '"' && c != '\'' {
-						// Found start of value
-						prefix := match[:pwdIdx+8] + afterPwd[:i]
-						return prefix + safePassword
-					}
-				}
-			}
-			return safePassword
-		})
+
+	replaceKVPwd := func(match string) string {
+		sub := passwordKVRegex.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		if passwordValueDenylist[strings.ToLower(sub[2])] {
+			return match
+		}
+		passwordCount++
+		if trackReplacements {
+			recordReplacement("Password", filename, 0, sub[2], safePassword)
+		}
+		if !shouldReplace {
+			return match
+		}
+		return strings.Replace(match, sub[2], safePassword, 1)
 	}
+
+	result = passwordURLRegex.ReplaceAllStringFunc(result, replaceURLPwd)
+	result = passwordKVRegex.ReplaceAllStringFunc(result, replaceKVPwd)
+	stats["passwords"] = passwordCount
 
 	// 3b. Detect and optionally replace API keys (provider-specific patterns)
 	// AWS Access Keys
