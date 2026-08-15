@@ -26,10 +26,26 @@ data:
   # of these is redacted whole, hostname label included. Do NOT add
   # cluster.local — Kubernetes service DNS must survive sanitization.
   ORG_DOMAINS: "example.local"
-  MAX_TOTAL_UPLOAD_SIZE_MB: "100"
-  MAX_FILE_SIZE_MB: "50"
-  MAX_ZIP_FILE_SIZE_MB: "10"
+  # ParseMultipartForm's in-memory threshold, NOT a size limit — larger
+  # uploads spool to disk. Keep this small; MAX_FILE_SIZE_MB is the ceiling.
+  MAX_TOTAL_UPLOAD_SIZE_MB: "64"
+  MAX_FILE_SIZE_MB: "2048"
+  MAX_ZIP_FILE_SIZE_MB: "2048"
   MAX_FILE_COUNT: "10"
+
+  # Scratch space for staging repacked nested archives. Must match the
+  # emptyDir mount in 08-worker.yaml.
+  SCRATCH_DIR: "/scratch"
+
+  # Maximum nesting depth. A WCP bundle is tar > tgz > gz, i.e. 3. Archives
+  # deeper than this are passed through unprocessed and logged as a warning
+  # rather than silently ignored.
+  ARCHIVE_MAX_DEPTH: "4"
+
+  # Files removed from output because they cannot be safely sanitized:
+  # utmp/btmp login history (fixed-width binary) and SQLite tail databases.
+  # Removals are recorded in reports/dropped-files.csv.
+  DROP_PATTERNS: '(^|/)wtmp$,(^|/)btmp$,(^|/)lastlog$,\.db$,\.db-wal$,\.db-shm$'
   
   # Authentication Mode
   # - Set to "false" for single-user mode (requires ADMIN_PASSWORD)

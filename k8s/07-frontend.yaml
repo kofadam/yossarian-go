@@ -70,12 +70,7 @@ spec:
             - name: AD_SERVICE_URL
               value: "http://yossarian-db-service:8081"
             # File Limits
-            - name: MAX_FILE_SIZE_MB
-              value: "50"
-            - name: MAX_FILE_COUNT
-              value: "10"
-            - name: MAX_TOTAL_UPLOAD_SIZE_MB
-              value: "500"
+            
           envFrom:
             - configMapRef:
                 name: yossarian-go-config
