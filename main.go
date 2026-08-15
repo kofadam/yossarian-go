@@ -1490,54 +1490,59 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 		log.Printf("[DEBUG] Pattern detection - Passwords: %d found", passwordCount)
 	}
 
-	// 4. Replace AD accounts with caching (case-insensitive)
-	adCandidates := adRegex.FindAllStringIndex(result, -1)
-	adCandidateCount := len(adCandidates)
+	// 4. Replace AD accounts with caching (case-insensitive).
+	// Skipped entirely when the job requests it — the candidate regex over
+	// every byte is the bulk of the cost, not the cached lookups, so
+	// skipping only the lookup would save little.
+	if !getSkipADLookup() {
+		adCandidates := adRegex.FindAllStringIndex(result, -1)
+		adCandidateCount := len(adCandidates)
 
-	matchIndex := 0
-	result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
-		matchPos := adCandidates[matchIndex]
-		matchIndex++
-		// Always normalize to lowercase for consistent cache lookups
-		normalizedAccount := strings.ToLower(account)
+		matchIndex := 0
+		result = adRegex.ReplaceAllStringFunc(result, func(account string) string {
+			matchPos := adCandidates[matchIndex]
+			matchIndex++
+			// Always normalize to lowercase for consistent cache lookups
+			normalizedAccount := strings.ToLower(account)
 
-		// Check cache first
-		cacheMutex.RLock()
-		cached, inCache := adLookupCache[normalizedAccount]
-		cacheMutex.RUnlock()
+			// Check cache first
+			cacheMutex.RLock()
+			cached, inCache := adLookupCache[normalizedAccount]
+			cacheMutex.RUnlock()
 
-		if inCache {
-			stats["ad_cache_hits"]++
-			adCacheHits.Inc()
-			adCacheHits.Inc() // ✅ ADD: Record to Prometheus
-			if cached != "" {
+			if inCache {
+				stats["ad_cache_hits"]++
+				adCacheHits.Inc()
+				adCacheHits.Inc() // ✅ ADD: Record to Prometheus
+				if cached != "" {
+					stats["ad_accounts"]++
+					return cached
+				}
+				return account
+			}
+
+			// Not in cache, do lookup
+			stats["ad_cache_misses"]++
+			adCacheMisses.Inc()
+			if usn := lookupADAccountCached(normalizedAccount); usn != "" {
 				stats["ad_accounts"]++
-				return cached
+
+				// Track replacement
+				if trackReplacements {
+					lineNum := strings.Count(result[:matchPos[0]], "\n") + 1
+					recordReplacement("AD_Account", filename, lineNum, account, usn)
+				}
+
+				return usn
 			}
+			// If not found in AD database, preserve original text (not an AD account)
 			return account
+		})
+
+		if adCandidateCount > 0 {
+			log.Printf("[DEBUG] Pattern detection - AD accounts: %d candidates, %d confirmed (cache hit: %d, miss: %d)",
+				adCandidateCount, stats["ad_accounts"], stats["ad_cache_hits"], stats["ad_cache_misses"])
 		}
-
-		// Not in cache, do lookup
-		stats["ad_cache_misses"]++
-		adCacheMisses.Inc()
-		if usn := lookupADAccountCached(normalizedAccount); usn != "" {
-			stats["ad_accounts"]++
-
-			// Track replacement
-			if trackReplacements {
-				lineNum := strings.Count(result[:matchPos[0]], "\n") + 1
-				recordReplacement("AD_Account", filename, lineNum, account, usn)
-			}
-
-			return usn
-		}
-		// If not found in AD database, preserve original text (not an AD account)
-		return account
-	})
-
-	if adCandidateCount > 0 {
-		log.Printf("[DEBUG] Pattern detection - AD accounts: %d candidates, %d confirmed (cache hit: %d, miss: %d)",
-			adCandidateCount, stats["ad_accounts"], stats["ad_cache_hits"], stats["ad_cache_misses"])
 	}
 
 	// 4b. Replace server names matching the configured prefix convention.
@@ -2754,7 +2759,25 @@ func (h *hostHarvest) Apply(text string) (string, int) {
 var (
 	activeHarvest   *hostHarvest
 	activeHarvestMu sync.RWMutex
+
+	// skipADLookup disables AD account confirmation for the current batch
+	// job. Set per job alongside activeHarvest; never set for single-file
+	// uploads, which always consult AD.
+	skipADLookup   bool
+	skipADLookupMu sync.RWMutex
 )
+
+func setSkipADLookup(v bool) {
+	skipADLookupMu.Lock()
+	skipADLookup = v
+	skipADLookupMu.Unlock()
+}
+
+func getSkipADLookup() bool {
+	skipADLookupMu.RLock()
+	defer skipADLookupMu.RUnlock()
+	return skipADLookup
+}
 
 func setActiveHarvest(h *hostHarvest) {
 	activeHarvestMu.Lock()
@@ -2849,8 +2872,8 @@ type archiveTraversalStats struct {
 // archiveProcessor supplies the per-file work. Sanitize may be nil, which
 // selects harvest-only traversal.
 type archiveProcessor struct {
-	Harvest  func(logicalPath string, content []byte)
-	Sanitize func(logicalPath string, content []byte) ([]byte, map[string]int)
+	Harvest   func(logicalPath string, content []byte)
+	Sanitize  func(logicalPath string, content []byte) ([]byte, map[string]int)
 	Cancelled func() bool
 }
 
@@ -4097,10 +4120,8 @@ func jobDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	var jobInfo struct {
-		JobID      string  `json:"job_id"`
-		Username   string  `json:"username"`
-		Status     string  `json:"status"`
-		OutputPath *string `json:"output_path"`
+		Status   string `json:"status"`
+		Username string `json:"username"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
@@ -5437,6 +5458,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 			CodeScanMode           string `json:"code_scan_mode"`
 			GenerateDetailedReport int    `json:"generate_detailed_report"`
 			UserWords              string `json:"user_words"`
+			SkipADLookup           int    `json:"skip_ad_lookup"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
 			log.Printf("[WORKER] Warning: could not parse job info: %v, using defaults", err)
@@ -5453,6 +5475,10 @@ func processBatchJobFromMinIO(jobID, username string) error {
 				codeScanMode = "sanitize_safe"
 			}
 			generateDetailedReport = jobInfo.GenerateDetailedReport == 1
+			setSkipADLookup(jobInfo.SkipADLookup == 1)
+			if jobInfo.SkipADLookup == 1 {
+				log.Printf("[WORKER] Job %s: AD account lookup disabled by request", jobID)
+			}
 			if jobInfo.UserWords != "" {
 				if err := json.Unmarshal([]byte(jobInfo.UserWords), &jobUserWords); err != nil {
 					log.Printf("[WORKER] Warning: could not parse user_words for job %s: %v", jobID, err)
@@ -5573,6 +5599,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 
 	setActiveHarvest(harvest)
 	defer setActiveHarvest(nil)
+	defer setSkipADLookup(false)
 
 	totalStats := map[string]int{
 		"ip_addresses":    0,
