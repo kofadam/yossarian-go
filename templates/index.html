@@ -1370,8 +1370,8 @@
                     <div class="drop-zone" id="dropZone">
                         <div class="drop-zone-icon">📤</div>
                         <div class="drop-zone-text">Drop files here or click to browse</div>
-                        <div class="drop-zone-subtext">Supports .log, .txt, .zip, .tar.gz (max 50MB per file)</div>
-                        <input type="file" class="file-input" id="fileInput" multiple accept=".log,.txt,.zip,.tar,.gz,.tar.gz,.json,.xml,.csv">
+                        <div class="drop-zone-subtext">Supports .log, .txt, .json, .xml, .csv or an archive (.zip, .tar, .tar.gz, .tgz) — nested archives are processed recursively</div>
+                        <input type="file" class="file-input" id="fileInput" multiple accept=".log,.txt,.zip,.tar,.gz,.tgz,.tar.gz,.json,.xml,.csv">
                     </div>
 
                     <div class="file-list" id="fileList"></div>
@@ -1788,7 +1788,16 @@
                 : 0;
 
             let progressBar = '';
-            if (job.status === 'processing' && job.total_files > 0) {
+            if (job.status === 'processing' && job.total_files === 0) {
+                // Phase 1: the worker is walking the archive to count files and
+                // harvest hostnames. No total is known yet, so show an
+                // indeterminate state rather than an empty panel.
+                progressBar = `
+                    <div style="font-size: 12px; color: var(--md-on-surface-variant); margin-top: 4px;">
+                        Analyzing archive — discovering files…
+                    </div>
+                `;
+            } else if (job.status === 'processing' && job.total_files > 0) {
                 progressBar = `
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: ${progress}%"></div>
