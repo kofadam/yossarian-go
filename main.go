@@ -2298,6 +2298,28 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "Failed to read archive file", http.StatusInternalServerError)
 					return
 				}
+				// Validate the container before creating a job. Cheap header
+				// peek — the frontend no longer parses the whole archive, so
+				// without this a malformed upload only fails in the worker.
+				headPeek := make([]byte, 512)
+				peekN, _ := io.ReadFull(file, headPeek)
+				if detectArchiveKind(headPeek[:peekN]) == kindUnknown {
+					file.Close()
+					log.Printf("[ERROR] Upload rejected: unrecognised archive format: %s", fileHeader.Filename)
+					http.Error(w, "File is not a recognised ZIP, tar, or gzip archive", http.StatusBadRequest)
+					return
+				}
+				if seeker, ok := file.(io.Seeker); ok {
+					seeker.Seek(0, io.SeekStart)
+				} else {
+					file.Close()
+					if file, err = fileHeader.Open(); err != nil {
+						log.Printf("[ERROR] Failed to reopen archive: %v", err)
+						http.Error(w, "Failed to read archive file", http.StatusInternalServerError)
+						return
+					}
+				}
+
 				// Generate job ID
 				jobID := generateJobID(username)
 				ctx := context.Background()
