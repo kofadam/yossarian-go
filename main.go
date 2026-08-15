@@ -28,6 +28,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -862,6 +863,10 @@ func init() {
 	// Load organization DNS domains for whole-FQDN redaction
 	loadOrgDomains()
 
+	// Load hostname-harvest stopwords and archive drop patterns
+	loadHarvestStopwords()
+	loadDropPatterns()
+
 	// Load server prefixes from ConfigMap
 	loadServerPrefixes()
 }
@@ -1542,6 +1547,16 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 			}
 			return placeholder
 		})
+	}
+
+	// 4d. Replace bare hostname labels discovered during the harvest pass.
+	// Only populated for batch jobs; nil for single-file uploads, where no
+	// harvest pass has run.
+	if h := getActiveHarvest(); h != nil {
+		if replaced, n := h.Apply(result); n > 0 {
+			result = replaced
+			stats["server_names"] += n
+		}
 	}
 
 	// 5. Replace sensitive terms with custom replacements
@@ -2603,6 +2618,157 @@ func downloadDetailedReportHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[AUDIT] Detailed report downloaded: user=%s, replacements=%d, size_kb=%.2f",
 		username, len(detailedReplacements), float64(reportSize)/1024)
+}
+
+// ===== Hostname harvest =====
+//
+// Bare Linux hostnames can't be found by pattern alone — "web01" is
+// indistinguishable from any other token. But a support bundle names its own
+// hosts: wherever a host appears in FQDN form, the leading label is proven to
+// be a hostname, and can then be redacted in bare form everywhere else.
+//
+// Pass 1 collects labels. Pass 2 replaces them. Bare label and FQDN share one
+// placeholder so both forms of the same host read identically in the output.
+
+var (
+	harvestStopwords = map[string]bool{}
+	dropPatterns     []*regexp.Regexp
+)
+
+type hostHarvest struct {
+	mu     sync.Mutex
+	labels map[string]string // bare label -> representative FQDN
+	regex  *regexp.Regexp
+	subs   map[string]string // lowercased label -> placeholder
+}
+
+func newHostHarvest() *hostHarvest {
+	return &hostHarvest{labels: map[string]string{}, subs: map[string]string{}}
+}
+
+// Scan extracts hostname labels from org FQDNs found in one file.
+func (h *hostHarvest) Scan(logicalPath string, content []byte) {
+	if orgDomainRegex == nil {
+		return
+	}
+	for _, fqdn := range orgDomainRegex.FindAllString(string(content), -1) {
+		label := fqdn
+		if i := strings.Index(fqdn, "."); i > 0 {
+			label = fqdn[:i]
+		}
+		label = strings.ToLower(label)
+		if len(label) < 4 || harvestStopwords[label] {
+			continue
+		}
+		h.mu.Lock()
+		if _, seen := h.labels[label]; !seen {
+			h.labels[label] = fqdn
+		}
+		h.mu.Unlock()
+	}
+}
+
+// Build compiles the replacement regex. Called once between passes.
+func (h *hostHarvest) Build() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.labels) == 0 {
+		h.regex = nil
+		return
+	}
+	escaped := make([]string, 0, len(h.labels))
+	mapMutex.Lock()
+	for label, fqdn := range h.labels {
+		// Share the FQDN's placeholder so both forms agree.
+		h.subs[label] = getHostPlaceholder(fqdn)
+		escaped = append(escaped, regexp.QuoteMeta(label))
+	}
+	mapMutex.Unlock()
+	// Longest-first so a label that prefixes another can't win early.
+	sort.Slice(escaped, func(i, j int) bool { return len(escaped[i]) > len(escaped[j]) })
+	h.regex = regexp.MustCompile(`(?i)\b(?:` + strings.Join(escaped, "|") + `)\b`)
+}
+
+func (h *hostHarvest) Count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.labels)
+}
+
+// Apply replaces bare hostname labels. Safe to call concurrently after Build.
+func (h *hostHarvest) Apply(text string) (string, int) {
+	if h.regex == nil {
+		return text, 0
+	}
+	count := 0
+	out := h.regex.ReplaceAllStringFunc(text, func(m string) string {
+		if p, ok := h.subs[strings.ToLower(m)]; ok {
+			count++
+			return p
+		}
+		return m
+	})
+	return out, count
+}
+
+// activeHarvest is set by the worker for the duration of the sanitize pass.
+var (
+	activeHarvest   *hostHarvest
+	activeHarvestMu sync.RWMutex
+)
+
+func setActiveHarvest(h *hostHarvest) {
+	activeHarvestMu.Lock()
+	activeHarvest = h
+	activeHarvestMu.Unlock()
+}
+
+func getActiveHarvest() *hostHarvest {
+	activeHarvestMu.RLock()
+	defer activeHarvestMu.RUnlock()
+	return activeHarvest
+}
+
+// loadHarvestStopwords blocks labels that are also ordinary words. Without
+// this, "master-vm-18003" or "wcp-agent-..." would poison the dictionary.
+func loadHarvestStopwords() {
+	defaults := "master,worker,node,nodes,control,default,manager,agent,proxy," +
+		"service,services,server,client,cluster,system,kube,kubernetes,local," +
+		"localhost,docker,containerd,etcd,scheduler,controller,webhook,operator," +
+		"admin,root,user,users,test,temp,data,logs,cache,config,backup,image,images"
+	if v := os.Getenv("HARVEST_STOPWORDS"); v != "" {
+		defaults = v
+	}
+	harvestStopwords = map[string]bool{}
+	for _, w := range strings.Split(defaults, ",") {
+		if w = strings.ToLower(strings.TrimSpace(w)); w != "" {
+			harvestStopwords[w] = true
+		}
+	}
+	log.Printf("Loaded %d harvest stopwords", len(harvestStopwords))
+}
+
+// loadDropPatterns compiles the removal list. Matched files are excluded from
+// output entirely and recorded in the summary — never silently omitted.
+func loadDropPatterns() {
+	defaults := `(^|/)wtmp$,(^|/)btmp$,(^|/)lastlog$,\.db$,\.db-wal$,\.db-shm$`
+	if v := os.Getenv("DROP_PATTERNS"); v != "" {
+		defaults = v
+	}
+	dropPatterns = nil
+	for _, p := range strings.Split(defaults, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		re, err := regexp.Compile(p)
+		if err != nil {
+			log.Printf("WARNING: invalid DROP_PATTERNS entry %q: %v", p, err)
+			continue
+		}
+		dropPatterns = append(dropPatterns, re)
+	}
+	log.Printf("Loaded %d drop patterns", len(dropPatterns))
 }
 
 // ===== Streaming archive engine =====
