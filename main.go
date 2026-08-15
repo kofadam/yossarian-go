@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -24,6 +25,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -2601,6 +2603,466 @@ func downloadDetailedReportHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[AUDIT] Detailed report downloaded: user=%s, replacements=%d, size_kb=%.2f",
 		username, len(detailedReplacements), float64(reportSize)/1024)
+}
+
+// ===== Streaming archive engine =====
+//
+// Traverses nested archives without materialising the uncompressed tree.
+// Peak memory is bounded by the largest single member, not archive size.
+//
+// Two modes, selected by whether `out` is nil:
+//   out == nil  → harvest pass. Reads everything, writes nothing.
+//   out != nil  → sanitize pass. Mirrors input structure into out.
+
+type archiveKind int
+
+const (
+	kindUnknown archiveKind = iota
+	kindTar
+	kindTarGz
+	kindGzipFile
+	kindZip
+)
+
+type archiveConfig struct {
+	MaxDepth     int
+	DropPatterns []*regexp.Regexp
+	ScratchDir   string
+}
+
+type archiveTraversalStats struct {
+	FilesSeen      int
+	FilesSanitized int
+	FilesDropped   int
+	FilesBinary    int
+	ArchivesOpened int
+	MaxDepthHits   int
+	DroppedPaths   []string
+	ExtCounts      map[string]int
+}
+
+// archiveProcessor supplies the per-file work. Sanitize may be nil, which
+// selects harvest-only traversal.
+type archiveProcessor struct {
+	Harvest  func(logicalPath string, content []byte)
+	Sanitize func(logicalPath string, content []byte) ([]byte, map[string]int)
+	Cancelled func() bool
+}
+
+var fragSuffixRegex = regexp.MustCompile(`(?i)^(.*)\.FRAG-(\d+)$`)
+
+// detectArchiveKind sniffs content, never the filename. The bundle contains
+// extensionless text in commands/ and archive members with misleading names,
+// so extensions are not trustworthy in either direction.
+func detectArchiveKind(head []byte) archiveKind {
+	if len(head) >= 4 && head[0] == 0x50 && head[1] == 0x4b &&
+		(head[2] == 0x03 || head[2] == 0x05 || head[2] == 0x07) {
+		return kindZip
+	}
+	if len(head) >= 2 && head[0] == 0x1f && head[1] == 0x8b {
+		return kindGzipFile
+	}
+	if len(head) >= 262 && string(head[257:262]) == "ustar" {
+		return kindTar
+	}
+	return kindUnknown
+}
+
+// resolveGzip distinguishes a gzipped tarball from a bare gzipped file.
+// The old code assumed every gzip stream was a tar; on the ~270 rotated .gz
+// logs in a WCP bundle that yielded zero files with no error surfaced.
+func resolveGzip(gz io.Reader) (archiveKind, *bufio.Reader, error) {
+	br := bufio.NewReaderSize(gz, 1024)
+	head, err := br.Peek(512)
+	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+		return kindUnknown, nil, err
+	}
+	if len(head) >= 262 && string(head[257:262]) == "ustar" {
+		return kindTarGz, br, nil
+	}
+	return kindGzipFile, br, nil
+}
+
+func shouldDropPath(p string, cfg *archiveConfig) bool {
+	for _, re := range cfg.DropPatterns {
+		if re.MatchString(p) {
+			return true
+		}
+	}
+	return false
+}
+
+func recordExt(st *archiveTraversalStats, name string) {
+	base := filepath.Base(name)
+	ext := "(no-ext)"
+	if i := strings.LastIndex(base, "."); i > 0 {
+		ext = strings.ToLower(base[i:])
+	}
+	st.ExtCounts[ext]++
+}
+
+// processArchiveStream is the recursive entry point.
+func processArchiveStream(in io.Reader, kind archiveKind, base string, depth int,
+	cfg *archiveConfig, proc *archiveProcessor, st *archiveTraversalStats, out io.Writer) error {
+
+	st.ArchivesOpened++
+
+	switch kind {
+	case kindTar:
+		return processTarStream(in, base, depth, cfg, proc, st, out)
+
+	case kindTarGz:
+		gzr, err := gzip.NewReader(in)
+		if err != nil {
+			return fmt.Errorf("gzip open %s: %v", base, err)
+		}
+		defer gzr.Close()
+		if out == nil {
+			return processTarStream(gzr, base, depth, cfg, proc, st, nil)
+		}
+		gzw := gzip.NewWriter(out)
+		if err := processTarStream(gzr, base, depth, cfg, proc, st, gzw); err != nil {
+			gzw.Close()
+			return err
+		}
+		return gzw.Close()
+
+	case kindGzipFile:
+		gzr, err := gzip.NewReader(in)
+		if err != nil {
+			return fmt.Errorf("gzip open %s: %v", base, err)
+		}
+		defer gzr.Close()
+		content, err := io.ReadAll(gzr)
+		if err != nil {
+			return fmt.Errorf("gzip read %s: %v", base, err)
+		}
+		outContent := applyProcessor(base, content, proc, st)
+		if out != nil {
+			gzw := gzip.NewWriter(out)
+			if _, err := gzw.Write(outContent); err != nil {
+				gzw.Close()
+				return err
+			}
+			return gzw.Close()
+		}
+		return nil
+
+	case kindZip:
+		return processZipStream(in, base, depth, cfg, proc, st, out)
+	}
+	return fmt.Errorf("unsupported archive kind for %s", base)
+}
+
+// applyProcessor runs harvest or sanitize on one member's bytes.
+func applyProcessor(logicalPath string, content []byte,
+	proc *archiveProcessor, st *archiveTraversalStats) []byte {
+
+	if isBinaryContent(content) {
+		st.FilesBinary++
+		return content
+	}
+	if proc.Harvest != nil {
+		proc.Harvest(logicalPath, content)
+	}
+	if proc.Sanitize == nil {
+		return content
+	}
+	sanitized, _ := proc.Sanitize(logicalPath, content)
+	st.FilesSanitized++
+	return sanitized
+}
+
+func processTarStream(in io.Reader, base string, depth int,
+	cfg *archiveConfig, proc *archiveProcessor, st *archiveTraversalStats, out io.Writer) error {
+
+	tr := tar.NewReader(in)
+	var tw *tar.Writer
+	if out != nil {
+		tw = tar.NewWriter(out)
+	}
+
+	// Carry-over for .FRAG-NNNNN members. Fragments are cut at a fixed byte
+	// offset, so a match can straddle the seam. We hold back the trailing
+	// partial line (raw, unsanitized) and prepend it to the next fragment.
+	fragCarry := make(map[string][]byte)
+	fragLastIdx := make(map[string]int)
+
+	flushCarry := func() error {
+		for bn, carry := range fragCarry {
+			if len(carry) == 0 {
+				continue
+			}
+			outContent := applyProcessor(bn, carry, proc, st)
+			if tw != nil {
+				name := fmt.Sprintf("%s.FRAG-%05d", bn, fragLastIdx[bn]+1)
+				if err := tw.WriteHeader(&tar.Header{
+					Name: name, Mode: 0644,
+					Size: int64(len(outContent)), Typeflag: tar.TypeReg,
+					ModTime: time.Now(),
+				}); err != nil {
+					return err
+				}
+				if _, err := tw.Write(outContent); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for {
+		if proc.Cancelled != nil && proc.Cancelled() {
+			if tw != nil {
+				tw.Close()
+			}
+			return fmt.Errorf("job cancelled")
+		}
+
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			if tw != nil {
+				tw.Close()
+			}
+			return fmt.Errorf("tar read %s: %v", base, err)
+		}
+
+		logical := path.Join(base, hdr.Name)
+
+		if hdr.Typeflag != tar.TypeReg {
+			if tw != nil {
+				if err := tw.WriteHeader(hdr); err != nil {
+					tw.Close()
+					return err
+				}
+			}
+			continue
+		}
+
+		st.FilesSeen++
+		recordExt(st, hdr.Name)
+
+		if shouldDropPath(hdr.Name, cfg) {
+			st.FilesDropped++
+			st.DroppedPaths = append(st.DroppedPaths, logical)
+			io.Copy(io.Discard, tr)
+			continue
+		}
+
+		br := bufio.NewReaderSize(tr, 1024)
+		head, _ := br.Peek(512)
+		nested := detectArchiveKind(head)
+
+		if nested != kindUnknown && depth >= cfg.MaxDepth {
+			st.MaxDepthHits++
+			nested = kindUnknown
+		}
+
+		if nested != kindUnknown {
+			childKind := nested
+			var childReader io.Reader = br
+			if nested == kindGzipFile {
+				gzr, gerr := gzip.NewReader(br)
+				if gerr == nil {
+					k, peeked, rerr := resolveGzip(gzr)
+					gzr.Close()
+					if rerr == nil && k == kindTarGz {
+						childKind = kindTarGz
+					}
+					_ = peeked
+				}
+				// Re-open from the start: the peek above consumed the stream.
+				// Spool to scratch so the child can read it cleanly.
+				spool, serr := os.CreateTemp(cfg.ScratchDir, "yg-in-*")
+				if serr != nil {
+					if tw != nil {
+						tw.Close()
+					}
+					return serr
+				}
+				if _, cerr := io.Copy(spool, br); cerr != nil {
+					spool.Close()
+					os.Remove(spool.Name())
+					if tw != nil {
+						tw.Close()
+					}
+					return cerr
+				}
+				spool.Seek(0, io.SeekStart)
+				defer os.Remove(spool.Name())
+				defer spool.Close()
+				childReader = spool
+			}
+
+			if tw == nil {
+				if err := processArchiveStream(childReader, childKind, logical,
+					depth+1, cfg, proc, st, nil); err != nil {
+					log.Printf("[ARCHIVE] nested harvest failed %s: %v", logical, err)
+				}
+				continue
+			}
+
+			tmp, terr := os.CreateTemp(cfg.ScratchDir, "yg-out-*")
+			if terr != nil {
+				tw.Close()
+				return terr
+			}
+			perr := processArchiveStream(childReader, childKind, logical,
+				depth+1, cfg, proc, st, tmp)
+			if perr != nil {
+				tmp.Close()
+				os.Remove(tmp.Name())
+				tw.Close()
+				return perr
+			}
+			size, _ := tmp.Seek(0, io.SeekCurrent)
+			tmp.Seek(0, io.SeekStart)
+
+			nh := *hdr
+			nh.Size = size
+			if err := tw.WriteHeader(&nh); err != nil {
+				tmp.Close()
+				os.Remove(tmp.Name())
+				tw.Close()
+				return err
+			}
+			if _, err := io.Copy(tw, tmp); err != nil {
+				tmp.Close()
+				os.Remove(tmp.Name())
+				tw.Close()
+				return err
+			}
+			tmp.Close()
+			os.Remove(tmp.Name())
+			continue
+		}
+
+		content, rerr := io.ReadAll(br)
+		if rerr != nil {
+			if tw != nil {
+				tw.Close()
+			}
+			return fmt.Errorf("read member %s: %v", logical, rerr)
+		}
+
+		var outContent []byte
+		if m := fragSuffixRegex.FindStringSubmatch(hdr.Name); m != nil {
+			bn := m[1]
+			idx, _ := strconv.Atoi(m[2])
+			fragLastIdx[bn] = idx
+
+			raw := append(fragCarry[bn], content...)
+			cut := bytes.LastIndexByte(raw, '\n')
+			var toProcess []byte
+			if cut >= 0 {
+				toProcess = raw[:cut+1]
+				fragCarry[bn] = append([]byte(nil), raw[cut+1:]...)
+			} else {
+				fragCarry[bn] = append([]byte(nil), raw...)
+			}
+			outContent = applyProcessor(logical, toProcess, proc, st)
+		} else {
+			outContent = applyProcessor(logical, content, proc, st)
+		}
+
+		if tw != nil {
+			nh := *hdr
+			nh.Size = int64(len(outContent))
+			if err := tw.WriteHeader(&nh); err != nil {
+				tw.Close()
+				return err
+			}
+			if _, err := tw.Write(outContent); err != nil {
+				tw.Close()
+				return err
+			}
+		}
+	}
+
+	if err := flushCarry(); err != nil {
+		if tw != nil {
+			tw.Close()
+		}
+		return err
+	}
+	if tw != nil {
+		return tw.Close()
+	}
+	return nil
+}
+
+// processZipStream spools to scratch because zip.NewReader needs io.ReaderAt.
+func processZipStream(in io.Reader, base string, depth int,
+	cfg *archiveConfig, proc *archiveProcessor, st *archiveTraversalStats, out io.Writer) error {
+
+	spool, err := os.CreateTemp(cfg.ScratchDir, "yg-zip-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(spool.Name())
+	defer spool.Close()
+
+	size, err := io.Copy(spool, in)
+	if err != nil {
+		return err
+	}
+	zr, err := zip.NewReader(spool, size)
+	if err != nil {
+		return fmt.Errorf("zip open %s: %v", base, err)
+	}
+
+	var zw *zip.Writer
+	if out != nil {
+		zw = zip.NewWriter(out)
+	}
+
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		logical := path.Join(base, f.Name)
+		st.FilesSeen++
+		recordExt(st, f.Name)
+
+		if shouldDropPath(f.Name, cfg) {
+			st.FilesDropped++
+			st.DroppedPaths = append(st.DroppedPaths, logical)
+			continue
+		}
+
+		rc, oerr := f.Open()
+		if oerr != nil {
+			log.Printf("[ARCHIVE] zip member open failed %s: %v", logical, oerr)
+			continue
+		}
+		content, rerr := io.ReadAll(rc)
+		rc.Close()
+		if rerr != nil {
+			log.Printf("[ARCHIVE] zip member read failed %s: %v", logical, rerr)
+			continue
+		}
+
+		outContent := applyProcessor(logical, content, proc, st)
+		if zw != nil {
+			w, werr := zw.Create(f.Name)
+			if werr != nil {
+				zw.Close()
+				return werr
+			}
+			if _, werr := w.Write(outContent); werr != nil {
+				zw.Close()
+				return werr
+			}
+		}
+	}
+
+	if zw != nil {
+		return zw.Close()
+	}
+	return nil
 }
 
 func escapeCSV(field string) string {
