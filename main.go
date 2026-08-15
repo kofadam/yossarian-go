@@ -3036,17 +3036,11 @@ func processTarStream(in io.Reader, base string, depth int,
 			childKind := nested
 			var childReader io.Reader = br
 			if nested == kindGzipFile {
-				gzr, gerr := gzip.NewReader(br)
-				if gerr == nil {
-					k, peeked, rerr := resolveGzip(gzr)
-					gzr.Close()
-					if rerr == nil && k == kindTarGz {
-						childKind = kindTarGz
-					}
-					_ = peeked
-				}
-				// Re-open from the start: the peek above consumed the stream.
-				// Spool to scratch so the child can read it cleanly.
+				// Spool the member to scratch BEFORE sniffing. Telling a
+				// gzipped tarball apart from a bare gzipped file requires
+				// decompressing, and gzip.NewReader consumes the header from
+				// whatever reader it is given — so sniffing the live stream
+				// leaves the child reading from the middle of the member.
 				spool, serr := os.CreateTemp(cfg.ScratchDir, "yg-in-*")
 				if serr != nil {
 					if tw != nil {
@@ -3062,9 +3056,27 @@ func processTarStream(in io.Reader, base string, depth int,
 					}
 					return cerr
 				}
-				spool.Seek(0, io.SeekStart)
 				defer os.Remove(spool.Name())
 				defer spool.Close()
+
+				if _, serr := spool.Seek(0, io.SeekStart); serr != nil {
+					if tw != nil {
+						tw.Close()
+					}
+					return serr
+				}
+				if gzr, gerr := gzip.NewReader(spool); gerr == nil {
+					if k, _, rerr := resolveGzip(gzr); rerr == nil {
+						childKind = k
+					}
+					gzr.Close()
+				}
+				if _, serr := spool.Seek(0, io.SeekStart); serr != nil {
+					if tw != nil {
+						tw.Close()
+					}
+					return serr
+				}
 				childReader = spool
 			}
 
@@ -5428,15 +5440,40 @@ func processBatchJobFromMinIO(jobID, username string) error {
 
 	inputObject := fmt.Sprintf("%s/%s/input.zip", username, jobID)
 
-	// Sniff the container format from the first 64KB. Extension is not
-	// trusted: the object is always stored as input.zip regardless of type.
-	headObj, err := downloadFromMinIO(ctx, inputObject)
+	// Spool the input to scratch before doing any work on it.
+	//
+	// Streaming directly from the MinIO object reader fails on large
+	// archives: harvest interleaves decompression and regex scanning between
+	// reads, so the HTTP body sits idle for seconds at a time and the server
+	// eventually resets the connection. Reading it once, fast and
+	// uninterrupted, avoids that entirely — and both passes then read from
+	// local disk instead of re-downloading.
+	inputSpool, err := os.CreateTemp(scratch, "yg-input-*")
+	if err != nil {
+		return fmt.Errorf("failed to create input spool: %v", err)
+	}
+	defer os.Remove(inputSpool.Name())
+	defer inputSpool.Close()
+
+	srcObj, err := downloadFromMinIO(ctx, inputObject)
 	if err != nil {
 		return fmt.Errorf("failed to download input from MinIO: %v", err)
 	}
+	inputSize, err := io.Copy(inputSpool, srcObj)
+	srcObj.Close()
+	if err != nil {
+		return fmt.Errorf("failed to spool input to scratch: %v", err)
+	}
+	log.Printf("[WORKER] Job %s: spooled input to %s (%.2f MB)",
+		jobID, inputSpool.Name(), float64(inputSize)/1024/1024)
+
+	// Sniff the container format from the first 64KB. Extension is not
+	// trusted: the object is always stored as input.zip regardless of type.
+	if _, err := inputSpool.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to rewind input spool: %v", err)
+	}
 	headBuf := make([]byte, 65536)
-	headN, _ := io.ReadFull(headObj, headBuf)
-	headObj.Close()
+	headN, _ := io.ReadFull(inputSpool, headBuf)
 
 	rootKind := detectArchiveKind(headBuf[:headN])
 	if rootKind == kindGzipFile {
@@ -5460,15 +5497,13 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	harvest := newHostHarvest()
 	hStats := &archiveTraversalStats{ExtCounts: map[string]int{}}
 
-	obj1, err := downloadFromMinIO(ctx, inputObject)
-	if err != nil {
-		return fmt.Errorf("failed to download input for harvest: %v", err)
+	if _, err := inputSpool.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to rewind input spool for harvest: %v", err)
 	}
-	err = processArchiveStream(obj1, rootKind, "", 0, cfg, &archiveProcessor{
+	err = processArchiveStream(inputSpool, rootKind, "", 0, cfg, &archiveProcessor{
 		Harvest:   harvest.Scan,
 		Cancelled: func() bool { return isJobCancelled(jobID) },
 	}, hStats, nil)
-	obj1.Close()
 	if err != nil {
 		if isJobCancelled(jobID) {
 			updateJobStatus(jobID, "cancelled", 0, 0, "Cancelled by user")
@@ -5523,11 +5558,10 @@ func processBatchJobFromMinIO(jobID, username string) error {
 
 	sStats := &archiveTraversalStats{ExtCounts: map[string]int{}}
 
-	obj2, err := downloadFromMinIO(ctx, inputObject)
-	if err != nil {
-		return fmt.Errorf("failed to download input for sanitize: %v", err)
+	if _, err := inputSpool.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to rewind input spool for sanitize: %v", err)
 	}
-	err = processArchiveStream(obj2, rootKind, "", 0, cfg, &archiveProcessor{
+	err = processArchiveStream(inputSpool, rootKind, "", 0, cfg, &archiveProcessor{
 		Cancelled: func() bool { return isJobCancelled(jobID) },
 		Sanitize: func(logicalPath string, content []byte) ([]byte, map[string]int) {
 			var sanitized string
@@ -5561,7 +5595,6 @@ func processBatchJobFromMinIO(jobID, username string) error {
 			return []byte(sanitized), stats
 		},
 	}, sStats, outFile)
-	obj2.Close()
 	if err != nil {
 		if isJobCancelled(jobID) {
 			updateJobStatus(jobID, "cancelled", totalFiles, processed, "Cancelled by user")
