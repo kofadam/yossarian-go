@@ -265,7 +265,18 @@ func signManifest(manifestJSON []byte) (string, error) {
 }
 
 // generateScanAttestation creates and signs the scan attestation when a job completes
-func generateScanAttestation(jobID, username string, totalFiles int, stats map[string]int, outputZipHash string) ([]byte, string, error) {
+// coverage reports what the scan actually examined. Without it a signature
+// over "total_files" reads as a claim of full inspection, which is false
+// whenever files were dropped or passed through uninspected.
+type scanCoverage struct {
+	Sanitized     int `json:"sanitized"`
+	Dropped       int `json:"dropped"`
+	Unverified    int `json:"unverified"`
+	PassedThrough int `json:"passed_through_uninspected"`
+	BinaryPassed  int `json:"binary_passthrough"`
+}
+
+func generateScanAttestation(jobID, username string, totalFiles int, stats map[string]int, outputZipHash string, coverage scanCoverage) ([]byte, string, error) {
 	_, publicPEM, keyID, err := getOrCreateSigningKey()
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get signing key: %v", err)
@@ -281,13 +292,14 @@ func generateScanAttestation(jobID, username string, totalFiles int, stats map[s
 
 	attestation := map[string]interface{}{
 		"type":            "scan_attestation",
-		"version":         "2.0",
+		"version":         "2.1",
 		"job_id":          jobID,
 		"scanner":         "yossarian-go",
 		"scanner_version": Version,
 		"scanned_by":      username,
 		"scanned_at":      time.Now().Format(time.RFC3339),
 		"total_files":     totalFiles,
+		"coverage":        coverage,
 		"detections":      stats,
 		"file_hash": map[string]string{
 			"algorithm": "SHA-256",
@@ -5994,7 +6006,14 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	batchPatternsDetected.WithLabelValues("user_word").Add(float64(totalStats["user_words"]))
 
 	// Generate and sign scan attestation
-	scanAttestationJSON, scanSig, err := generateScanAttestation(jobID, username, filesProcessed, totalStats, outputHash)
+	scanAttestationJSON, scanSig, err := generateScanAttestation(jobID, username, filesProcessed, totalStats, outputHash,
+		scanCoverage{
+			Sanitized:     sStats.FilesSanitized,
+			Dropped:       sStats.FilesDropped,
+			Unverified:    sStats.FilesUnverified,
+			PassedThrough: sStats.FilesPassedThrough,
+			BinaryPassed:  sStats.FilesBinary,
+		})
 	if err != nil {
 		log.Printf("[WORKER] Warning: Failed to generate scan attestation: %v", err)
 	} else {
