@@ -2965,15 +2965,17 @@ type archiveConfig struct {
 }
 
 type archiveTraversalStats struct {
-	FilesSeen       int
-	FilesSanitized  int
-	FilesDropped    int
-	FilesBinary     int
-	ArchivesOpened  int
-	MaxDepthHits    int
-	FilesUnverified int
-	DroppedPaths    []string
-	ExtCounts       map[string]int
+	FilesSeen          int
+	FilesSanitized     int
+	FilesDropped       int
+	FilesBinary        int
+	ArchivesOpened     int
+	MaxDepthHits       int
+	FilesUnverified    int
+	FilesPassedThrough int
+	PassedThroughPaths []string
+	DroppedPaths       []string
+	ExtCounts          map[string]int
 }
 
 // archiveProcessor supplies the per-file work. Sanitize may be nil, which
@@ -2988,6 +2990,18 @@ type archiveProcessor struct {
 }
 
 var fragSuffixRegex = regexp.MustCompile(`(?i)^(.*)\.FRAG-(\d+)$`)
+
+// archiveBaseNameRegex matches a .FRAG group whose base is itself an archive.
+// A WCP bundle splits supervisorservices.tar.gz across six fragments; each is
+// a slice of a compressed stream, so the first sniffs as gzip, fails to
+// decompress ("unexpected EOF"), and the rest look like opaque binary.
+// Sanitizing them individually is meaningless, and reassembling to recurse
+// would mean buffering an entire group before writing any of it.
+var archiveBaseNameRegex = regexp.MustCompile(`(?i)\.(tar\.gz|tgz|tar|zip|gz|bz2|xz|7z|zst)$`)
+
+func isArchiveBaseName(name string) bool {
+	return archiveBaseNameRegex.MatchString(name)
+}
 
 // detectArchiveKind sniffs content, never the filename. The bundle contains
 // extensionless text in commands/ and archive members with misleading names,
@@ -3327,11 +3341,17 @@ func processTarStream(in io.Reader, base string, depth int,
 		}
 
 		var outContent []byte
-		if m := fragSuffixRegex.FindStringSubmatch(hdr.Name); m != nil {
+		if m := fragSuffixRegex.FindStringSubmatch(hdr.Name); m != nil && isArchiveBaseName(m[1]) {
+			// Fragments of a split archive: pass through unmodified.
+			// Recorded so that "this content was never inspected" is a
+			// stated fact in the summary rather than a silent gap.
+			st.FilesPassedThrough++
+			st.PassedThroughPaths = append(st.PassedThroughPaths, logical)
+			outContent = content
+		} else if m := fragSuffixRegex.FindStringSubmatch(hdr.Name); m != nil {
 			bn := m[1]
 			idx, _ := strconv.Atoi(m[2])
 			fragLastIdx[bn] = idx
-
 			raw := append(fragCarry[bn], content...)
 			cut := bytes.LastIndexByte(raw, '\n')
 			var toProcess []byte
@@ -5855,10 +5875,12 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	}
 	filesProcessed := sStats.FilesSanitized
 	droppedPaths := sStats.DroppedPaths
+	passedThroughPaths := sStats.PassedThroughPaths
 
-	log.Printf("[WORKER] Job %s: created %s (%.2f MB, %d sanitized, %d dropped, %d binary passthrough)",
+	log.Printf("[WORKER] Job %s: created %s (%.2f MB, %d sanitized, %d dropped, %d unverified, %d archive-fragment passthrough, %d binary passthrough)",
 		jobID, outputBasename, float64(outputSize)/1024/1024,
-		filesProcessed, sStats.FilesDropped, sStats.FilesBinary)
+		filesProcessed, sStats.FilesDropped, sStats.FilesUnverified,
+		sStats.FilesPassedThrough, sStats.FilesBinary)
 
 	// Generate reports (IP mappings, summary)
 	log.Printf("[WORKER] Job %s: generating reports", jobID)
@@ -5887,6 +5909,25 @@ func processBatchJobFromMinIO(jobID, username string) error {
 			log.Printf("[WORKER] Warning: Failed to upload dropped-files report: %v", err)
 		} else {
 			log.Printf("[WORKER] Uploaded dropped-files report (%d entries)", len(droppedPaths))
+		}
+	}
+
+	// Manifest of files included without inspection — fragments of a split
+	// archive, which cannot be sanitized individually. The artifact declares
+	// what it did not examine, so a reader is never left assuming coverage
+	// that did not happen.
+	if len(passedThroughPaths) > 0 {
+		var pb strings.Builder
+		pb.WriteString("passed_through_path,reason\n")
+		for _, p := range passedThroughPaths {
+			pb.WriteString(escapeCSV(p) + ",split-archive-fragment\n")
+		}
+		passed := pb.String()
+		passedObjectName := fmt.Sprintf("%s/%s/reports/passed-through.csv", username, jobID)
+		if err := uploadToMinIO(ctx, passedObjectName, bytes.NewReader([]byte(passed)), int64(len(passed))); err != nil {
+			log.Printf("[WORKER] Warning: Failed to upload passed-through report: %v", err)
+		} else {
+			log.Printf("[WORKER] Uploaded passed-through report (%d entries)", len(passedThroughPaths))
 		}
 	}
 
