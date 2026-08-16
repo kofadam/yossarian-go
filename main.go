@@ -3248,6 +3248,16 @@ func processTarStream(in io.Reader, base string, depth int,
 		head, _ := br.Peek(512)
 		nested := detectArchiveKind(head)
 
+		// A .FRAG member of a split archive is a slice of a compressed
+		// stream, not a complete archive. The first fragment carries
+		// gzip magic bytes, so without this it is recursed into and
+		// fails with "unexpected EOF" — and the whole nested archive
+		// then reaches the output uninspected. Force it down the regular
+		// member path, where the fragment passthrough handles it.
+		if fm := fragSuffixRegex.FindStringSubmatch(hdr.Name); fm != nil && isArchiveBaseName(fm[1]) {
+			nested = kindUnknown
+		}
+
 		if nested != kindUnknown && depth >= cfg.MaxDepth {
 			st.MaxDepthHits++
 			nested = kindUnknown
