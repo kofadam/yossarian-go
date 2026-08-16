@@ -5790,6 +5790,14 @@ func processBatchJobFromMinIO(jobID, username string) error {
 				if adErr != nil {
 					// Directory unreachable — this file cannot be
 					// certified. applyProcessor drops it.
+					//
+					// Still count it: the file was handled, just
+					// not written. Leaving it uncounted would
+					// strand the progress bar short of 100% on
+					// any job with drops, which reads as a stall.
+					statsMu.Lock()
+					processed++
+					statsMu.Unlock()
 					return nil, stats, adErr
 				}
 			}
