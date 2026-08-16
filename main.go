@@ -378,19 +378,23 @@ func recordReplacement(category, filename string, lineNum int, original, sanitiz
 // high across rotated logs without unbounded growth.
 const adCacheMaxEntries = 100000
 
-func lookupADAccountCached(account string) string {
+func lookupADAccountCached(account string) (string, error) {
 	// Check cache first
 	cacheMutex.RLock()
 	if cached, exists := adLookupCache[account]; exists {
 		cacheMutex.RUnlock()
 		adCacheHits.Inc() // ✅ ADD: Record cache hit
-		return cached
+		return cached, nil
 	}
 	cacheMutex.RUnlock()
-
 	adCacheMisses.Inc() // ✅ ADD: Record cache miss
 	// Not in cache, do lookup
-	usn := lookupADAccount(account)
+	usn, err := lookupADAccount(account)
+	if err != nil {
+		// Never cache an unknown answer — a cached failure would suppress
+		// every later occurrence of this account for the rest of the job.
+		return "", err
+	}
 
 	// Cache the result, including misses — junk candidates recur heavily
 	// across rotated logs of the same pod, so caching them is worthwhile.
@@ -407,7 +411,7 @@ func lookupADAccountCached(account string) string {
 	}
 	adLookupCache[account] = usn
 	cacheMutex.Unlock()
-	return usn
+	return usn, nil
 }
 
 // Global mapping storage
@@ -1387,35 +1391,49 @@ func adminRequired(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// lookupADAccount queries the AD service for account USN
-func lookupADAccount(account string) string {
+// lookupADAccount distinguishes "not an AD account" from "could not reach the
+// directory". Both previously returned "", so a db-service outage silently
+// produced unredacted identities — observed on a 7h job where a 7-minute
+// SQLite lock window left administrator, cloudadmins and real usernames in
+// the clear, with a valid attestation signature over the result.
+//
+// A nil error with an empty USN means a definitive negative. A non-nil error
+// means the answer is unknown, and the caller must not treat that as clean.
+func lookupADAccount(account string) (string, error) {
 	if adServiceURL == "" {
-		return ""
+		return "", nil
 	}
-
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("%s/lookup/%s", adServiceURL, url.QueryEscape(account)))
 	if err != nil {
 		log.Printf("AD lookup failed for %s: %v", account, err)
-		return ""
+		return "", fmt.Errorf("ad lookup transport error for %q: %w", account, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		return ""
+	// 404 is a definitive "no such account". Anything else in the 4xx/5xx
+	// range means the directory could not answer.
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("AD lookup for %s returned status %d", account, resp.StatusCode)
+		return "", fmt.Errorf("ad lookup status %d for %q", resp.StatusCode, account)
 	}
 
 	var result struct {
 		USN string `json:"usn"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return ""
+		return "", fmt.Errorf("ad lookup decode error for %q: %w", account, err)
 	}
-
-	return result.USN
+	return result.USN, nil
 }
 
-func sanitizeText(text string, userWords []UserWord, trackReplacements bool, filename string, scanMode string) (string, map[string]int) {
+// sanitizeText returns a non-nil error when any AD lookup could not be
+// resolved. The returned text is still populated, but it must not be treated
+// as sanitized — callers drop the file instead.
+func sanitizeText(text string, userWords []UserWord, trackReplacements bool, filename string, scanMode string) (string, map[string]int, error) {
 	mapMutex.Lock()
 	defer mapMutex.Unlock()
 
@@ -1554,6 +1572,11 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 	// Skipped entirely when the job requests it — the candidate regex over
 	// every byte is the bulk of the cost, not the cached lookups, so
 	// skipping only the lookup would save little.
+	// Set when the directory could not answer a lookup. A file sanitized
+	// with an unknown AD result is not provably clean, so the caller drops
+	// it rather than writing partially-redacted content.
+	var adErr error
+
 	if !getSkipADLookup() {
 		adCandidates := adRegex.FindAllStringIndex(result, -1)
 		adCandidateCount := len(adCandidates)
@@ -1584,15 +1607,23 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 			// Not in cache, do lookup
 			stats["ad_cache_misses"]++
 			adCacheMisses.Inc()
-			if usn := lookupADAccountCached(normalizedAccount); usn != "" {
+			usn, lookupErr := lookupADAccountCached(normalizedAccount)
+			if lookupErr != nil {
+				// The directory could not answer, so we cannot say whether
+				// this is an account. Record it and let the caller drop the
+				// file — leaving it in place risks publishing an identity.
+				if adErr == nil {
+					adErr = lookupErr
+				}
+				return account
+			}
+			if usn != "" {
 				stats["ad_accounts"]++
-
 				// Track replacement
 				if trackReplacements {
 					lineNum := strings.Count(result[:matchPos[0]], "\n") + 1
 					recordReplacement("AD_Account", filename, lineNum, account, usn)
 				}
-
 				return usn
 			}
 			// If not found in AD database, preserve original text (not an AD account)
@@ -1617,8 +1648,11 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 			matchPos := serverMatches[matchIndexServer]
 			matchIndexServer++
 
-			replacement := lookupADAccountCached(strings.ToLower(host))
-			if replacement == "" {
+			// A lookup failure here is tolerable: the host still gets a
+			// stable placeholder, so nothing leaks — it is only a less
+			// informative substitution than the AD name would have been.
+			replacement, hostLookupErr := lookupADAccountCached(strings.ToLower(host))
+			if hostLookupErr != nil || replacement == "" {
 				replacement = getHostPlaceholder(host)
 			}
 			stats["server_names"]++
@@ -1783,7 +1817,7 @@ func sanitizeText(text string, userWords []UserWord, trackReplacements bool, fil
 			log.Printf("[DEBUG] Pattern detection - Internal URLs: %d found", stats["internal_urls"])
 		}
 	}
-	return result, stats
+	return result, stats, adErr
 }
 
 // sanitizeCodeFile handles code-specific sanitization with safe replacement values
@@ -2579,7 +2613,19 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		if scanMode == "code" {
 			sanitized, sanitizeStats = sanitizeCodeFile(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename, codeScanMode)
 		} else {
-			sanitized, sanitizeStats = sanitizeText(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename, scanMode)
+			var adErr error
+			sanitized, sanitizeStats, adErr = sanitizeText(string(content), userWords, shouldGenerateDetailedReport, fileHeader.Filename, scanMode)
+			if adErr != nil {
+				// The directory could not be reached, so we cannot certify
+				// this file as clean. Reject rather than return output that
+				// looks sanitized but may still contain identities.
+				log.Printf("[ERROR] Sanitization incomplete for %s: %v", fileHeader.Filename, adErr)
+				rejectedFiles = append(rejectedFiles, map[string]interface{}{
+					"filename": fileHeader.Filename,
+					"reason":   "Directory service unavailable — sanitization could not be verified. Please retry.",
+				})
+				continue
+			}
 		}
 		processingTime := time.Since(fileStartTime)
 		log.Printf("[PERF] Sanitized %s in %.2fs", fileHeader.Filename, processingTime.Seconds())
@@ -2919,21 +2965,25 @@ type archiveConfig struct {
 }
 
 type archiveTraversalStats struct {
-	FilesSeen      int
-	FilesSanitized int
-	FilesDropped   int
-	FilesBinary    int
-	ArchivesOpened int
-	MaxDepthHits   int
-	DroppedPaths   []string
-	ExtCounts      map[string]int
+	FilesSeen       int
+	FilesSanitized  int
+	FilesDropped    int
+	FilesBinary     int
+	ArchivesOpened  int
+	MaxDepthHits    int
+	FilesUnverified int
+	DroppedPaths    []string
+	ExtCounts       map[string]int
 }
 
 // archiveProcessor supplies the per-file work. Sanitize may be nil, which
 // selects harvest-only traversal.
 type archiveProcessor struct {
-	Harvest   func(logicalPath string, content []byte)
-	Sanitize  func(logicalPath string, content []byte) ([]byte, map[string]int)
+	Harvest func(logicalPath string, content []byte)
+	// Sanitize returns the sanitized bytes, per-file stats, and an error when
+	// the file could not be provably cleaned. On error the caller drops the
+	// file rather than writing partially-redacted content.
+	Sanitize  func(logicalPath string, content []byte) ([]byte, map[string]int, error)
 	Cancelled func() bool
 }
 
@@ -3033,6 +3083,13 @@ func processArchiveStream(in io.Reader, kind archiveKind, base string, depth int
 			return fmt.Errorf("gzip read %s: %v", base, err)
 		}
 		outContent := applyProcessor(base, content, proc, st)
+		// nil means the file was dropped as unverifiable. The caller writes
+		// this member's bytes into the parent archive, so returning without
+		// writing leaves a zero-length member — which the parent's own nil
+		// check turns into an omitted entry.
+		if outContent == nil {
+			return nil
+		}
 		if out != nil {
 			gzw, gzErr := gzip.NewWriterLevel(out, gzip.BestSpeed)
 			if gzErr != nil {
@@ -3066,7 +3123,16 @@ func applyProcessor(logicalPath string, content []byte,
 	if proc.Sanitize == nil {
 		return content
 	}
-	sanitized, _ := proc.Sanitize(logicalPath, content)
+	sanitized, _, sanErr := proc.Sanitize(logicalPath, content)
+	if sanErr != nil {
+		// Cannot certify this file. Drop it: an incomplete redaction that
+		// still carries a valid attestation is worse than a missing file.
+		log.Printf("[ARCHIVE] Dropping %s — sanitization unverified: %v", logicalPath, sanErr)
+		st.FilesDropped++
+		st.FilesUnverified++
+		st.DroppedPaths = append(st.DroppedPaths, logicalPath+" (ad-lookup-failed)")
+		return nil
+	}
 	st.FilesSanitized++
 	return sanitized
 }
@@ -3092,7 +3158,9 @@ func processTarStream(in io.Reader, base string, depth int,
 				continue
 			}
 			outContent := applyProcessor(bn, carry, proc, st)
-			if tw != nil {
+			// nil means the carry-over content could not be verified. Omit
+			// the trailing fragment rather than writing an empty one.
+			if tw != nil && outContent != nil {
 				name := fmt.Sprintf("%s.FRAG-%05d", bn, fragLastIdx[bn]+1)
 				if err := tw.WriteHeader(&tar.Header{
 					Name: name, Mode: 0644,
@@ -3278,7 +3346,10 @@ func processTarStream(in io.Reader, base string, depth int,
 			outContent = applyProcessor(logical, content, proc, st)
 		}
 
-		if tw != nil {
+		// nil means applyProcessor dropped the file. Skip the header
+		// entirely — writing a zero-size entry would make a removed file
+		// look like an empty one.
+		if tw != nil && outContent != nil {
 			nh := *hdr
 			nh.Size = int64(len(outContent))
 			if err := tw.WriteHeader(&nh); err != nil {
@@ -3356,6 +3427,11 @@ func processZipStream(in io.Reader, base string, depth int,
 		}
 
 		outContent := applyProcessor(logical, content, proc, st)
+		// nil means the file was dropped as unverifiable — omit the entry
+		// entirely rather than creating an empty one.
+		if outContent == nil {
+			continue
+		}
 		if zw != nil {
 			w, werr := zw.Create(f.Name)
 			if werr != nil {
@@ -5694,12 +5770,12 @@ func processBatchJobFromMinIO(jobID, username string) error {
 	}
 	err = processArchiveStream(inputSpool, rootKind, "", 0, cfg, &archiveProcessor{
 		Cancelled: func() bool { return isJobCancelled(jobID) },
-		Sanitize: func(logicalPath string, content []byte) ([]byte, map[string]int) {
+		Sanitize: func(logicalPath string, content []byte) ([]byte, map[string]int, error) {
 			// Cancellation is checked here as well as between archive
 			// members: a single large file can occupy the worker for
 			// minutes, during which a between-members check never runs.
 			if isJobCancelled(jobID) {
-				return content, map[string]int{}
+				return content, map[string]int{}, nil
 			}
 
 			var sanitized string
@@ -5708,8 +5784,14 @@ func processBatchJobFromMinIO(jobID, username string) error {
 				sanitized, stats = sanitizeCodeFile(string(content), jobUserWords,
 					generateDetailedReport, logicalPath, codeScanMode)
 			} else {
-				sanitized, stats = sanitizeText(string(content), jobUserWords,
+				var adErr error
+				sanitized, stats, adErr = sanitizeText(string(content), jobUserWords,
 					generateDetailedReport, logicalPath, "log")
+				if adErr != nil {
+					// Directory unreachable — this file cannot be
+					// certified. applyProcessor drops it.
+					return nil, stats, adErr
+				}
 			}
 
 			statsMu.Lock()
@@ -5730,7 +5812,7 @@ func processBatchJobFromMinIO(jobID, username string) error {
 				log.Printf("[WORKER] Job %s progress: %d/%d files (%.1f%%)",
 					jobID, cur, totalFiles, float64(cur)/float64(totalFiles)*100)
 			}
-			return []byte(sanitized), stats
+			return []byte(sanitized), stats, nil
 		},
 	}, sStats, outFile)
 	if err != nil {
